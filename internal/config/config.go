@@ -7,67 +7,65 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/spf13/viper"
+	"github.com/zalando/go-keyring"
 )
 
 var configPath = xdg.ConfigHome + "/mcc"
 var configName = "meshcentral-client"
 var configType = "json"
 
-// constant containing default path to config file
+const keyringService = "meshcentral-client"
+
+// DefaultConfigPath constant containing default path to config file
 var DefaultConfigPath = configPath + "/" + configName + "." + configType
 
 func CreateConfig(server string, username string, password string) error {
+	// Create profile without password in config
 	viper.Set("profiles", []map[string]interface{}{
 		{
 			"name":     "default",
-			"server": 	server,
+			"server":   server,
 			"username": username,
-			"password": password,
 		},
 	})
 
 	viper.Set("default_profile", "default")
 
-	// create directory if it does not exist
+	// Create directory if it does not exist
 	path := filepath.Dir(viper.ConfigFileUsed())
 	if _, err := os.Stat(path); os.IsNotExist(err) {
-		err := os.MkdirAll(path, 0700)
-		if err != nil {
+		if err := os.MkdirAll(path, 0700); err != nil {
 			return err
 		}
 	}
 
-	return viper.WriteConfig()
+	// Write config first
+	if err := viper.WriteConfig(); err != nil {
+		return err
+	}
+
+	// Store password in keyring
+	return keyring.Set(keyringService, "default", password)
 }
 
-
-// LoadConfig loads the configuration
 func LoadConfig() error {
 	viper.SetConfigType(configType)
 
-	// if the config file has not been set, set it to default
 	if viper.ConfigFileUsed() == "" {
 		viper.SetConfigName(configName)
 		viper.AddConfigPath(configPath)
 	}
 
 	viper.SetDefault("default_profile", "default")
-
 	viper.SetDefault("profiles", []map[string]interface{}{
 		{
 			"name":     "default",
-			"server": 	"",
+			"server":   "",
 			"username": "",
-			"password": "",
 		},
 	})
 
-	err := viper.ReadInConfig()
-	if err != nil {
-		return err
-	}
-	return nil
-
+	return viper.ReadInConfig()
 }
 
 func GetConfigPath() string {
@@ -83,7 +81,6 @@ func GetConfigJSON() (*string, error) {
 	return &configString, nil
 }
 
-// SaveConfig saves the configuration
 func SaveConfig() error {
 	return viper.WriteConfig()
 }

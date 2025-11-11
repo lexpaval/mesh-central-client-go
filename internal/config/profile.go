@@ -1,25 +1,48 @@
 package config
 
-import "github.com/spf13/viper"
+import (
+	"github.com/spf13/viper"
+	"github.com/zalando/go-keyring"
+)
 
 // Profile is a struct that holds the profile information
 type Profile struct {
 	Name     string
 	Server   string
 	Username string
-	Password string
+	Password string `json:"-"` // Don't serialize password
+}
+
+// GetPassword retrieves password from system keyring
+func (p *Profile) GetPassword() (string, error) {
+	return keyring.Get(keyringService, p.Name)
+}
+
+// SetPassword stores password in system keyring
+func (p *Profile) SetPassword(password string) error {
+	return keyring.Set(keyringService, p.Name, password)
+}
+
+// DeletePassword removes password from system keyring
+func (p *Profile) DeletePassword() error {
+	return keyring.Delete(keyringService, p.Name)
 }
 
 func GetProfiles() []Profile {
-	// get profiles from config
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
+
+	// Load passwords from keyring
+	for i := range profiles {
+		if pwd, err := profiles[i].GetPassword(); err == nil {
+			profiles[i].Password = pwd
+		}
+	}
 
 	return profiles
 }
 
 func GetDefaultProfile() Profile {
-	// get profiles from config
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
@@ -27,6 +50,10 @@ func GetDefaultProfile() Profile {
 
 	for _, p := range profiles {
 		if p.Name == defaultProfile {
+			// Load password from keyring
+			if pwd, err := p.GetPassword(); err == nil {
+				p.Password = pwd
+			}
 			return p
 		}
 	}
@@ -57,19 +84,23 @@ func SetDefaultProfile(name string, commit bool) error {
 }
 
 func AddProfile(name string, isDefault bool, server string, username string, password string) *Profile {
-	// get profiles from config
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
-	// add new profile
-	profiles = append(profiles, Profile{
+	newProfile := Profile{
 		Name:     name,
 		Server:   server,
 		Username: username,
-		Password: password,
-	})
+	}
 
-	// if default, set all other profiles to non default
+	// Store password in keyring
+	if err := newProfile.SetPassword(password); err != nil {
+		// Handle error - could log or return error instead
+		panic(err)
+	}
+
+	profiles = append(profiles, newProfile)
+
 	if isDefault {
 		viper.Set("default_profile", name)
 	}
@@ -77,18 +108,20 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 	viper.Set("profiles", profiles)
 	viper.WriteConfig()
 
-	return &profiles[len(profiles)-1]
+	newProfile.Password = password // Set for return value
+	return &newProfile
 }
 
 func RemoveProfile(name string) {
-	// get profiles from config
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
-	// remove profile
 	for i, p := range profiles {
 		if p.Name == name {
+			// Delete password from keyring
+			p.DeletePassword()
 			profiles = append(profiles[:i], profiles[i+1:]...)
+			break
 		}
 	}
 
