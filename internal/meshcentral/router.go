@@ -28,7 +28,6 @@ func StartRouter(ready chan struct{}) {
 	settings.LocalPort = listener.Addr().(*net.TCPAddr).Port
 	defer listener.Close()
 
-	// wait for server to be authenticated
 	<-settings.WebChannel
 
 	close(ready)
@@ -68,6 +67,7 @@ func onTcpClientConnected(conn net.Conn) {
 
 	headers := http.Header{}
 	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: settings.Insecure,
 		},
@@ -79,33 +79,31 @@ func onTcpClientConnected(conn net.Conn) {
 		return
 	}
 
-	go onWebSocket(wsConn, conn)
-
-	select {}
+	onWebSocket(wsConn, conn)
 }
 
 func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 	if settings.debug {
 		fmt.Println("Websocket connected")
 	}
-	defer wsConn.Close()
-	defer tcpConn.Close()
 
-	// Channel to signal when either connection is closed
 	done := make(chan struct{})
 	var once sync.Once
+	closeAll := func() {
+		once.Do(func() {
+			wsConn.Close()
+			tcpConn.Close()
+			close(done)
+		})
+	}
 
-	// Function to copy data from WebSocket to TCP
+	// WebSocket -> TCP
 	go func() {
-		defer once.Do(func() { close(done) })
+		defer closeAll()
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
-					if settings.debug {
-						fmt.Println("WebSocket closed normally")
-					}
-				} else {
+				if settings.debug && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 					fmt.Println("WebSocket read error:", err)
 				}
 				return
@@ -113,25 +111,23 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
 				_, err = tcpConn.Write(message)
 				if err != nil {
-					fmt.Println("TCP write error:", err)
+					if settings.debug {
+						fmt.Println("TCP write error:", err)
+					}
 					return
 				}
 			}
 		}
 	}()
 
-	// Function to copy data from TCP to WebSocket
+	// TCP -> WebSocket
 	go func() {
-		defer once.Do(func() { close(done) })
-		buf := make([]byte, 4096) // Buffer to read data in chunks
+		defer closeAll()
+		buf := make([]byte, 32768)
 		for {
 			n, err := tcpConn.Read(buf)
 			if err != nil {
-				if err == io.EOF {
-					if settings.debug {
-						fmt.Println("TCP connection closed by client")
-					}
-				} else {
+				if err != io.EOF && settings.debug {
 					fmt.Println("TCP read error:", err)
 				}
 				return
@@ -139,14 +135,15 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 			if n > 0 {
 				err = wsConn.WriteMessage(websocket.BinaryMessage, buf[:n])
 				if err != nil {
-					fmt.Println("WebSocket write error:", err)
+					if settings.debug {
+						fmt.Println("WebSocket write error:", err)
+					}
 					return
 				}
 			}
 		}
 	}()
 
-	// Wait for either connection to be closed
 	<-done
 }
 
@@ -160,7 +157,6 @@ func StartProxyRouter(ready chan struct{}) {
 		return
 	}
 
-	// Build query parameters with proper encoding
 	query := url.Values{}
 	query.Add("auth", settings.ACookie)
 	query.Add("nodeid", settings.RemoteNodeID)
@@ -178,6 +174,7 @@ func StartProxyRouter(ready chan struct{}) {
 
 	headers := http.Header{}
 	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: settings.Insecure,
 		},
@@ -196,13 +193,18 @@ func StartProxyRouter(ready chan struct{}) {
 
 	defer wsConn.Close()
 
-	// Channel to signal when either connection is closed
 	done := make(chan struct{})
 	var once sync.Once
+	closeAll := func() {
+		once.Do(func() {
+			wsConn.Close()
+			close(done)
+		})
+	}
 
-	// Function to copy data from WebSocket to stdout
+	// WebSocket -> stdout
 	go func() {
-		defer once.Do(func() { close(done) })
+		defer closeAll()
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
@@ -223,10 +225,10 @@ func StartProxyRouter(ready chan struct{}) {
 		}
 	}()
 
-	// Function to copy data from stdin to WebSocket
+	// stdin -> WebSocket
 	go func() {
-		defer once.Do(func() { close(done) })
-		buf := make([]byte, 4096)
+		defer closeAll()
+		buf := make([]byte, 32768)
 		for {
 			n, err := os.Stdin.Read(buf)
 			if err != nil {
@@ -247,6 +249,5 @@ func StartProxyRouter(ready chan struct{}) {
 		}
 	}()
 
-	// Wait for either connection to be closed
 	<-done
 }
