@@ -9,8 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
 	"time"
 	"unicode/utf8"
 
@@ -101,17 +99,7 @@ func onShellWebSocket(wsConn *websocket.Conn, protocol int, done chan struct{}) 
 		}
 	}()
 
-	// Handle terminal resize signals
-	winch := make(chan os.Signal, 1)
-	signal.Notify(winch, syscall.SIGWINCH)
-
-	go func() {
-		for range winch {
-			sendOptionsUpdate(wsConn, protocol)
-		}
-	}()
-
-	// Goroutine to read messages from the websocket
+	// Read from WebSocket
 	go func() {
 		for {
 			// read message from websocket
@@ -189,8 +177,5 @@ func sendOptionsUpdate(wsConn *websocket.Conn, protocol int) {
 	fd := int(os.Stdout.Fd())
 	cols, rows, _ := term.GetSize(fd)
 
-	if err := wsConn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"protocol":%d,"cols":%d,"rows":%d,"xterm":true,"type":"options"}`, protocol, cols, rows))); err != nil {
-		fmt.Println("Error sending options message:", err)
-		return
-	}
+	wsConn.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(`{"protocol":%d,"cols":%d,"rows":%d,"xterm":true,"type":"options"}`, protocol, cols, rows)))
 }
