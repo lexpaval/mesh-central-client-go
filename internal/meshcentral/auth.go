@@ -22,7 +22,6 @@ func StartSocket() {
 	settings.Password = p.Password
 	settings.ServerURL = "wss://" + p.Server + "/meshrelay.ashx"
 
-	// Start by requesting a login token, this is needed because of 2FA and check that we have correct credentials from the start
 	var options *url.URL
 	var err error
 
@@ -61,15 +60,10 @@ func StartSocket() {
 		headers.Add("x-meshauth", "*")
 	}
 
-	/*if settings.LoginKey != "" {
-		options.RawQuery += fmt.Sprintf("&key=%s", settings.LoginKey)
-	}*/
-
-	// replace meshrelay.ashx with control.ashx
 	urlStr := strings.Replace(settings.ServerURL, "meshrelay.ashx", "control.ashx", 1)
 
-	//conn, _, err := websocket.DefaultDialer.Dial(urlStr, headers)
 	dialer := websocket.Dialer{
+		HandshakeTimeout: 10 * time.Second,
 		TLSClientConfig: &tls.Config{
 			InsecureSkipVerify: settings.Insecure,
 		},
@@ -89,22 +83,28 @@ func StartSocket() {
 	settings.WebSocket = conn
 	go onServerWebSocket(conn)
 
-	// Wait for authentication before returning
 	<-settings.WebChannel
 }
 
 func StopSocket() {
-	// send close message
-	settings.WebSocket.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(1000, "all done"))
+	// Stop timer before closing connection
+	if settings.RenewCookieTimer != nil {
+		settings.RenewCookieTimer.Stop()
+		settings.RenewCookieTimer = nil
+	}
+
+	if settings.WebSocket != nil {
+		settings.WebSocket.WriteMessage(websocket.CloseMessage,
+			websocket.FormatCloseMessage(1000, "all done"))
+		time.Sleep(100 * time.Millisecond)
+		settings.WebSocket.Close()
+	}
 }
 
 func onServerWebSocket(conn *websocket.Conn) {
-	//settings.WebChannel = conn
-
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			// check if the error is a close message
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 				if settings.debug {
 					fmt.Println("Server closed connection")
@@ -130,11 +130,9 @@ func onServerWebSocket(conn *websocket.Conn) {
 			handleAuthCookieCommand(command)
 		case "serverAuth":
 			handleServerAuthCommand(command)
-		// devices.go
 		case "nodes":
 			handleNodesCommand(command)
 		}
-
 	}
 }
 
@@ -173,17 +171,27 @@ func handleAuthCookieCommand(command map[string]interface{}) {
 		settings.ACookie = command["cookie"].(string)
 		settings.RCookie = command["rcookie"].(string)
 		settings.RenewCookieTimer = time.AfterFunc(10*time.Minute, func() {
-			settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"authcookie"}`))
+			if settings.WebSocket != nil {
+				settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"authcookie"}`))
+			}
 		})
 		close(settings.WebChannel)
 	} else {
+		// Stop old timer before creating new one
+		if settings.RenewCookieTimer != nil {
+			settings.RenewCookieTimer.Stop()
+		}
 		settings.ACookie = command["cookie"].(string)
 		settings.RCookie = command["rcookie"].(string)
+		settings.RenewCookieTimer = time.AfterFunc(10*time.Minute, func() {
+			if settings.WebSocket != nil {
+				settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"authcookie"}`))
+			}
+		})
 	}
 }
 
 func handleServerAuthCommand(command map[string]interface{}) {
-	// Switch to using HTTPS TLS certificate for authentication
 	settings.ServerID = ""
 	settings.ServerHttpsHash = settings.MeshServerTlsHash
 	settings.MeshServerTlsHash = ""
