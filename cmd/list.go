@@ -96,7 +96,17 @@ func searchDevices(d *[]meshcentral.Device) string {
 		options = append(options, istr+" "+device.Name+" ("+device.IP+")")
 	}
 
-	selectedOption, _ := pterm.DefaultInteractiveSelect.WithOptions(options).Show()
+	// Get terminal height and set max selection height
+	termHeight := pterm.GetTerminalHeight()
+	maxHeight := termHeight - 5 // Leave space for prompt and borders
+	if maxHeight < 5 {
+		maxHeight = 5
+	}
+
+	selectedOption, _ := pterm.DefaultInteractiveSelect.
+		WithOptions(options).
+		WithMaxHeight(maxHeight).
+		Show()
 
 	index, _ := strconv.Atoi(strings.Split(selectedOption, " ")[0])
 
