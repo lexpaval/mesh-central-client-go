@@ -2,26 +2,26 @@ package cmd
 
 import (
 	"errors"
-	"regexp"
 	"fmt"
+	"regexp"
 	"strconv"
 
 	"github.com/spf13/cobra"
-	//"github.com/spf13/viper"
 
-	"github.com/soarinferret/mcc/internal/meshcentral"
+	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
 var routeCmd = &cobra.Command{
 	Use:     "route",
 	Aliases: []string{"r"},
 	Short:   "Forward TCP traffic to specified Node",
-	Long: ``,
+	Long:    ``,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		bindAddress, _ := cmd.Flags().GetString("bind-address")
 		nodeID, _ := cmd.Flags().GetString("nodeid")
 		debug, _ := cmd.Flags().GetBool("debug")
+		insecure, _ := cmd.Flags().GetBool("insecure")
 
 		localport, target, remoteport, err := parseBindAddress(bindAddress)
 		if err != nil {
@@ -34,6 +34,7 @@ var routeCmd = &cobra.Command{
 			remoteport,
 			localport,
 			target,
+			insecure,
 			debug,
 		)
 
@@ -49,6 +50,7 @@ var routeCmd = &cobra.Command{
 				remoteport,
 				localport,
 				target,
+				insecure,
 				debug,
 			)
 		}
@@ -63,6 +65,7 @@ func init() {
 
 	routeCmd.Flags().StringP("nodeid", "i", "", "Mesh Central Node ID")
 	routeCmd.Flags().StringP("bind-address", "L", "", "localport:[target:]remoteport")
+	routeCmd.Flags().BoolP("insecure", "k", false, "Skip TLS certificate verification (insecure, for testing only)")
 	routeCmd.Flags().BoolP("debug", "", false, "Enable debug logging")
 }
 

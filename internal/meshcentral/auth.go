@@ -12,7 +12,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
-	"github.com/soarinferret/mcc/internal/config"
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 )
 
 func StartSocket() {
@@ -71,7 +71,7 @@ func StartSocket() {
 	//conn, _, err := websocket.DefaultDialer.Dial(urlStr, headers)
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: settings.Insecure,
 		},
 	}
 	conn, _, err := dialer.Dial(urlStr, headers)

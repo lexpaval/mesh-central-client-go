@@ -1,23 +1,21 @@
 package cmd
 
 import (
-
-	"github.com/spf13/cobra"
 	"sort"
 	"strconv"
 	"strings"
 
-	"github.com/soarinferret/mcc/internal/meshcentral"
+	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
+	"github.com/spf13/cobra"
 
 	"github.com/pterm/pterm"
-
 )
 
 var listCmd = &cobra.Command{
 	Use:     "list",
 	Aliases: []string{"ls"},
 	Short:   "List connected nodes on server",
-	Long: ``,
+	Long:    ``,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		meshcentral.ApplySettings(
@@ -25,6 +23,7 @@ var listCmd = &cobra.Command{
 			0,
 			0,
 			"",
+			false,
 			false,
 		)
 
@@ -43,7 +42,7 @@ var searchCmd = &cobra.Command{
 	Use:     "search",
 	Aliases: []string{"s"},
 	Short:   "Search for a node on the server",
-	Long: ``,
+	Long:    ``,
 	Run: func(cmd *cobra.Command, args []string) {
 
 		meshcentral.ApplySettings(
@@ -51,6 +50,7 @@ var searchCmd = &cobra.Command{
 			0,
 			0,
 			"",
+			false,
 			false,
 		)
 
@@ -72,7 +72,7 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 }
 
-func filterAndSortDevices(d *[]meshcentral.Device){
+func filterAndSortDevices(d *[]meshcentral.Device) {
 	// filter devices (remove offline devices)
 	devices := (*d)[:0]
 	for _, device := range *d {
@@ -88,13 +88,12 @@ func filterAndSortDevices(d *[]meshcentral.Device){
 	*d = devices
 }
 
-
 func searchDevices(d *[]meshcentral.Device) string {
 	var options []string
 
 	for i, device := range *d {
 		istr := strconv.Itoa(i)
-		options = append(options, istr + " " +device.Name + " (" + device.IP + ")")
+		options = append(options, istr+" "+device.Name+" ("+device.IP+")")
 	}
 
 	selectedOption, _ := pterm.DefaultInteractiveSelect.WithOptions(options).Show()
@@ -106,14 +105,14 @@ func searchDevices(d *[]meshcentral.Device) string {
 	return nodeid
 }
 
-func printDevices(d *[]meshcentral.Device){
+func printDevices(d *[]meshcentral.Device) {
 	// print devices
 	listData := [][]string{}
 	listData = append(listData, []string{"Hostname", "Connect IP", "OS"})
 	for _, device := range *d {
 		listData = append(listData, []string{
 			device.Name,
-		 	device.IP,
+			device.IP,
 			device.OS,
 		})
 	}

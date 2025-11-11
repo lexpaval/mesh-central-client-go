@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"crypto/rand"
 	"crypto/tls"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -11,9 +12,6 @@ import (
 	"os/signal"
 	"syscall"
 	"time"
-
-	//"encoding/json"
-	"encoding/hex"
 	"unicode/utf8"
 
 	"github.com/gorilla/websocket"
@@ -56,7 +54,7 @@ func StartShell(protocol int) {
 	// set up websocket dialer
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: settings.Insecure,
 		},
 	}
 

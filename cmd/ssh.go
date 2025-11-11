@@ -8,9 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	//"github.com/spf13/viper"
-
-	"github.com/soarinferret/mcc/internal/meshcentral"
+	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
 var sshCmd = &cobra.Command{
@@ -36,6 +34,7 @@ var sshCmd = &cobra.Command{
 		nodeID, _ := cmd.Flags().GetString("nodeid")
 		debug, _ := cmd.Flags().GetBool("debug")
 		proxyMode, _ := cmd.Flags().GetBool("proxy")
+		insecure, _ := cmd.Flags().GetBool("insecure")
 
 		// generate random local port num
 		localport := 0
@@ -45,6 +44,7 @@ var sshCmd = &cobra.Command{
 			remoteport,
 			localport,
 			target,
+			insecure,
 			debug,
 		)
 
@@ -60,6 +60,7 @@ var sshCmd = &cobra.Command{
 				remoteport,
 				localport,
 				target,
+				insecure,
 				debug,
 			)
 		}
@@ -101,6 +102,7 @@ func init() {
 
 	sshCmd.Flags().StringP("nodeid", "i", "", "Mesh Central Node ID")
 	sshCmd.Flags().IntP("port", "p", 22, "Define the remote ssh port")
+	sshCmd.Flags().BoolP("insecure", "k", false, "Skip TLS certificate verification (insecure, for testing only)")
 	sshCmd.Flags().BoolP("debug", "", false, "Enable debug logging")
 	sshCmd.Flags().BoolP("proxy", "", false, "Proxy mode for SSH ProxyCommand")
 }

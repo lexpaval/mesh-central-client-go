@@ -7,7 +7,7 @@ import (
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 
-	"github.com/soarinferret/mcc/internal/config"
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 )
 
 var profileCmd = &cobra.Command{
@@ -77,7 +77,6 @@ func init() {
 	profileCmd.AddCommand(profileListCmd)
 	profileCmd.AddCommand(profileAddCmd)
 	profileCmd.AddCommand(profileRmCmd)
-
 
 	profileAddCmd.Flags().StringP("name", "n", "", "The name of the profile to add")
 	profileAddCmd.Flags().BoolP("default", "d", false, "Set this profile as the default profile")

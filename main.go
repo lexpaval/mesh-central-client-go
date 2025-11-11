@@ -1,9 +1,9 @@
 package main
 
 import (
-	"github.com/soarinferret/mcc/cmd"
+	"github.com/lexpaval/mesh-central-client-go/cmd"
 )
 
 func main() {
-    cmd.Execute()
+	cmd.Execute()
 }

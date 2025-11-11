@@ -40,18 +40,17 @@ type Settings struct {
 	ServerHttpsHash       string
 	Devices               []Device
 	DeviceQueryState      int
+	Insecure              bool
 	debug                 bool
 }
 
 var settings Settings
 
-func ApplySettings(remoteNodeId string, remotePort int, localPort int, remoteTarget string, debug bool) {
-	//settings.ServerURL = serverUrl
-	//settings.Username = username
-	//settings.Password = password
+func ApplySettings(remoteNodeId string, remotePort int, localPort int, remoteTarget string, insecure bool, debug bool) {
 	settings.RemoteNodeID = remoteNodeId
 	settings.RemotePort = remotePort
 	settings.LocalPort = localPort
 	settings.RemoteTarget = remoteTarget
+	settings.Insecure = insecure
 	settings.debug = debug
 }

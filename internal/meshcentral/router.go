@@ -69,7 +69,7 @@ func onTcpClientConnected(conn net.Conn) {
 	headers := http.Header{}
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: settings.Insecure,
 		},
 	}
 
@@ -179,7 +179,7 @@ func StartProxyRouter(ready chan struct{}) {
 	headers := http.Header{}
 	dialer := websocket.Dialer{
 		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: true,
+			InsecureSkipVerify: settings.Insecure,
 		},
 	}
 

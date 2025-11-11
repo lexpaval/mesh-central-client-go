@@ -3,17 +3,17 @@ package cmd
 import (
 	"os"
 
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
+	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/pterm/pterm"
-	"github.com/soarinferret/mcc/internal/config"
 )
 
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "meshagent",
 	Short: "Simple tool to interact with the MeshCentral API",
-	Long: ``,
+	Long:  ``,
 	PersistentPreRun: func(cmd *cobra.Command, args []string) {
 		c, _ := cmd.Flags().GetString("config")
 		if c != "" {
@@ -63,7 +63,6 @@ func pExit(s string, err error) {
 		os.Exit(1)
 	}
 }
-
 
 func initializeSetup() {
 	// Check if the config file exists
