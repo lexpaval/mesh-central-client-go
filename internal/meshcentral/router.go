@@ -97,22 +97,27 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 		})
 	}
 
-	// WebSocket -> TCP
+	// Create pipes for each direction
+	wsToTcpReader, wsToTcpWriter := io.Pipe()
+	tcpToWsReader, tcpToWsWriter := io.Pipe()
+
+	// WebSocket reader -> pipe writer (for WS -> TCP)
 	go func() {
-		defer closeAll()
+		defer wsToTcpWriter.Close()
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
 				if settings.debug && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 					fmt.Println("WebSocket read error:", err)
 				}
+				wsToTcpWriter.CloseWithError(err)
 				return
 			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
-				_, err = tcpConn.Write(message)
+				_, err = wsToTcpWriter.Write(message)
 				if err != nil {
 					if settings.debug {
-						fmt.Println("TCP write error:", err)
+						fmt.Println("Pipe write error (WS -> TCP):", err)
 					}
 					return
 				}
@@ -120,15 +125,33 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 		}
 	}()
 
-	// TCP -> WebSocket
+	// Pipe reader -> TCP writer (WS -> TCP)
 	go func() {
 		defer closeAll()
-		buf := make([]byte, 32768)
+		_, err := io.Copy(tcpConn, wsToTcpReader)
+		if err != nil && settings.debug {
+			fmt.Println("io.Copy error (WS -> TCP):", err)
+		}
+	}()
+
+	// TCP reader -> pipe writer (TCP -> WS)
+	go func() {
+		defer tcpToWsWriter.Close()
+		_, err := io.Copy(tcpToWsWriter, tcpConn)
+		if err != nil && settings.debug {
+			fmt.Println("io.Copy error (TCP -> WS pipe):", err)
+		}
+	}()
+
+	// Pipe reader -> WebSocket writer (TCP -> WS)
+	go func() {
+		defer closeAll()
+		buf := make([]byte, 32768) // Reuse buffer for chunked writes to WS
 		for {
-			n, err := tcpConn.Read(buf)
+			n, err := tcpToWsReader.Read(buf)
 			if err != nil {
 				if err != io.EOF && settings.debug {
-					fmt.Println("TCP read error:", err)
+					fmt.Println("Pipe read error (TCP -> WS):", err)
 				}
 				return
 			}
@@ -202,22 +225,27 @@ func StartProxyRouter(ready chan struct{}) {
 		})
 	}
 
-	// WebSocket -> stdout
+	// Create pipes for each direction
+	wsToStdoutReader, wsToStdoutWriter := io.Pipe()
+	stdinToWsReader, stdinToWsWriter := io.Pipe()
+
+	// WebSocket reader -> pipe writer (WS -> stdout)
 	go func() {
-		defer closeAll()
+		defer wsToStdoutWriter.Close()
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
 				if settings.debug && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 					fmt.Fprintf(os.Stderr, "WebSocket read error: %v\n", err)
 				}
+				wsToStdoutWriter.CloseWithError(err)
 				return
 			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
-				_, err = os.Stdout.Write(message)
+				_, err = wsToStdoutWriter.Write(message)
 				if err != nil {
 					if settings.debug {
-						fmt.Fprintf(os.Stderr, "Stdout write error: %v\n", err)
+						fmt.Fprintf(os.Stderr, "Pipe write error (WS -> stdout): %v\n", err)
 					}
 					return
 				}
@@ -225,15 +253,33 @@ func StartProxyRouter(ready chan struct{}) {
 		}
 	}()
 
-	// stdin -> WebSocket
+	// Pipe reader -> stdout writer (WS -> stdout)
 	go func() {
 		defer closeAll()
-		buf := make([]byte, 32768)
+		_, err := io.Copy(os.Stdout, wsToStdoutReader)
+		if err != nil && settings.debug {
+			fmt.Fprintf(os.Stderr, "io.Copy error (WS -> stdout): %v\n", err)
+		}
+	}()
+
+	// stdin reader -> pipe writer (stdin -> WS)
+	go func() {
+		defer stdinToWsWriter.Close()
+		_, err := io.Copy(stdinToWsWriter, os.Stdin)
+		if err != nil && settings.debug {
+			fmt.Fprintf(os.Stderr, "io.Copy error (stdin -> WS pipe): %v\n", err)
+		}
+	}()
+
+	// Pipe reader -> WebSocket writer (stdin -> WS)
+	go func() {
+		defer closeAll()
+		buf := make([]byte, 32768) // Reuse buffer for chunked writes to WS
 		for {
-			n, err := os.Stdin.Read(buf)
+			n, err := stdinToWsReader.Read(buf)
 			if err != nil {
 				if err != io.EOF && settings.debug {
-					fmt.Fprintf(os.Stderr, "Stdin read error: %v\n", err)
+					fmt.Fprintf(os.Stderr, "Pipe read error (stdin -> WS): %v\n", err)
 				}
 				return
 			}
