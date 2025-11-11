@@ -3,9 +3,9 @@ package meshcentral
 import (
 	"fmt"
 	"time"
+
 	"github.com/gorilla/websocket"
 )
-
 
 func handleNodesCommand(command map[string]interface{}) {
 	if settings.debug {
@@ -17,9 +17,13 @@ func handleNodesCommand(command map[string]interface{}) {
 		nodes := nodeGroup.([]interface{})
 		for _, node := range nodes {
 			nodeMap := node.(map[string]interface{})
-			// check to see if items are blank, if so, set to ""
+
+			// Check for nil values and set defaults
 			if nodeMap["name"] == nil {
 				nodeMap["name"] = ""
+			}
+			if nodeMap["rname"] == nil {
+				nodeMap["rname"] = ""
 			}
 			if nodeMap["osdesc"] == nil {
 				nodeMap["osdesc"] = ""
@@ -27,23 +31,22 @@ func handleNodesCommand(command map[string]interface{}) {
 			if nodeMap["ip"] == nil {
 				nodeMap["ip"] = ""
 			}
-
 			if nodeMap["pwr"] == nil {
 				nodeMap["pwr"] = 0.0
 			}
 			if nodeMap["conn"] == nil {
 				nodeMap["conn"] = 0.0
 			}
+
 			device := Device{
-				Id:     nodeMap["_id"].(string),
-				Name:   nodeMap["rname"].(string),
-				OS:     nodeMap["osdesc"].(string),
-				IP:     nodeMap["ip"].(string),
-				Icon:   int(nodeMap["icon"].(float64)),
-				//Conn:   0,
-				Conn:   int(nodeMap["conn"].(float64)),
-				//Pwr:	0,
-				Pwr:    int(nodeMap["pwr"].(float64)),
+				Id:          nodeMap["_id"].(string),
+				Name:        nodeMap["rname"].(string),
+				DisplayName: nodeMap["name"].(string),
+				OS:          nodeMap["osdesc"].(string),
+				IP:          nodeMap["ip"].(string),
+				Icon:        int(nodeMap["icon"].(float64)),
+				Conn:        int(nodeMap["conn"].(float64)),
+				Pwr:         int(nodeMap["pwr"].(float64)),
 			}
 			devices = append(devices, device)
 		}
@@ -53,12 +56,10 @@ func handleNodesCommand(command map[string]interface{}) {
 	settings.DeviceQueryState = 0
 }
 
-// hacky until I get better at golang
 func GetDevices() []Device {
 	settings.DeviceQueryState = 1
 	settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes"}`))
 
-	// wait for devices to be populated
 	for settings.DeviceQueryState == 1 {
 		time.Sleep(250 * time.Millisecond)
 	}

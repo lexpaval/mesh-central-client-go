@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"fmt"
 	"sort"
 	"strconv"
 	"strings"
@@ -91,36 +92,83 @@ func filterAndSortDevices(d *[]meshcentral.Device) {
 func searchDevices(d *[]meshcentral.Device) string {
 	var options []string
 
-	for i, device := range *d {
-		istr := strconv.Itoa(i)
-		options = append(options, istr+" "+device.Name+" ("+device.IP+")")
+	// Calculate max widths for padding
+	maxNameLen := 0
+	maxHostLen := 0
+	for _, device := range *d {
+		displayName := device.DisplayName
+		if displayName == "" {
+			displayName = device.Name
+		}
+		if len(displayName) > maxNameLen {
+			maxNameLen = len(displayName)
+		}
+		if len(device.Name) > maxHostLen {
+			maxHostLen = len(device.Name)
+		}
 	}
 
-	// Get terminal height and set max selection height
+	// Ensure minimum column widths for headers
+	if maxNameLen < 12 {
+		maxNameLen = 12
+	}
+	if maxHostLen < 8 {
+		maxHostLen = 8
+	}
+
+	// Create header for prompt
+	header := fmt.Sprintf("\n     %-*s  %-*s  %s\n",
+		maxNameLen, "NAME", maxHostLen, "HOSTNAME", "IP ADDRESS")
+
+	for i, device := range *d {
+		displayName := device.DisplayName
+		hostname := device.Name
+
+		if displayName == "" {
+			displayName = device.Name
+			hostname = ""
+		}
+
+		var line string
+		if hostname != "" {
+			line = fmt.Sprintf("%-3d  %-*s  %-*s  %s",
+				i, maxNameLen, displayName, maxHostLen, hostname, device.IP)
+		} else {
+			line = fmt.Sprintf("%-3d  %-*s  %s",
+				i, maxNameLen, displayName, device.IP)
+		}
+
+		options = append(options, line)
+	}
+
 	termHeight := pterm.GetTerminalHeight()
-	maxHeight := termHeight - 5 // Leave space for prompt and borders
+	maxHeight := termHeight - 7
 	if maxHeight < 5 {
 		maxHeight = 5
 	}
 
 	selectedOption, _ := pterm.DefaultInteractiveSelect.
 		WithOptions(options).
+		WithDefaultText("Select a device:" + header).
 		WithMaxHeight(maxHeight).
 		Show()
 
-	index, _ := strconv.Atoi(strings.Split(selectedOption, " ")[0])
-
+	index, _ := strconv.Atoi(strings.Fields(selectedOption)[0])
 	nodeid := (*d)[index].Id
 
 	return nodeid
 }
 
 func printDevices(d *[]meshcentral.Device) {
-	// print devices
 	listData := [][]string{}
-	listData = append(listData, []string{"Hostname", "Connect IP", "OS"})
+	listData = append(listData, []string{"Name", "Hostname", "IP", "OS"})
 	for _, device := range *d {
+		displayName := device.DisplayName
+		if displayName == "" {
+			displayName = "-"
+		}
 		listData = append(listData, []string{
+			displayName,
 			device.Name,
 			device.IP,
 			device.OS,

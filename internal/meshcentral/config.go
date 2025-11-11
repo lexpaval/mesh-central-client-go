@@ -7,13 +7,14 @@ import (
 )
 
 type Device struct {
-	Id   string
-	Name string
-	OS   string
-	IP   string
-	Icon int
-	Conn int
-	Pwr  int
+	Id          string
+	Name        string // Hostname (rname)
+	DisplayName string // Custom name from MeshCentral
+	OS          string
+	IP          string
+	Icon        int
+	Conn        int
+	Pwr         int
 }
 
 type Settings struct {
