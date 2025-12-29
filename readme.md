@@ -68,9 +68,9 @@ mcc config
 - `remoteport` - Required
 
 Examples:
-- `8080:192.168.1.1:80` - Local 8080 â†’ 192.168.1.1:80
-- `8080:80` - Local 8080 â†’ 127.0.0.1:80
-- `80` - Random local port â†’ 127.0.0.1:80
+- `8080:192.168.1.1:80` - Local 8080 at 192.168.1.1:80
+- `8080:80` - Local 8080 at 127.0.0.1:80
+- `80` - Random local port at 127.0.0.1:80
 
 ## Flags
 
@@ -89,7 +89,7 @@ Examples:
 
 ## Security
 
-**Password Storage Migration (v2.0+)**
+**Password Storage Migration (v1.0+)**
 
 Passwords now stored in OS-native secure storage:
 - **Linux**: Secret Service API (gnome-keyring/kwallet)
