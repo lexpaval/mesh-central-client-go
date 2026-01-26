@@ -3,8 +3,8 @@ package cmd
 import (
 	"errors"
 	"fmt"
-	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -72,18 +72,36 @@ func init() {
 // parseBindAddress parses a bind address string in the format:
 // "localport:target:remoteport" or "localport:remoteport" or just "remoteport"
 func parseBindAddress(s string) (localPort int, target string, remotePort int, err error) {
-	// Define regex pattern to match both formats
-	pattern := `^(?:(\d+)(?::([\w\.\-]+))?:)?(\d+)$`
-	re := regexp.MustCompile(pattern)
-
-	matches := re.FindStringSubmatch(s)
-	if matches == nil {
+	parts := strings.Split(s, ":")
+	switch len(parts) {
+	case 1:
+		remotePort, err = strconv.Atoi(parts[0])
+		if err != nil {
+			return 0, "", 0, errors.New("invalid bind address format")
+		}
+	case 2:
+		if isDigits(parts[0]) {
+			localPort, _ = strconv.Atoi(parts[0])
+		} else {
+			target = parts[0]
+		}
+		remotePort, err = strconv.Atoi(parts[1])
+		if err != nil {
+			return 0, "", 0, errors.New("invalid bind address format")
+		}
+	case 3:
+		if !isDigits(parts[0]) {
+			return 0, "", 0, errors.New("invalid bind address format")
+		}
+		localPort, _ = strconv.Atoi(parts[0])
+		target = parts[1]
+		remotePort, err = strconv.Atoi(parts[2])
+		if err != nil {
+			return 0, "", 0, errors.New("invalid bind address format")
+		}
+	default:
 		return 0, "", 0, errors.New("invalid bind address format")
 	}
-
-	localPort, _ = strconv.Atoi(matches[1]) // First capture group (local port)
-	target = matches[2]
-	remotePort, _ = strconv.Atoi(matches[3]) // Third capture group (remote port)
 
 	// If target is "127.0.0.1", set to nothing
 	if target == "127.0.0.1" {
@@ -91,4 +109,16 @@ func parseBindAddress(s string) (localPort int, target string, remotePort int, e
 	}
 
 	return localPort, target, remotePort, nil
+}
+
+func isDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for i := 0; i < len(s); i++ {
+		if s[i] < '0' || s[i] > '9' {
+			return false
+		}
+	}
+	return true
 }
