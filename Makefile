@@ -13,12 +13,15 @@ build:
 	go build $(LDFLAGS) -o mcc .
 
 build-all:
-	GOOS=linux GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64 .
-	GOOS=linux GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-linux-arm64 .
-	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-darwin-amd64 .
-	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-darwin-arm64 .
-	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-windows-amd64.exe .
-	GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-windows-arm64.exe .
+	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64-$(VERSION) .
+	GOOS=linux   GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-linux-arm64-$(VERSION) .
+	GOOS=darwin  GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-darwin-amd64-$(VERSION) .
+	GOOS=darwin  GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-darwin-arm64-$(VERSION) .
+	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-windows-amd64-$(VERSION).exe .
+	GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-windows-arm64-$(VERSION).exe .
+
+release: build-all
+	cd dist && sha256sum mcc-linux-amd64-$(VERSION) mcc-linux-arm64-$(VERSION) mcc-darwin-amd64-$(VERSION) mcc-darwin-arm64-$(VERSION) mcc-windows-amd64-$(VERSION).exe mcc-windows-arm64-$(VERSION).exe > sha256sums.txt
 
 version:
 	@echo "Version:    $(VERSION)"
