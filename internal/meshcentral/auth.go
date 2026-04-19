@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"bufio"
 	"net/http"
 	"net/url"
 	"os"
@@ -15,6 +16,18 @@ import (
 	"github.com/lexpaval/mesh-central-client-go/internal/config"
 )
 
+type authError struct {
+	code      string
+	message   string
+	email2fa  bool
+	sms2fa    bool
+	emailSent bool
+}
+
+func (e authError) Error() string {
+	return e.message
+}
+
 func StartSocket() {
 	p := config.GetDefaultProfile()
 
@@ -22,14 +35,29 @@ func StartSocket() {
 	settings.Password = p.Password
 	settings.ServerURL = "wss://" + p.Server + "/meshrelay.ashx"
 
+	for {
+		if err := startSocketOnce(); err != nil {
+			if ae, ok := err.(authError); ok && ae.code == "tokenrequired" {
+				printTokenRequired(ae)
+				if !promptForToken(ae) {
+					os.Exit(1)
+				}
+				continue
+			}
+			fmt.Println(err.Error())
+			os.Exit(1)
+		}
+		return
+	}
+}
+
+func startSocketOnce() error {
 	var options *url.URL
 	var err error
 
 	options, err = url.Parse(settings.ServerURL)
 	if err != nil {
-		fmt.Println("Unable to parse server URL.")
-		os.Exit(1)
-		return
+		return fmt.Errorf("unable to parse server URL")
 	}
 
 	xtoken := ""
@@ -70,9 +98,7 @@ func StartSocket() {
 	}
 	conn, _, err := dialer.Dial(urlStr, headers)
 	if err != nil {
-		fmt.Printf("Unable to connect to server: %v\n", err)
-		os.Exit(1)
-		return
+		return fmt.Errorf("unable to connect to server: %v", err)
 	}
 
 	if settings.debug {
@@ -80,10 +106,17 @@ func StartSocket() {
 	}
 
 	settings.WebChannel = make(chan struct{})
+	settings.AuthErrChannel = make(chan error, 1)
 	settings.WebSocket = conn
 	go onServerWebSocket(conn)
 
-	<-settings.WebChannel
+	select {
+	case <-settings.WebChannel:
+		return nil
+	case err := <-settings.AuthErrChannel:
+		StopSocket()
+		return err
+	}
 }
 
 func StopSocket() {
@@ -140,25 +173,20 @@ func handleCloseCommand(command map[string]interface{}) {
 	if command["cause"] == "noauth" {
 		switch command["msg"] {
 		case "tokenrequired":
-			if command["email2fasent"] == true {
-				fmt.Println("Login token email sent.")
-			} else if command["email2fa"] == true && command["sms2fa"] == true {
-				fmt.Println("Login token required, use --token [token], or --emailtoken, --smstoken get a token.")
-			} else if command["sms2fa"] == true {
-				fmt.Println("Login token required, use --token [token], or --smstoken get a token.")
-			} else if command["email2fa"] == true {
-				fmt.Println("Login token required, use --token [token], or --emailtoken get a token.")
-			} else {
-				fmt.Println("Login token required, use --token [token].")
-			}
+			sendAuthError(authError{
+				code:      "tokenrequired",
+				message:   "login token required",
+				email2fa:  getBool(command, "email2fa"),
+				sms2fa:    getBool(command, "sms2fa"),
+				emailSent: getBool(command, "email2fasent"),
+			})
 		case "badtlscert":
-			fmt.Println("Invalid TLS certificate detected.")
+			sendAuthError(authError{code: "badtlscert", message: "invalid TLS certificate detected"})
 		case "badargs":
-			fmt.Println("Invalid protocol arguments.")
+			sendAuthError(authError{code: "badargs", message: "invalid protocol arguments"})
 		default:
-			fmt.Println("Invalid username/password.")
+			sendAuthError(authError{code: "badcredentials", message: "invalid username/password"})
 		}
-		os.Exit(1)
 	} else {
 		if settings.debug {
 			fmt.Println("Server disconnected:", command["msg"])
@@ -223,4 +251,83 @@ func handleServerAuthCommand(command map[string]interface{}) {
 	}
 
 	settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(auth))
+}
+
+func sendAuthError(err error) {
+	if settings.AuthErrChannel == nil {
+		return
+	}
+	select {
+	case settings.AuthErrChannel <- err:
+	default:
+	}
+}
+
+func getBool(command map[string]interface{}, key string) bool {
+	val, ok := command[key]
+	if !ok {
+		return false
+	}
+	b, ok := val.(bool)
+	return ok && b
+}
+
+func printTokenRequired(ae authError) {
+	if ae.emailSent {
+		fmt.Println("Login token email sent.")
+	}
+	if ae.email2fa && ae.sms2fa {
+		fmt.Println("Login token required. You can enter a token or type 'email' or 'sms' to request one.")
+	} else if ae.sms2fa {
+		fmt.Println("Login token required. You can enter a token or type 'sms' to request one.")
+	} else if ae.email2fa {
+		fmt.Println("Login token required. You can enter a token or type 'email' to request one.")
+	} else {
+		fmt.Println("Login token required.")
+	}
+}
+
+func promptForToken(ae authError) bool {
+	reader := bufio.NewReader(os.Stdin)
+	for {
+		fmt.Print("Enter 2FA token")
+		if ae.email2fa || ae.sms2fa {
+			fmt.Print(" (or type 'email'/'sms')")
+		}
+		fmt.Print(": ")
+		input, err := reader.ReadString('\n')
+		if err != nil {
+			fmt.Println("Unable to read token:", err)
+			return false
+		}
+		token := strings.TrimSpace(input)
+		if token == "" {
+			return false
+		}
+		switch strings.ToLower(token) {
+		case "email":
+			if !ae.email2fa {
+				fmt.Println("Email token is not available for this account.")
+				continue
+			}
+			settings.EmailToken = true
+			settings.SMSToken = false
+			settings.Token = ""
+			return true
+		case "sms":
+			if !ae.sms2fa {
+				fmt.Println("SMS token is not available for this account.")
+				continue
+			}
+			settings.SMSToken = true
+			settings.EmailToken = false
+			settings.Token = ""
+			return true
+		default:
+			settings.Token = token
+			settings.EmailToken = false
+			settings.SMSToken = false
+			return true
+		}
+	}
 }
