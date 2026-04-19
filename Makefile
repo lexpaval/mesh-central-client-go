@@ -18,6 +18,7 @@ build-all:
 	GOOS=darwin GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-darwin-amd64 .
 	GOOS=darwin GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-darwin-arm64 .
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-windows-amd64.exe .
+	GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-windows-arm64.exe .
 
 version:
 	@echo "Version:    $(VERSION)"
