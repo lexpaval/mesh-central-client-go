@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"bufio"
 	"net/http"
 	"net/url"
 	"os"
@@ -14,6 +13,7 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/lexpaval/mesh-central-client-go/internal/config"
+	"github.com/pterm/pterm"
 )
 
 type authError struct {
@@ -36,6 +36,11 @@ func StartSocket() {
 	settings.ServerURL = "wss://" + p.Server + "/meshrelay.ashx"
 
 	for {
+		// Reset cookie state before each attempt so handleAuthCookieCommand
+		// always takes the first-time branch and closes WebChannel
+		settings.ACookie = ""
+		settings.RCookie = ""
+
 		if err := startSocketOnce(); err != nil {
 			if ae, ok := err.(authError); ok && ae.code == "tokenrequired" {
 				printTokenRequired(ae)
@@ -44,7 +49,7 @@ func StartSocket() {
 				}
 				continue
 			}
-			fmt.Println(err.Error())
+			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
 		return
@@ -129,8 +134,10 @@ func StopSocket() {
 	if settings.WebSocket != nil {
 		settings.WebSocket.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(1000, "all done"))
-		time.Sleep(100 * time.Millisecond)
+		// Don't sleep - if server closed us (tokenrequired), the write
+		// may already fail and sleeping just adds latency
 		settings.WebSocket.Close()
+		settings.WebSocket = nil
 	}
 }
 
@@ -274,40 +281,33 @@ func getBool(command map[string]interface{}, key string) bool {
 
 func printTokenRequired(ae authError) {
 	if ae.emailSent {
-		fmt.Println("Login token email sent.")
+		pterm.Info.Println("Login token email sent.")
 	}
 	if ae.email2fa && ae.sms2fa {
-		fmt.Println("Login token required. You can enter a token or type 'email' or 'sms' to request one.")
+		pterm.Warning.Println("2FA required. Enter a token or type 'email'/'sms' to request one.")
 	} else if ae.sms2fa {
-		fmt.Println("Login token required. You can enter a token or type 'sms' to request one.")
+		pterm.Warning.Println("2FA required. Enter a token or type 'sms' to request one.")
 	} else if ae.email2fa {
-		fmt.Println("Login token required. You can enter a token or type 'email' to request one.")
+		pterm.Warning.Println("2FA required. Enter a token or type 'email' to request one.")
 	} else {
-		fmt.Println("Login token required.")
+		pterm.Warning.Println("2FA required.")
 	}
 }
 
 func promptForToken(ae authError) bool {
-	reader := bufio.NewReader(os.Stdin)
 	for {
-		fmt.Print("Enter 2FA token")
-		if ae.email2fa || ae.sms2fa {
-			fmt.Print(" (or type 'email'/'sms')")
-		}
-		fmt.Print(": ")
-		input, err := reader.ReadString('\n')
-		if err != nil {
-			fmt.Println("Unable to read token:", err)
+		prompt := pterm.DefaultInteractiveTextInput
+		input, err := prompt.Show("Enter 2FA token")
+		if err != nil || strings.TrimSpace(input) == "" {
+			pterm.Error.Println("No token entered, aborting.")
 			return false
 		}
 		token := strings.TrimSpace(input)
-		if token == "" {
-			return false
-		}
+
 		switch strings.ToLower(token) {
 		case "email":
 			if !ae.email2fa {
-				fmt.Println("Email token is not available for this account.")
+				pterm.Error.Println("Email token not available for this account.")
 				continue
 			}
 			settings.EmailToken = true
@@ -316,7 +316,7 @@ func promptForToken(ae authError) bool {
 			return true
 		case "sms":
 			if !ae.sms2fa {
-				fmt.Println("SMS token is not available for this account.")
+				pterm.Error.Println("SMS token not available for this account.")
 				continue
 			}
 			settings.SMSToken = true
