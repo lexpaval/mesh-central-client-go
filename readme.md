@@ -84,8 +84,39 @@ Examples:
 - `-i, --nodeid` - Target device ID (omit for interactive search)
 - `-L, --bind-address` - Port forward specification
 - `-p, --port` - SSH remote port (default: 22)
+- `-t, --token` - 2FA token (ssh, shell, route only)
 - `--proxy` - SSH proxy mode for ProxyCommand
 - `--powershell` - Use PowerShell instead of cmd.exe
+
+## 2FA Authentication
+
+If the MeshCentral server requires two-factor authentication, mcc handles it automatically.
+
+**Interactive prompt** - when no token is provided, mcc will prompt after the initial connection attempt:
+```
+WARNING  2FA required.
+Enter 2FA token: ******
+```
+
+**Inline token** - pass the token directly to skip the prompt, useful for scripting or when the token is already known:
+```bash
+mcc ssh -i <nodeid> --token 123456
+mcc shell -i <nodeid> --token 123456
+mcc route -L 8080:80 -i <nodeid> --token 123456
+```
+
+**Email/SMS tokens** - if the server supports out-of-band tokens, type `email` or `sms` at the prompt to request one, then re-enter the prompt with the received code:
+```
+WARNING  2FA required. Enter a token or type 'email'/'sms' to request one.
+Enter 2FA token: email
+WARNING  2FA required.
+Enter 2FA token: 123456
+```
+
+> **Note:** Node IDs containing special characters (e.g. `$`) must be wrapped in single quotes to prevent shell expansion:
+> ```bash
+> mcc ssh -i 'node//abc$def...'
+> ```
 
 ## Security
 

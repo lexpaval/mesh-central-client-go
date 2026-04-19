@@ -4,6 +4,7 @@ import (
 	"os"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/config"
+	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -21,6 +22,10 @@ var rootCmd = &cobra.Command{
 			viper.SetConfigFile(c)
 		} else {
 			viper.SetConfigFile(config.DefaultConfigPath)
+		}
+
+		if token, _ := cmd.Flags().GetString("token"); token != "" {
+			meshcentral.ApplyAuth(token, false, false)
 		}
 
 		// create config file if necessary
@@ -86,6 +91,7 @@ func init() {
 
 	rootCmd.PersistentFlags().StringP("config", "C", "", "Alternate configuration file to use")
 	rootCmd.PersistentFlags().StringP("profile", "P", "", "Override the active profile")
+	rootCmd.PersistentFlags().StringP("token", "t", "", "2FA token")
 }
 
 func pExit(s string, err error) {

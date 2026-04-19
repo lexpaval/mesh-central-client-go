@@ -56,3 +56,9 @@ func ApplySettings(remoteNodeId string, remotePort int, localPort int, remoteTar
 	settings.Insecure = insecure
 	settings.debug = debug
 }
+
+func ApplyAuth(token string, emailToken bool, smsToken bool) {
+	settings.Token = token
+	settings.EmailToken = emailToken
+	settings.SMSToken = smsToken
+}
