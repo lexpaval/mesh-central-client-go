@@ -8,12 +8,14 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"github.com/lexpaval/mesh-central-client-go/internal/config"
 	"github.com/pterm/pterm"
+	"golang.org/x/term"
 )
 
 type authError struct {
@@ -294,20 +296,35 @@ func printTokenRequired(ae authError) {
 	}
 }
 
+func openConsole() (*os.File, error) {
+	if runtime.GOOS == "windows" {
+		return os.OpenFile("CONIN$", os.O_RDWR, 0)
+	}
+	return os.OpenFile("/dev/tty", os.O_RDWR, 0)
+}
+
 func promptForToken(ae authError) bool {
+	console, err := openConsole()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "2FA required but no console available (%v). Use --token flag.\n", err)
+		return false
+	}
+	defer console.Close()
+
 	for {
-		prompt := pterm.DefaultInteractiveTextInput
-		input, err := prompt.Show("Enter 2FA token")
-		if err != nil || strings.TrimSpace(input) == "" {
-			pterm.Error.Println("No token entered, aborting.")
+		fmt.Fprint(console, "Enter 2FA token: ")
+		tokenBytes, err := term.ReadPassword(int(console.Fd()))
+		fmt.Fprintln(console)
+		if err != nil || len(tokenBytes) == 0 {
+			fmt.Fprintln(console, "No token entered, aborting.")
 			return false
 		}
-		token := strings.TrimSpace(input)
+		token := strings.TrimSpace(string(tokenBytes))
 
 		switch strings.ToLower(token) {
 		case "email":
 			if !ae.email2fa {
-				pterm.Error.Println("Email token not available for this account.")
+				fmt.Fprintln(console, "Email token not available for this account.")
 				continue
 			}
 			settings.EmailToken = true
@@ -316,7 +333,7 @@ func promptForToken(ae authError) bool {
 			return true
 		case "sms":
 			if !ae.sms2fa {
-				pterm.Error.Println("SMS token not available for this account.")
+				fmt.Fprintln(console, "SMS token not available for this account.")
 				continue
 			}
 			settings.SMSToken = true
