@@ -103,42 +103,47 @@ func onTcpClientConnected(conn net.Conn) {
 	onWebSocket(wsConn, conn)
 }
 
-func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
-	if settings.debug {
-		fmt.Println("Websocket connected")
-	}
-
+// pumpBidirectional relays bytes between wsConn and a local stream (src/dst
+// may be the same net.Conn, or split streams like stdin/stdout). It blocks
+// until either side closes, then returns the error that caused the shutdown
+// (nil for a graceful WebSocket close or a clean EOF on src). It only closes
+// wsConn itself; closing src/dst is the caller's responsibility, since some
+// callers (stdin/stdout) must not be closed.
+func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, debugOut io.Writer) error {
 	done := make(chan struct{})
 	var once sync.Once
-	closeAll := func() {
+	var cause error
+	closeAll := func(err error) {
 		once.Do(func() {
+			cause = err
 			wsConn.Close()
-			tcpConn.Close()
 			close(done)
 		})
 	}
 
 	// Create pipes for each direction
-	wsToTcpReader, wsToTcpWriter := io.Pipe()
-	tcpToWsReader, tcpToWsWriter := io.Pipe()
+	wsToDstReader, wsToDstWriter := io.Pipe()
+	srcToWsReader, srcToWsWriter := io.Pipe()
 
-	// WebSocket reader -> pipe writer (for WS -> TCP)
+	// WebSocket reader -> pipe writer (WS -> dst)
 	go func() {
-		defer wsToTcpWriter.Close()
+		defer wsToDstWriter.Close()
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
-				if settings.debug && !websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
-					fmt.Println("WebSocket read error:", err)
+				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+					return // graceful close: deferred Close() yields a plain EOF downstream
 				}
-				wsToTcpWriter.CloseWithError(err)
+				if settings.debug {
+					fmt.Fprintln(debugOut, "WebSocket read error:", err)
+				}
+				wsToDstWriter.CloseWithError(err)
 				return
 			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
-				_, err = wsToTcpWriter.Write(message)
-				if err != nil {
+				if _, err := wsToDstWriter.Write(message); err != nil {
 					if settings.debug {
-						fmt.Println("Pipe write error (WS -> TCP):", err)
+						fmt.Fprintln(debugOut, "Pipe write error (WS -> dst):", err)
 					}
 					return
 				}
@@ -146,42 +151,46 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 		}
 	}()
 
-	// Pipe reader -> TCP writer (WS -> TCP)
+	// Pipe reader -> dst writer (WS -> dst)
 	go func() {
-		defer closeAll()
-		_, err := io.Copy(tcpConn, wsToTcpReader)
+		_, err := io.Copy(dst, wsToDstReader)
 		if err != nil && settings.debug {
-			fmt.Println("io.Copy error (WS -> TCP):", err)
+			fmt.Fprintln(debugOut, "io.Copy error (WS -> dst):", err)
+		}
+		closeAll(err)
+	}()
+
+	// src reader -> pipe writer (src -> WS)
+	go func() {
+		defer srcToWsWriter.Close()
+		_, err := io.Copy(srcToWsWriter, src)
+		if err != nil && settings.debug {
+			fmt.Fprintln(debugOut, "io.Copy error (src -> WS pipe):", err)
 		}
 	}()
 
-	// TCP reader -> pipe writer (TCP -> WS)
+	// Pipe reader -> WebSocket writer (src -> WS)
 	go func() {
-		defer tcpToWsWriter.Close()
-		_, err := io.Copy(tcpToWsWriter, tcpConn)
-		if err != nil && settings.debug {
-			fmt.Println("io.Copy error (TCP -> WS pipe):", err)
-		}
-	}()
-
-	// Pipe reader -> WebSocket writer (TCP -> WS)
-	go func() {
-		defer closeAll()
 		buf := make([]byte, 32768) // Reuse buffer for chunked writes to WS
 		for {
-			n, err := tcpToWsReader.Read(buf)
+			n, err := srcToWsReader.Read(buf)
 			if err != nil {
-				if err != io.EOF && settings.debug {
-					fmt.Println("Pipe read error (TCP -> WS):", err)
+				if err == io.EOF {
+					closeAll(nil) // src closed: session ended normally
+				} else {
+					if settings.debug {
+						fmt.Fprintln(debugOut, "Pipe read error (src -> WS):", err)
+					}
+					closeAll(err)
 				}
 				return
 			}
 			if n > 0 {
-				err = wsConn.WriteMessage(websocket.BinaryMessage, buf[:n])
-				if err != nil {
+				if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
 					if settings.debug {
-						fmt.Println("WebSocket write error:", err)
+						fmt.Fprintln(debugOut, "WebSocket write error:", err)
 					}
+					closeAll(err)
 					return
 				}
 			}
@@ -189,6 +198,14 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 	}()
 
 	<-done
+	return cause
+}
+
+func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
+	if settings.debug {
+		fmt.Println("Websocket connected")
+	}
+	pumpBidirectional(wsConn, tcpConn, tcpConn, os.Stdout)
 }
 
 // StartProxyRouter runs the SSH ProxyCommand tunnel: stdin/stdout of this
@@ -232,99 +249,10 @@ func StartProxyRouter(ready chan struct{}) {
 		fmt.Fprintf(os.Stderr, "Proxy WebSocket connected\n")
 	}
 
-	done := make(chan struct{})
-	var once sync.Once
-	var closeCause error
-	closeAll := func(cause error) {
-		once.Do(func() {
-			closeCause = cause
-			wsConn.Close()
-			close(done)
-		})
-	}
+	cause := pumpBidirectional(wsConn, os.Stdin, os.Stdout, os.Stderr)
 
-	// Create pipes for each direction
-	wsToStdoutReader, wsToStdoutWriter := io.Pipe()
-	stdinToWsReader, stdinToWsWriter := io.Pipe()
-
-	// WebSocket reader -> pipe writer (WS -> stdout)
-	go func() {
-		defer wsToStdoutWriter.Close()
-		for {
-			messageType, message, err := wsConn.ReadMessage()
-			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
-					return // graceful close: deferred Close() yields a plain EOF downstream
-				}
-				if settings.debug {
-					fmt.Fprintf(os.Stderr, "WebSocket read error: %v\n", err)
-				}
-				wsToStdoutWriter.CloseWithError(err)
-				return
-			}
-			if messageType == websocket.BinaryMessage && len(message) > 0 {
-				_, err = wsToStdoutWriter.Write(message)
-				if err != nil {
-					if settings.debug {
-						fmt.Fprintf(os.Stderr, "Pipe write error (WS -> stdout): %v\n", err)
-					}
-					return
-				}
-			}
-		}
-	}()
-
-	// Pipe reader -> stdout writer (WS -> stdout)
-	go func() {
-		_, err := io.Copy(os.Stdout, wsToStdoutReader)
-		if err != nil && settings.debug {
-			fmt.Fprintf(os.Stderr, "io.Copy error (WS -> stdout): %v\n", err)
-		}
-		closeAll(err)
-	}()
-
-	// stdin reader -> pipe writer (stdin -> WS)
-	go func() {
-		defer stdinToWsWriter.Close()
-		_, err := io.Copy(stdinToWsWriter, os.Stdin)
-		if err != nil && settings.debug {
-			fmt.Fprintf(os.Stderr, "io.Copy error (stdin -> WS pipe): %v\n", err)
-		}
-	}()
-
-	// Pipe reader -> WebSocket writer (stdin -> WS)
-	go func() {
-		buf := make([]byte, 32768) // Reuse buffer for chunked writes to WS
-		for {
-			n, err := stdinToWsReader.Read(buf)
-			if err != nil {
-				if err == io.EOF {
-					closeAll(nil) // ssh client closed stdin: session ended normally
-				} else {
-					if settings.debug {
-						fmt.Fprintf(os.Stderr, "Pipe read error (stdin -> WS): %v\n", err)
-					}
-					closeAll(err)
-				}
-				return
-			}
-			if n > 0 {
-				err = wsConn.WriteMessage(websocket.BinaryMessage, buf[:n])
-				if err != nil {
-					if settings.debug {
-						fmt.Fprintf(os.Stderr, "WebSocket write error: %v\n", err)
-					}
-					closeAll(err)
-					return
-				}
-			}
-		}
-	}()
-
-	<-done
-
-	if closeCause != nil {
-		fmt.Fprintf(os.Stderr, "\nProxy tunnel to MeshCentral lost: %v\n", closeCause)
+	if cause != nil {
+		fmt.Fprintf(os.Stderr, "\nProxy tunnel to MeshCentral lost: %v\n", cause)
 		os.Exit(1)
 	}
 	os.Exit(0)
