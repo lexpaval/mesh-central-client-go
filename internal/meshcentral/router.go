@@ -121,78 +121,58 @@ func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, deb
 		})
 	}
 
-	// Create pipes for each direction
-	wsToDstReader, wsToDstWriter := io.Pipe()
-	srcToWsReader, srcToWsWriter := io.Pipe()
-
-	// WebSocket reader -> pipe writer (WS -> dst)
+	// WS -> dst: each WS message is already a complete chunk, write it
+	// straight to dst with no intermediate buffering.
 	go func() {
-		defer wsToDstWriter.Close()
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
 				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
-					return // graceful close: deferred Close() yields a plain EOF downstream
+					closeAll(nil)
+				} else {
+					if settings.debug {
+						fmt.Fprintln(debugOut, "WebSocket read error:", err)
+					}
+					closeAll(err)
 				}
-				if settings.debug {
-					fmt.Fprintln(debugOut, "WebSocket read error:", err)
-				}
-				wsToDstWriter.CloseWithError(err)
 				return
 			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
-				if _, err := wsToDstWriter.Write(message); err != nil {
+				if _, err := dst.Write(message); err != nil {
 					if settings.debug {
-						fmt.Fprintln(debugOut, "Pipe write error (WS -> dst):", err)
+						fmt.Fprintln(debugOut, "Write error (WS -> dst):", err)
 					}
+					closeAll(err)
 					return
 				}
 			}
 		}
 	}()
 
-	// Pipe reader -> dst writer (WS -> dst)
+	// src -> WS: read a chunk, forward it as one WS message.
 	go func() {
-		_, err := io.Copy(dst, wsToDstReader)
-		if err != nil && settings.debug {
-			fmt.Fprintln(debugOut, "io.Copy error (WS -> dst):", err)
-		}
-		closeAll(err)
-	}()
-
-	// src reader -> pipe writer (src -> WS)
-	go func() {
-		defer srcToWsWriter.Close()
-		_, err := io.Copy(srcToWsWriter, src)
-		if err != nil && settings.debug {
-			fmt.Fprintln(debugOut, "io.Copy error (src -> WS pipe):", err)
-		}
-	}()
-
-	// Pipe reader -> WebSocket writer (src -> WS)
-	go func() {
-		buf := make([]byte, 32768) // Reuse buffer for chunked writes to WS
+		buf := make([]byte, 32768) // Reused across reads
 		for {
-			n, err := srcToWsReader.Read(buf)
+			n, err := src.Read(buf)
+			if n > 0 {
+				if werr := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); werr != nil {
+					if settings.debug {
+						fmt.Fprintln(debugOut, "WebSocket write error:", werr)
+					}
+					closeAll(werr)
+					return
+				}
+			}
 			if err != nil {
 				if err == io.EOF {
 					closeAll(nil) // src closed: session ended normally
 				} else {
 					if settings.debug {
-						fmt.Fprintln(debugOut, "Pipe read error (src -> WS):", err)
+						fmt.Fprintln(debugOut, "Read error (src -> WS):", err)
 					}
 					closeAll(err)
 				}
 				return
-			}
-			if n > 0 {
-				if err := wsConn.WriteMessage(websocket.BinaryMessage, buf[:n]); err != nil {
-					if settings.debug {
-						fmt.Fprintln(debugOut, "WebSocket write error:", err)
-					}
-					closeAll(err)
-					return
-				}
 			}
 		}
 	}()
