@@ -1,6 +1,7 @@
 package meshcentral
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"time"
@@ -78,4 +79,22 @@ func GetDevices() []Device {
 	}
 
 	return settings.Devices
+}
+
+// RunCommand dispatches a shell command to nodeID and returns as soon as the
+// server has accepted it, without waiting for the agent to run it or for any
+// output (fire and forget).
+func RunCommand(nodeID, command string, runAsUser int) error {
+	payload, err := json.Marshal(map[string]interface{}{
+		"action":     "runcommands",
+		"type":       0, // 0 = cmd/shell (native shell on both Windows and Linux agents)
+		"nodeids":    []string{nodeID},
+		"cmds":       command,
+		"runAsUser":  runAsUser,
+		"responseid": "meshctrl",
+	})
+	if err != nil {
+		return err
+	}
+	return settings.WebSocket.WriteMessage(websocket.TextMessage, payload)
 }

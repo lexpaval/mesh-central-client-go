@@ -8,6 +8,7 @@ Simple client for [MeshCentral](https://github.com/Ylianst/MeshCentral) using th
 * TCP port forwarding (Meshrouter replacement)
 * SSH connections with proxy mode support
 * Direct shell access (cmd/powershell/bash)
+* Run a command on a node, fire and forget
 * Multi-profile management
 * Secure password storage (OS keyring)
 * Cross-platform (Windows, Linux, macOS)
@@ -48,6 +49,10 @@ mcc ssh -i <nodeid> --proxy
 mcc shell -i <nodeid>              # Linux/Mac: bash, Windows: cmd
 mcc shell -i <nodeid> --powershell # Windows: PowerShell
 
+# Run a command, fire and forget (no output returned)
+mcc run -i <nodeid> "rename computer new-hostname"
+mcc run -i <nodeid> --as-user "notify-send hello" # as logged-in user instead of SYSTEM/root
+
 # Profile management
 mcc profile add -n work -s mesh.company.com -u admin -p password
 mcc profile list
@@ -77,16 +82,17 @@ Examples:
 ### Global
 - `-C, --config` - Alternate config file
 - `-P, --profile` - Override active profile
+- `-t, --token` - 2FA token
 - `-k, --insecure` - Skip TLS certificate verification (testing only)
 - `--debug` - Enable debug logging
 
 ### Command-Specific
 - `-i, --nodeid` - Target device ID (omit for interactive search)
-- `-L, --bind-address` - Port forward specification
-- `-p, --port` - SSH remote port (default: 22)
-- `-t, --token` - 2FA token (ssh, shell, route only)
-- `--proxy` - SSH proxy mode for ProxyCommand
-- `--powershell` - Use PowerShell instead of cmd.exe
+- `-L, --bind-address` - Port forward specification (route)
+- `-p, --port` - SSH remote port, default 22 (ssh)
+- `--proxy` - SSH proxy mode for ProxyCommand (ssh)
+- `--powershell` - Use PowerShell instead of cmd.exe (shell)
+- `--as-user` - Run as the logged-in user instead of SYSTEM/root (run)
 
 ## 2FA Authentication
 
