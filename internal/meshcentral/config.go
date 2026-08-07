@@ -44,6 +44,8 @@ type Settings struct {
 	DeviceQueryState      int
 	Insecure              bool
 	debug                 bool
+	closing               bool
+	initialAuthDone       bool
 }
 
 var settings Settings

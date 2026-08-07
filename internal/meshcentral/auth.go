@@ -30,20 +30,91 @@ func (e authError) Error() string {
 	return e.message
 }
 
+// maxControlReconnectAttempts bounds how many times the control socket will
+// try to redial after an unexpected drop before giving up and exiting, so a
+// permanently unreachable server produces a visible error instead of an
+// infinite silent retry loop.
+const maxControlReconnectAttempts = 8
+
 func StartSocket() {
 	p := config.GetDefaultProfile()
 
 	settings.Username = p.Username
 	settings.Password = p.Password
 	settings.ServerURL = "wss://" + p.Server + "/meshrelay.ashx"
+	settings.initialAuthDone = false
+
+	urlStr := strings.Replace(settings.ServerURL, "meshrelay.ashx", "control.ashx", 1)
+
+	dial := func() (*websocket.Conn, error) {
+		options, err := url.Parse(settings.ServerURL)
+		if err != nil {
+			return nil, err
+		}
+
+		xtoken := ""
+		if settings.EmailToken {
+			xtoken = "**email**"
+		} else if settings.SMSToken {
+			xtoken = "**sms**"
+		} else if settings.Token != "" {
+			xtoken = settings.Token
+		}
+
+		headers := http.Header{}
+		if settings.ServerID == "" {
+			if settings.AuthCookie != "" {
+				options.RawQuery = fmt.Sprintf("auth=%s", settings.AuthCookie)
+				if xtoken != "" {
+					options.RawQuery += fmt.Sprintf("&token=%s", xtoken)
+				}
+			} else {
+				auth := base64.StdEncoding.EncodeToString([]byte(settings.Username)) + "," +
+					base64.StdEncoding.EncodeToString([]byte(settings.Password))
+				if xtoken != "" {
+					auth += "," + base64.StdEncoding.EncodeToString([]byte(xtoken))
+				}
+				headers.Add("x-meshauth", auth)
+			}
+		} else {
+			headers.Add("x-meshauth", "*")
+		}
+
+		dialer := websocket.Dialer{
+			HandshakeTimeout: 10 * time.Second,
+			TLSClientConfig:  &tls.Config{InsecureSkipVerify: settings.Insecure},
+		}
+		conn, _, err := dialer.Dial(urlStr, headers)
+		return conn, err
+	}
 
 	for {
 		// Reset cookie state before each attempt so handleAuthCookieCommand
 		// always takes the first-time branch and closes WebChannel
 		settings.ACookie = ""
 		settings.RCookie = ""
+		settings.closing = false
+		settings.AuthErrChannel = make(chan error, 1)
 
-		if err := startSocketOnce(); err != nil {
+		conn, err := dial()
+		if err != nil {
+			fmt.Printf("Unable to connect to server: %v\n", err)
+			os.Exit(1)
+		}
+
+		if settings.debug {
+			fmt.Println("Connected to server.")
+		}
+
+		settings.WebChannel = make(chan struct{})
+		settings.WebSocket = conn
+		go onServerWebSocket(conn, dial)
+
+		select {
+		case <-settings.WebChannel:
+			return
+		case err := <-settings.AuthErrChannel:
+			StopSocket()
 			if ae, ok := err.(authError); ok && ae.code == "tokenrequired" {
 				printTokenRequired(ae)
 				if !promptForToken(ae) {
@@ -54,80 +125,12 @@ func StartSocket() {
 			fmt.Fprintln(os.Stderr, err.Error())
 			os.Exit(1)
 		}
-		return
-	}
-}
-
-func startSocketOnce() error {
-	var options *url.URL
-	var err error
-
-	options, err = url.Parse(settings.ServerURL)
-	if err != nil {
-		return fmt.Errorf("unable to parse server URL")
-	}
-
-	xtoken := ""
-	if settings.EmailToken {
-		xtoken = "**email**"
-	} else if settings.SMSToken {
-		xtoken = "**sms**"
-	} else if settings.Token != "" {
-		xtoken = settings.Token
-	}
-
-	headers := http.Header{}
-	if settings.ServerID == "" {
-		if settings.AuthCookie != "" {
-			options.RawQuery = fmt.Sprintf("auth=%s", settings.AuthCookie)
-			if xtoken != "" {
-				options.RawQuery += fmt.Sprintf("&token=%s", xtoken)
-			}
-		} else {
-			auth := base64.StdEncoding.EncodeToString([]byte(settings.Username)) + "," +
-				base64.StdEncoding.EncodeToString([]byte(settings.Password))
-			if xtoken != "" {
-				auth += "," + base64.StdEncoding.EncodeToString([]byte(xtoken))
-			}
-			headers.Add("x-meshauth", auth)
-		}
-	} else {
-		headers.Add("x-meshauth", "*")
-	}
-
-	urlStr := strings.Replace(settings.ServerURL, "meshrelay.ashx", "control.ashx", 1)
-
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-		TLSClientConfig: &tls.Config{
-			InsecureSkipVerify: settings.Insecure,
-		},
-	}
-	conn, _, err := dialer.Dial(urlStr, headers)
-	if err != nil {
-		return fmt.Errorf("unable to connect to server: %v", err)
-	}
-
-	if settings.debug {
-		fmt.Println("Connected to server.")
-	}
-
-	settings.WebChannel = make(chan struct{})
-	settings.AuthErrChannel = make(chan error, 1)
-	settings.WebSocket = conn
-	go onServerWebSocket(conn)
-
-	select {
-	case <-settings.WebChannel:
-		return nil
-	case err := <-settings.AuthErrChannel:
-		StopSocket()
-		return err
 	}
 }
 
 func StopSocket() {
-	// Stop timer before closing connection
+	settings.closing = true
+
 	if settings.RenewCookieTimer != nil {
 		settings.RenewCookieTimer.Stop()
 		settings.RenewCookieTimer = nil
@@ -136,25 +139,78 @@ func StopSocket() {
 	if settings.WebSocket != nil {
 		settings.WebSocket.WriteMessage(websocket.CloseMessage,
 			websocket.FormatCloseMessage(1000, "all done"))
-		// Don't sleep - if server closed us (tokenrequired), the write
-		// may already fail and sleeping just adds latency
+		time.Sleep(100 * time.Millisecond)
 		settings.WebSocket.Close()
 		settings.WebSocket = nil
 	}
 }
 
-func onServerWebSocket(conn *websocket.Conn) {
+// sleepUnlessClosing waits for d, polling settings.closing so a shutdown
+// requested mid-backoff (StopSocket) interrupts the wait promptly instead of
+// after up to the full backoff duration.
+func sleepUnlessClosing(d time.Duration) bool {
+	const tick = 200 * time.Millisecond
+	for remaining := d; remaining > 0; remaining -= tick {
+		if settings.closing {
+			return false
+		}
+		step := tick
+		if remaining < step {
+			step = remaining
+		}
+		time.Sleep(step)
+	}
+	return !settings.closing
+}
+
+// reconnectControlSocket redials the control socket with capped exponential
+// backoff, printing progress so a network blip is visible on the terminal.
+// It gives up (and exits) after maxControlReconnectAttempts so a server that
+// is permanently unreachable doesn't retry forever in silence.
+func reconnectControlSocket(cause error, dial func() (*websocket.Conn, error)) (*websocket.Conn, bool) {
+	fmt.Fprintf(os.Stderr, "\nControl connection lost: %v, reconnecting...\n", cause)
+
+	backoff := time.Second
+	for attempt := 1; attempt <= maxControlReconnectAttempts; attempt++ {
+		if !sleepUnlessClosing(backoff) {
+			return nil, false
+		}
+
+		conn, err := dial()
+		if err == nil {
+			settings.WebSocket = conn
+			fmt.Fprintln(os.Stderr, "Control connection restored.")
+			return conn, true
+		}
+
+		fmt.Fprintf(os.Stderr, "Reconnect attempt %d/%d failed: %v\n", attempt, maxControlReconnectAttempts, err)
+		if backoff < 30*time.Second {
+			backoff *= 2
+		}
+	}
+
+	fmt.Fprintln(os.Stderr, "Unable to restore connection to MeshCentral server, giving up.")
+	os.Exit(1)
+	return nil, false
+}
+
+func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error)) {
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+			if settings.closing || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 				if settings.debug {
 					fmt.Println("Server closed connection")
 				}
 				return
 			}
-			fmt.Println("Server connection error:", err)
-			return
+
+			newConn, ok := reconnectControlSocket(err, dial)
+			if !ok {
+				return
+			}
+			conn = newConn
+			continue
 		}
 
 		var command map[string]interface{}
@@ -180,22 +236,36 @@ func onServerWebSocket(conn *websocket.Conn) {
 
 func handleCloseCommand(command map[string]interface{}) {
 	if command["cause"] == "noauth" {
+		var ae authError
 		switch command["msg"] {
 		case "tokenrequired":
-			sendAuthError(authError{
+			ae = authError{
 				code:      "tokenrequired",
 				message:   "login token required",
 				email2fa:  getBool(command, "email2fa"),
 				sms2fa:    getBool(command, "sms2fa"),
 				emailSent: getBool(command, "email2fasent"),
-			})
+			}
 		case "badtlscert":
-			sendAuthError(authError{code: "badtlscert", message: "invalid TLS certificate detected"})
+			ae = authError{code: "badtlscert", message: "invalid TLS certificate detected"}
 		case "badargs":
-			sendAuthError(authError{code: "badargs", message: "invalid protocol arguments"})
+			ae = authError{code: "badargs", message: "invalid protocol arguments"}
 		default:
-			sendAuthError(authError{code: "badcredentials", message: "invalid username/password"})
+			ae = authError{code: "badcredentials", message: "invalid username/password"}
 		}
+
+		if !settings.initialAuthDone {
+			// Still inside StartSocket's connect loop - let it prompt for a
+			// token or report the error and exit.
+			sendAuthError(ae)
+			return
+		}
+
+		// Auth was rejected on a reconnect (e.g. a one-time 2FA token was
+		// already consumed, or credentials were revoked). Retrying with the
+		// same credentials would just loop forever, so fail loudly instead.
+		fmt.Fprintf(os.Stderr, "\nLost authentication with MeshCentral server: %s\n", ae.message)
+		os.Exit(1)
 	} else {
 		if settings.debug {
 			fmt.Println("Server disconnected:", command["msg"])
@@ -212,6 +282,7 @@ func handleAuthCookieCommand(command map[string]interface{}) {
 				settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"authcookie"}`))
 			}
 		})
+		settings.initialAuthDone = true
 		close(settings.WebChannel)
 	} else {
 		// Stop old timer before creating new one
