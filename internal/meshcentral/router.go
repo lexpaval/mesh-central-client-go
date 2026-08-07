@@ -45,18 +45,10 @@ func StartRouter(ready chan struct{}) {
 	}
 }
 
-// dialRelay dials the meshrelay tunnel with a few retries on transient
+// dialWithRetry dials a websocket URL with a few retries on transient
 // failures (e.g. brief network blip). It does not retry mid-session drops.
-func dialRelay() (*websocket.Conn, error) {
-	options, err := url.Parse(fmt.Sprintf("%s?auth=%s&nodeid=%s&tcpport=%d",
-		settings.ServerURL, settings.ACookie, settings.RemoteNodeID, settings.RemotePort))
-	if err != nil {
-		return nil, err
-	}
-	if settings.RemoteTarget != "" {
-		options.RawQuery += fmt.Sprintf("&tcpaddr=%s", settings.RemoteTarget)
-	}
-
+// Retry progress (when debug logging is enabled) is written to out.
+func dialWithRetry(urlStr string, out io.Writer) (*websocket.Conn, error) {
 	dialer := websocket.Dialer{
 		HandshakeTimeout: 10 * time.Second,
 		TLSClientConfig:  &tls.Config{InsecureSkipVerify: settings.Insecure},
@@ -71,10 +63,10 @@ func dialRelay() (*websocket.Conn, error) {
 				backoff *= 2
 			}
 			if settings.debug {
-				fmt.Printf("Retrying tunnel dial (attempt %d)...\n", attempt+1)
+				fmt.Fprintf(out, "Retrying tunnel dial (attempt %d)...\n", attempt+1)
 			}
 		}
-		conn, _, err := dialer.Dial(options.String(), http.Header{})
+		conn, _, err := dialer.Dial(urlStr, http.Header{})
 		if err == nil {
 			return conn, nil
 		}
@@ -92,7 +84,17 @@ func onTcpClientConnected(conn net.Conn) {
 	conn.(*net.TCPConn).SetKeepAlive(true)
 	conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
 
-	wsConn, err := dialRelay()
+	options, err := url.Parse(fmt.Sprintf("%s?auth=%s&nodeid=%s&tcpport=%d",
+		settings.ServerURL, settings.ACookie, settings.RemoteNodeID, settings.RemotePort))
+	if err != nil {
+		fmt.Printf("Unable to build tunnel URL: %v\n", err)
+		return
+	}
+	if settings.RemoteTarget != "" {
+		options.RawQuery += fmt.Sprintf("&tcpaddr=%s", settings.RemoteTarget)
+	}
+
+	wsConn, err := dialWithRetry(options.String(), os.Stdout)
 	if err != nil {
 		fmt.Printf("Unable to connect to server: %v\n", err)
 		return
@@ -189,33 +191,6 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 	<-done
 }
 
-func dialProxyRelay(target string) (*websocket.Conn, error) {
-	dialer := websocket.Dialer{
-		HandshakeTimeout: 10 * time.Second,
-		TLSClientConfig:  &tls.Config{InsecureSkipVerify: settings.Insecure},
-	}
-
-	var lastErr error
-	backoff := 500 * time.Millisecond
-	for attempt := range 4 {
-		if attempt > 0 {
-			time.Sleep(backoff)
-			if backoff < 4*time.Second {
-				backoff *= 2
-			}
-			if settings.debug {
-				fmt.Fprintf(os.Stderr, "Retrying tunnel dial (attempt %d)...\n", attempt+1)
-			}
-		}
-		conn, _, err := dialer.Dial(target, http.Header{})
-		if err == nil {
-			return conn, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
 // StartProxyRouter runs the SSH ProxyCommand tunnel: stdin/stdout of this
 // process ARE the raw SSH byte stream, so unlike the control socket and
 // shell session, a lost tunnel here can never be transparently reconnected
@@ -244,7 +219,7 @@ func StartProxyRouter(ready chan struct{}) {
 		fmt.Fprintf(os.Stderr, "Proxy connecting to: %s\n", options.String())
 	}
 
-	wsConn, err := dialProxyRelay(options.String())
+	wsConn, err := dialWithRetry(options.String(), os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to server: %v\n", err)
 		close(ready)
