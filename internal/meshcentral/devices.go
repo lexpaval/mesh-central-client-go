@@ -2,10 +2,16 @@ package meshcentral
 
 import (
 	"fmt"
+	"os"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
+
+// deviceQueryTimeout bounds how long GetDevices waits for the server's
+// "nodes" response, so a request that never answers (dropped connection,
+// permission error) doesn't hang the CLI forever.
+const deviceQueryTimeout = 15 * time.Second
 
 func handleNodesCommand(command map[string]interface{}) {
 	if settings.debug {
@@ -54,14 +60,21 @@ func handleNodesCommand(command map[string]interface{}) {
 
 	settings.Devices = devices
 	settings.DeviceQueryState = 0
+	if settings.deviceChan != nil {
+		close(settings.deviceChan)
+		settings.deviceChan = nil
+	}
 }
 
 func GetDevices() []Device {
 	settings.DeviceQueryState = 1
+	settings.deviceChan = make(chan struct{})
 	settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes"}`))
 
-	for settings.DeviceQueryState == 1 {
-		time.Sleep(250 * time.Millisecond)
+	select {
+	case <-settings.deviceChan:
+	case <-time.After(deviceQueryTimeout):
+		fmt.Fprintln(os.Stderr, "Timed out waiting for device list from server.")
 	}
 
 	return settings.Devices

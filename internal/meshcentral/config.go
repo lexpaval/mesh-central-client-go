@@ -42,6 +42,7 @@ type Settings struct {
 	ServerHttpsHash       string
 	Devices               []Device
 	DeviceQueryState      int
+	deviceChan            chan struct{}
 	Insecure              bool
 	debug                 bool
 	closing               bool
