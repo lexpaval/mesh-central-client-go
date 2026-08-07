@@ -73,6 +73,22 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 }
 
+// resolveNodeID connects to the server and, if nodeID is empty, prompts the
+// user to pick a device interactively. Returns the resolved nodeID.
+func resolveNodeID(nodeID string, remotePort, localPort int, target string, insecure, debug bool) string {
+	meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
+	meshcentral.StartSocket()
+
+	if nodeID == "" {
+		devices := meshcentral.GetDevices()
+		filterAndSortDevices(&devices)
+		nodeID = searchDevices(&devices)
+		meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
+	}
+
+	return nodeID
+}
+
 func filterAndSortDevices(d *[]meshcentral.Device) {
 	// filter devices (remove offline devices)
 	devices := (*d)[:0]

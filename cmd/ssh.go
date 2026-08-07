@@ -39,31 +39,7 @@ var sshCmd = &cobra.Command{
 		// generate random local port num
 		localport := 0
 
-		meshcentral.ApplySettings(
-			nodeID,
-			remoteport,
-			localport,
-			target,
-			insecure,
-			debug,
-		)
-
-		meshcentral.StartSocket()
-
-		if nodeID == "" {
-			devices := meshcentral.GetDevices()
-			filterAndSortDevices(&devices)
-			nodeID = searchDevices(&devices)
-
-			meshcentral.ApplySettings(
-				nodeID,
-				remoteport,
-				localport,
-				target,
-				insecure,
-				debug,
-			)
-		}
+		nodeID = resolveNodeID(nodeID, remoteport, localport, target, insecure, debug)
 
 		ready := make(chan struct{})
 

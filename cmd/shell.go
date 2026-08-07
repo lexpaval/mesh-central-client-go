@@ -16,33 +16,7 @@ var shellCmd = &cobra.Command{
 		powershell, _ := cmd.Flags().GetBool("powershell")
 		insecure, _ := cmd.Flags().GetBool("insecure")
 
-		meshcentral.ApplySettings(
-			nodeID,
-			0,
-			0,
-			"",
-			insecure,
-			debug,
-		)
-
-		meshcentral.StartSocket()
-
-		if nodeID == "" {
-			devices := meshcentral.GetDevices()
-			filterAndSortDevices(&devices)
-			nodeID = searchDevices(&devices)
-
-			meshcentral.ApplySettings(
-				nodeID,
-				0,
-				0,
-				"",
-				insecure,
-				debug,
-			)
-		}
-
-		//ready := make(chan struct{})
+		nodeID = resolveNodeID(nodeID, 0, 0, "", insecure, debug)
 
 		// open shell
 		protocol := 1

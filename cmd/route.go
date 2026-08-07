@@ -29,31 +29,7 @@ var routeCmd = &cobra.Command{
 			return
 		}
 
-		meshcentral.ApplySettings(
-			nodeID,
-			remoteport,
-			localport,
-			target,
-			insecure,
-			debug,
-		)
-
-		meshcentral.StartSocket()
-
-		if nodeID == "" {
-			devices := meshcentral.GetDevices()
-			filterAndSortDevices(&devices)
-			nodeID = searchDevices(&devices)
-
-			meshcentral.ApplySettings(
-				nodeID,
-				remoteport,
-				localport,
-				target,
-				insecure,
-				debug,
-			)
-		}
+		nodeID = resolveNodeID(nodeID, remoteport, localport, target, insecure, debug)
 
 		ready := make(chan struct{})
 		meshcentral.StartRouter(ready)
