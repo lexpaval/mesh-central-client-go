@@ -356,9 +356,10 @@ func connect(insecure bool) {
 			devs = meshcentral.GetDevices()
 		}
 		fyne.Do(func() {
+			// Disabled only while connecting, once connected the profile bar is hidden.
 			connectBtn.Enable()
+			profileSel.Enable()
 			if err != nil {
-				profileSel.Enable()
 				statusLabel.SetText("Disconnected")
 				dialog.ShowError(err, win)
 				return
