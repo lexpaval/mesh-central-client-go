@@ -113,7 +113,7 @@ func (appTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultT
 func main() {
 	a := app.NewWithID("com.github.lexpaval.mcc-gui")
 	a.Settings().SetTheme(appTheme{})
-	win = a.NewWindow("MeshCentral Router")
+	win = a.NewWindow("MeshCentral Client")
 	viper.SetConfigFile(config.DefaultConfigPath)
 
 	meshcentral.TokenPrompt = promptToken
