@@ -21,7 +21,7 @@ var runCmd = &cobra.Command{
 		insecure, _ := cmd.Flags().GetBool("insecure")
 		asUser, _ := cmd.Flags().GetBool("as-user")
 
-		nodeID = resolveNodeID(nodeID, 0, 0, "", insecure, debug)
+		nodeID = resolveNodeID(nodeID, insecure, debug)
 
 		runAsUser := 0
 		if asUser {

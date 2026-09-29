@@ -16,14 +16,14 @@ var shellCmd = &cobra.Command{
 		powershell, _ := cmd.Flags().GetBool("powershell")
 		insecure, _ := cmd.Flags().GetBool("insecure")
 
-		nodeID = resolveNodeID(nodeID, 0, 0, "", insecure, debug)
+		nodeID = resolveNodeID(nodeID, insecure, debug)
 
 		// open shell
 		protocol := 1
 		if powershell {
 			protocol = 6
 		}
-		meshcentral.StartShell(protocol)
+		meshcentral.StartShell(nodeID, protocol)
 
 		meshcentral.StopSocket()
 

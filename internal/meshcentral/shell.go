@@ -28,15 +28,17 @@ func randomHex() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func dialShellTunnel() (*websocket.Conn, error) {
+func dialShellTunnel(nodeID string) (*websocket.Conn, error) {
 	id, _ := randomHex()
 
-	settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(fmt.Sprintf(
+	if err := send([]byte(fmt.Sprintf(
 		`{"action":"msg","nodeid":"%s","type":"tunnel","usage":1,"value":"*/meshrelay.ashx?p=1&nodeid=%s&id=%s&rauth=%s","responseid":"meshctrl"}`,
-		settings.RemoteNodeID, settings.RemoteNodeID, id, settings.RCookie)))
+		nodeID, nodeID, id, settings.RCookie))); err != nil {
+		return nil, err
+	}
 
 	wsUrl, err := url.Parse(fmt.Sprintf("%s?browser=1&p=1&nodeid=%s&id=%s&auth=%s",
-		settings.ServerURL, settings.RemoteNodeID, id, settings.ACookie))
+		settings.ServerURL, nodeID, id, settings.ACookie))
 	if err != nil {
 		return nil, err
 	}
@@ -142,8 +144,7 @@ readLoop:
 // produces a clear final message instead of retrying silently forever.
 const maxShellReconnectAttempts = 8
 
-func StartShell(protocol int) {
-	<-settings.WebChannel
+func StartShell(nodeID string, protocol int) {
 
 	oldState, err := term.MakeRaw(int(os.Stdin.Fd()))
 	if err != nil {
@@ -154,7 +155,7 @@ func StartShell(protocol int) {
 
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
-		wsConn, err := dialShellTunnel()
+		wsConn, err := dialShellTunnel(nodeID)
 		if err != nil {
 			fmt.Printf("Unable to connect to server: %v\n", err)
 			return

@@ -36,25 +36,22 @@ var sshCmd = &cobra.Command{
 		proxyMode, _ := cmd.Flags().GetBool("proxy")
 		insecure, _ := cmd.Flags().GetBool("insecure")
 
-		// generate random local port num
-		localport := 0
-
-		nodeID = resolveNodeID(nodeID, remoteport, localport, target, insecure, debug)
-
-		ready := make(chan struct{})
+		route := meshcentral.Route{
+			NodeID:     resolveNodeID(nodeID, insecure, debug),
+			Target:     target,
+			RemotePort: remoteport,
+		}
 
 		if proxyMode {
 			// Proxy mode: pipe stdin/stdout directly through WebSocket
-			go meshcentral.StartProxyRouter(ready)
-			<-ready
-			select {} // Keep running until connection dies
+			meshcentral.StartProxyRouter(&route)
 		} else {
-			// Interactive mode: start proxy and launch SSH client
-			go meshcentral.StartRouter(ready)
-			<-ready
-
-			// start ssh client
-			sshPort := meshcentral.GetLocalPort()
+			// Interactive mode: start proxy on a random local port and launch SSH client
+			if err := route.Start(); err != nil {
+				fmt.Println(err)
+				os.Exit(1)
+			}
+			sshPort := route.LocalPort
 			fmt.Printf("SSH into %s:%d via 127.0.0.1:%d\n", target, remoteport, sshPort)
 			sshCmd := exec.Command("ssh", "-o", "ServerAliveInterval=60",
 				"-o", "ServerAliveCountMax=3",

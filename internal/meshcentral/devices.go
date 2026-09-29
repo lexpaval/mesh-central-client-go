@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"os"
 	"time"
-
-	"github.com/gorilla/websocket"
 )
 
 // deviceQueryTimeout bounds how long GetDevices waits for the server's
@@ -70,7 +68,10 @@ func handleNodesCommand(command map[string]interface{}) {
 func GetDevices() []Device {
 	settings.DeviceQueryState = 1
 	settings.deviceChan = make(chan struct{})
-	settings.WebSocket.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes"}`))
+	if err := send([]byte(`{"action":"nodes"}`)); err != nil {
+		fmt.Fprintln(os.Stderr, "Unable to request device list:", err)
+		return nil
+	}
 
 	select {
 	case <-settings.deviceChan:
@@ -96,5 +97,5 @@ func RunCommand(nodeID, command string, runAsUser int) error {
 	if err != nil {
 		return err
 	}
-	return settings.WebSocket.WriteMessage(websocket.TextMessage, payload)
+	return send(payload)
 }

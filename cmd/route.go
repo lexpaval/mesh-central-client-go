@@ -1,7 +1,9 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
+	"os"
 	"strconv"
 	"strings"
 
@@ -27,12 +29,20 @@ var routeCmd = &cobra.Command{
 			fmt.Println("Error parsing bind address:", err)
 			return
 		}
-		meshcentral.SetLocalBindAddress(bindaddr)
-
-		nodeID = resolveNodeID(nodeID, remoteport, localport, target, insecure, debug)
-
-		ready := make(chan struct{})
-		meshcentral.StartRouter(ready)
+		route := meshcentral.Route{
+			NodeID:      resolveNodeID(nodeID, insecure, debug),
+			BindAddress: bindaddr,
+			LocalPort:   localport,
+			Target:      target,
+			RemotePort:  remoteport,
+		}
+		if err := route.Start(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		fmt.Printf("Redirecting %s:%d to remote port %d.\n", cmp.Or(bindaddr, "127.0.0.1"), route.LocalPort, remoteport)
+		fmt.Println("Press ctrl-c to exit.")
+		select {}
 	},
 }
 
