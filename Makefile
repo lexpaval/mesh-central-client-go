@@ -1,4 +1,4 @@
-.PHONY: build build-all gui-linux gui-windows gui-all clean version
+.PHONY: build build-all gui-linux gui-windows gui-all gui-shots clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -38,6 +38,11 @@ gui-windows:
 	$(GUI_RUN) $(call GUI_WINDOWS_CC,arm64,aarch64) $(GUI_IMAGE) go build -o dist/mcc-gui-windows-arm64-$(VERSION).exe ./gui
 
 gui-all: gui-linux gui-windows
+
+# Renders the main window (dark/light) and all icons with sample data to dist/shots
+gui-shots:
+	mkdir -p dist/shots
+	$(GUI_RUN) -e SHOT_DIR=/src/dist/shots $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_IMAGE) go test -run TestScreenshot -count=1 ./gui
 
 build-all:
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64-$(VERSION) .

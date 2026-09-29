@@ -3,8 +3,10 @@
 package main
 
 import (
+	"embed"
 	"errors"
 	"fmt"
+	"image/color"
 	"net/url"
 	"os"
 	"os/exec"
@@ -16,6 +18,7 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/app"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
 	"fyne.io/fyne/v2/theme"
@@ -45,6 +48,8 @@ var (
 	logScroll   *container.Scroll
 	statusLabel *widget.Label
 	profileSel  *widget.Select
+	profileBar  []fyne.CanvasObject // hidden while connected, the status shows the server
+	topBar      *fyne.Container
 	connectBtn  *widget.Button
 	searchEntry *widget.Entry
 	offlineChk  *widget.Check
@@ -53,10 +58,54 @@ var (
 	deviceBtns  []*widget.Button
 )
 
-var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "VNC (5900)"}
+var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
+
+// Font Awesome Free icons (CC BY 4.0, attribution in each file), themed so
+// they follow the text color in both variants. Arcs in circle-stop,
+// magnifying-glass, opensuse, server and ubuntu were converted to cubic
+// curves, Fyne's rasterizer fills the wrong side of exact half-circle arcs.
+//
+//go:embed icons/*.svg
+var iconFiles embed.FS
+
+var icons = map[string]fyne.Resource{}
+
+func init() {
+	entries, _ := iconFiles.ReadDir("icons")
+	for _, e := range entries {
+		b, _ := iconFiles.ReadFile("icons/" + e.Name())
+		icons[strings.TrimSuffix(e.Name(), ".svg")] = theme.NewThemedResource(fyne.NewStaticResource(e.Name(), b))
+	}
+}
+
+// appTheme lifts the default colors that are too faint to read: dark
+// disabled text is #39393a on #171718 and light disabled is #e3e3e3 on white.
+type appTheme struct{}
+
+func (appTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	dark := v == theme.VariantDark
+	switch {
+	case n == theme.ColorNameDisabled && dark:
+		return color.NRGBA{0x74, 0x74, 0x7a, 0xff}
+	case n == theme.ColorNameDisabled:
+		return color.NRGBA{0x9a, 0x9a, 0x9a, 0xff}
+	case n == theme.ColorNameSeparator && dark:
+		return color.NRGBA{0x2e, 0x2e, 0x33, 0xff}
+	case n == theme.ColorNameForeground && !dark:
+		return color.NRGBA{0x1f, 0x1f, 0x1f, 0xff}
+	case n == theme.ColorNamePlaceHolder && !dark:
+		return color.NRGBA{0x6b, 0x6b, 0x6b, 0xff}
+	}
+	return theme.DefaultTheme().Color(n, v)
+}
+
+func (appTheme) Font(s fyne.TextStyle) fyne.Resource     { return theme.DefaultTheme().Font(s) }
+func (appTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
+func (appTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultTheme().Size(n) }
 
 func main() {
 	a := app.NewWithID("com.github.lexpaval.mcc-gui")
+	a.Settings().SetTheme(appTheme{})
 	win = a.NewWindow("MeshCentral Router")
 	viper.SetConfigFile(config.DefaultConfigPath)
 
@@ -68,11 +117,44 @@ func main() {
 		})
 	}
 
+	win.SetContent(buildUI())
+	win.Resize(fyne.NewSize(1100, 700))
+
+	// Active-connection counts change without any UI event.
+	go func() {
+		for range time.Tick(time.Second) {
+			fyne.Do(func() {
+				if len(routes) > 0 {
+					routeList.Refresh()
+				}
+			})
+		}
+	}()
+
+	if _, err := os.Stat(config.DefaultConfigPath); errors.Is(err, os.ErrNotExist) {
+		showProfileDialog(true)
+	} else if err := config.LoadConfig(); err != nil {
+		dialog.ShowError(fmt.Errorf("unable to read %s: %w", config.DefaultConfigPath, err), win)
+	} else {
+		refreshProfiles()
+	}
+
+	win.SetOnClosed(func() {
+		if connected {
+			disconnect()
+		}
+	})
+	win.ShowAndRun()
+}
+
+// buildUI creates the widgets into the package state, split from main so the
+// screenshot test can render it without a real driver.
+func buildUI() fyne.CanvasObject {
 	statusLabel = widget.NewLabel("Disconnected")
 	statusLabel.Alignment = fyne.TextAlignTrailing
 	profileSel = widget.NewSelect(nil, nil)
 	insecureChk := widget.NewCheck("Skip TLS verify", nil)
-	connectBtn = widget.NewButtonWithIcon("Connect", theme.LoginIcon(), func() {
+	connectBtn = widget.NewButtonWithIcon("Connect", icons["right-to-bracket"], func() {
 		if connected {
 			disconnect()
 		} else {
@@ -80,8 +162,8 @@ func main() {
 		}
 	})
 	connectBtn.Importance = widget.HighImportance
-	addProfileBtn := widget.NewButtonWithIcon("", theme.ContentAddIcon(), func() { showProfileDialog(false) })
-	rmProfileBtn := widget.NewButtonWithIcon("", theme.DeleteIcon(), func() {
+	addProfileBtn := widget.NewButtonWithIcon("", icons["plus"], func() { showProfileDialog(false) })
+	rmProfileBtn := widget.NewButtonWithIcon("", icons["trash-can"], func() {
 		name := profileSel.Selected
 		if name == "" || connected {
 			return
@@ -93,40 +175,39 @@ func main() {
 			}
 		}, win)
 	})
-	top := container.NewBorder(nil, nil,
-		container.NewHBox(widget.NewLabel("Profile"), profileSel, addProfileBtn, rmProfileBtn, insecureChk, connectBtn),
-		nil, statusLabel)
+	profileBar = []fyne.CanvasObject{widget.NewLabel("Profile"), profileSel, addProfileBtn, rmProfileBtn, insecureChk}
+	topBar = container.NewHBox(append(profileBar, connectBtn)...)
+	top := container.NewBorder(nil, nil, topBar, nil, statusLabel)
 
 	searchEntry = widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search name, hostname, IP or OS")
+	searchEntry.ActionItem = widget.NewIcon(icons["magnifying-glass"])
 	searchEntry.OnChanged = func(string) { applyFilter() }
 	offlineChk = widget.NewCheck("Show offline", func(bool) { applyFilter() })
 	deviceList = widget.NewList(
 		func() int { return len(shown) },
-		func() fyne.CanvasObject {
-			title := widget.NewLabel("")
-			title.TextStyle.Bold = true
-			return container.NewVBox(title, widget.NewLabel(""))
-		},
+		twoLineRow,
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			d := shown[id]
-			rows := o.(*fyne.Container).Objects
-			title, sub := rows[0].(*widget.Label), rows[1].(*widget.Label)
-			title.SetText(deviceName(d))
-			sub.SetText(strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · "))
-			title.Importance, sub.Importance = widget.MediumImportance, widget.LowImportance
+			img, text, title, sub := rowParts(o)
+			title.Text = deviceName(d)
+			sub.Text = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
+			img.Resource = osIcon(d.OS)
+			title.Style.ColorName = theme.ColorNameForeground
 			if d.Pwr == 0 {
-				title.Importance = widget.LowImportance
+				title.Style.ColorName = theme.ColorNamePlaceHolder
+				img.Resource = theme.NewDisabledResource(img.Resource)
+				sub.Text = "offline · " + sub.Text
 			}
-			title.Refresh()
-			sub.Refresh()
+			img.Refresh()
+			text.Refresh()
 		})
 	deviceList.OnSelected = func(id widget.ListItemID) { selected = id }
 	deviceList.OnUnselected = func(widget.ListItemID) { selected = -1 }
 	deviceBtns = []*widget.Button{
-		widget.NewButtonWithIcon("Add route", theme.ContentAddIcon(), showAddRoute),
-		widget.NewButtonWithIcon("Run command", theme.MediaPlayIcon(), showRunCommand),
-		widget.NewButtonWithIcon("Refresh", theme.ViewRefreshIcon(), refreshDevices),
+		widget.NewButtonWithIcon("Add route", icons["plus"], showAddRoute),
+		widget.NewButtonWithIcon("Run command", icons["play"], showRunCommand),
+		widget.NewButtonWithIcon("Refresh", icons["rotate"], refreshDevices),
 	}
 	left := container.NewBorder(
 		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2]),
@@ -137,10 +218,10 @@ func main() {
 		func() fyne.CanvasObject {
 			return container.NewBorder(nil, nil, nil,
 				container.NewHBox(
-					widget.NewButtonWithIcon("Open", theme.ComputerIcon(), nil),
-					widget.NewButtonWithIcon("Copy", theme.ContentCopyIcon(), nil),
-					widget.NewButtonWithIcon("Stop", theme.CancelIcon(), nil)),
-				widget.NewLabel(""))
+					widget.NewButtonWithIcon("Open", icons["arrow-up-right-from-square"], nil),
+					widget.NewButtonWithIcon("Copy", icons["copy"], nil),
+					widget.NewButtonWithIcon("Stop", icons["circle-stop"], nil)),
+				twoLineRow())
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			ar := routes[id]
@@ -152,8 +233,27 @@ func main() {
 			if target == "" {
 				target = "device"
 			}
-			objs[0].(*widget.Label).SetText(fmt.Sprintf("%s → %s:%d\n%s · %d active",
-				ar.device, target, r.RemotePort, localAddr(r), r.Active()))
+			svc, res := fmt.Sprintf("Port %d", r.RemotePort), icons["network-wired"]
+			switch r.RemotePort {
+			case 22:
+				svc, res = "SSH", icons["terminal"]
+			case 3389:
+				svc, res = "RDP", icons["desktop"]
+			case 80, 8080:
+				svc, res = "HTTP", icons["globe"]
+			case 443, 8443:
+				svc, res = "HTTPS", icons["globe"]
+			case 9090:
+				svc, res = "Cockpit", icons["globe"]
+			case 5900:
+				svc, res = "VNC", icons["display"]
+			}
+			img, text, title, sub := rowParts(objs[0])
+			img.Resource = res
+			title.Text = ar.device + " · " + svc
+			sub.Text = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
+			img.Refresh()
+			text.Refresh()
 			if openCmd(r) == nil {
 				open.Hide()
 			} else {
@@ -188,35 +288,8 @@ func main() {
 	hsplit.Offset = 0.45
 	vsplit := container.NewVSplit(hsplit, logScroll)
 	vsplit.Offset = 0.78
-	win.SetContent(container.NewBorder(top, nil, nil, nil, vsplit))
-	win.Resize(fyne.NewSize(1100, 700))
 	setConnected(false)
-
-	// Active-connection counts change without any UI event.
-	go func() {
-		for range time.Tick(time.Second) {
-			fyne.Do(func() {
-				if len(routes) > 0 {
-					routeList.Refresh()
-				}
-			})
-		}
-	}()
-
-	if _, err := os.Stat(config.DefaultConfigPath); errors.Is(err, os.ErrNotExist) {
-		showProfileDialog(true)
-	} else if err := config.LoadConfig(); err != nil {
-		dialog.ShowError(fmt.Errorf("unable to read %s: %w", config.DefaultConfigPath, err), win)
-	} else {
-		refreshProfiles()
-	}
-
-	win.SetOnClosed(func() {
-		if connected {
-			disconnect()
-		}
-	})
-	win.ShowAndRun()
+	return container.NewBorder(top, nil, nil, nil, vsplit)
 }
 
 func connect(insecure bool) {
@@ -246,7 +319,8 @@ func connect(insecure bool) {
 				return
 			}
 			setConnected(true)
-			statusLabel.SetText("Connected to " + config.GetDefaultProfile().Server)
+			p := config.GetDefaultProfile()
+			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
 			logf("Connected with profile %s, %d devices", name, len(devs))
 			devices = devs
 			applyFilter()
@@ -272,13 +346,19 @@ func setConnected(c bool) {
 	connected = c
 	if c {
 		connectBtn.SetText("Disconnect")
-		connectBtn.SetIcon(theme.LogoutIcon())
-		profileSel.Disable()
+		connectBtn.SetIcon(icons["right-from-bracket"])
 	} else {
 		connectBtn.SetText("Connect")
-		connectBtn.SetIcon(theme.LoginIcon())
-		profileSel.Enable()
+		connectBtn.SetIcon(icons["right-to-bracket"])
 	}
+	for _, o := range profileBar {
+		if c {
+			o.Hide()
+		} else {
+			o.Show()
+		}
+	}
+	topBar.Refresh()
 	for _, b := range deviceBtns {
 		if c {
 			b.Enable()
@@ -331,6 +411,64 @@ func applyFilter() {
 	selected = -1
 	deviceList.UnselectAll()
 	deviceList.Refresh()
+}
+
+// compactTheme tightens RichText padding inside list rows, which otherwise
+// pads each row as much as a standalone paragraph. Everything else comes from
+// the active theme.
+type compactTheme struct{}
+
+func (compactTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+	return fyne.CurrentApp().Settings().Theme().Color(n, v)
+}
+func (compactTheme) Font(s fyne.TextStyle) fyne.Resource {
+	return fyne.CurrentApp().Settings().Theme().Font(s)
+}
+func (compactTheme) Icon(n fyne.ThemeIconName) fyne.Resource {
+	return fyne.CurrentApp().Settings().Theme().Icon(n)
+}
+func (compactTheme) Size(n fyne.ThemeSizeName) float32 {
+	switch n {
+	case theme.SizeNameInnerPadding:
+		return 3
+	case theme.SizeNameLineSpacing:
+		return 1
+	}
+	return fyne.CurrentApp().Settings().Theme().Size(n)
+}
+
+// twoLineRow is the list item template shared by devices and routes: an
+// icon beside a bold title and a smaller muted line, both ellipsized.
+func twoLineRow() fyne.CanvasObject {
+	img := canvas.NewImageFromResource(nil)
+	img.FillMode = canvas.ImageFillContain
+	img.SetMinSize(fyne.NewSquareSize(20))
+	text := widget.NewRichText(
+		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}},
+		&widget.TextSegment{Style: widget.RichTextStyle{SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
+	text.Truncation = fyne.TextTruncateEllipsis
+	return container.NewBorder(nil, nil, container.NewPadded(img), nil, container.NewThemeOverride(text, compactTheme{}))
+}
+
+func rowParts(o fyne.CanvasObject) (img *canvas.Image, text *widget.RichText, title, sub *widget.TextSegment) {
+	objs := o.(*fyne.Container).Objects
+	text = objs[0].(*container.ThemeOverride).Content.(*widget.RichText)
+	img = objs[1].(*fyne.Container).Objects[0].(*canvas.Image)
+	return img, text, text.Segments[0].(*widget.TextSegment), text.Segments[1].(*widget.TextSegment)
+}
+
+func osIcon(desc string) fyne.Resource {
+	s := strings.ToLower(desc)
+	for _, m := range [][2]string{
+		{"windows", "windows"}, {"raspbian", "raspberry-pi"}, {"raspberry", "raspberry-pi"},
+		{"ubuntu", "ubuntu"}, {"fedora", "fedora"}, {"debian", "debian"}, {"suse", "opensuse"}, {"red hat", "redhat"},
+		{"rhel", "redhat"}, {"macos", "apple"}, {"mac os", "apple"}, {"darwin", "apple"}, {"linux", "linux"},
+	} {
+		if strings.Contains(s, m[0]) {
+			return icons[m[1]]
+		}
+	}
+	return icons["server"]
 }
 
 func deviceName(d meshcentral.Device) string {
@@ -566,7 +704,7 @@ func copyText(r *meshcentral.Route) string {
 		return fmt.Sprintf("ssh -p %s %s", port, host)
 	case 80, 8080:
 		return "http://" + addr
-	case 443, 8443:
+	case 443, 8443, 9090: // Cockpit serves TLS on 9090
 		return "https://" + addr
 	}
 	return addr
@@ -576,7 +714,7 @@ func copyText(r *meshcentral.Route) string {
 // has no known client on this platform.
 func openCmd(r *meshcentral.Route) func() error {
 	switch r.RemotePort {
-	case 80, 8080, 443, 8443:
+	case 80, 8080, 443, 8443, 9090:
 		return func() error {
 			u, err := url.Parse(copyText(r))
 			if err != nil {

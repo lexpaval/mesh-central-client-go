@@ -38,7 +38,9 @@ make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe
 make gui-all      # both
 ```
 
-The Linux binaries support both X11 and Wayland (picked at runtime) and need glibc 2.36+ (Debian 12, Ubuntu 22.10, Fedora 37 or newer). macOS has to be built on a Mac.
+The Linux binaries support both X11 and Wayland (picked at runtime) and need glibc 2.36+ (Debian 12, Ubuntu 22.10, Fedora 37 or newer). macOS has to be built on a Mac. `make gui-shots` renders the window in dark and light mode with sample data to `dist/shots`.
+
+GUI icons are from [Font Awesome Free](https://fontawesome.com) by Fonticons, Inc., licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
 The CLI build doesn't link Fyne and stays cgo-free.
 
