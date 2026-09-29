@@ -63,6 +63,12 @@ func TestScreenshot(t *testing.T) {
 		logf("Site A - Office PC: Tunnel to remote port 3389 failed: device accepted the tunnel but closed it without sending data")
 
 		savePNG(t, filepath.Join(dir, name+".png"), win)
+		if name == "dark" {
+			session.profile = "default"
+			deviceTree.Select("7")
+			showSSHConfig()
+			savePNG(t, filepath.Join(dir, "ssh-config.png"), win)
+		}
 	}
 
 	// Every embedded icon at a large size, to catch SVGs the rasterizer mangles.

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"os"
 	"os/exec"
+	osuser "os/user"
 	"runtime"
 	"slices"
 	"strconv"
@@ -39,8 +40,13 @@ type activeRoute struct {
 // UI state, only touched from the Fyne goroutine (background work hands
 // results back through fyne.Do).
 var (
-	win        fyne.Window
-	connected  bool
+	win       fyne.Window
+	connected bool
+	// What connect used, for the SSH config snippet.
+	session struct {
+		profile  string
+		insecure bool
+	}
 	devices    []meshcentral.Device // everything the server returned
 	selectedID string               // selected device, "" if none
 	// Tree view of the devices passing the search/offline filter, by group.
@@ -248,13 +254,20 @@ func buildUI() fyne.CanvasObject {
 	deviceBtns = []*widget.Button{
 		widget.NewButtonWithIcon("Add route", icons["plus"], showAddRoute),
 		widget.NewButtonWithIcon("Run command", icons["play"], showRunCommand),
-		widget.NewButtonWithIcon("Copy ID", icons["copy"], func() {
-			if d, ok := selectedDevice(); ok {
-				fyne.CurrentApp().Clipboard().SetContent(d.Id)
-				logf("Copied node ID of %s", deviceName(d))
-			}
-		}),
+		widget.NewButtonWithIcon("Copy", icons["copy"], nil),
 		widget.NewButtonWithIcon("Refresh", icons["rotate"], refreshDevices),
+	}
+	copyBtn := deviceBtns[2]
+	copyBtn.OnTapped = func() {
+		menu := fyne.NewMenu("",
+			fyne.NewMenuItem("Node ID", func() {
+				if d, ok := selectedDevice(); ok {
+					fyne.CurrentApp().Clipboard().SetContent(d.Id)
+					logf("Copied node ID of %s", deviceName(d))
+				}
+			}),
+			fyne.NewMenuItem("SSH config…", showSSHConfig))
+		widget.ShowPopUpMenuAtRelativePosition(menu, win.Canvas(), fyne.NewPos(0, copyBtn.Size().Height), copyBtn)
 	}
 	left := container.NewBorder(
 		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2], deviceBtns[3]),
@@ -374,6 +387,7 @@ func connect(insecure bool) {
 			p := config.GetDefaultProfile()
 			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
 			logf("Connected with profile %s, %d devices", name, len(devs))
+			session.profile, session.insecure = name, insecure
 			devices = devs
 			applyFilter()
 			deviceTree.OpenAllBranches()
@@ -691,6 +705,78 @@ func showRunCommand() {
 		}
 		logf("%s: sent %q (no output is returned)", deviceName(d), cmd.Text)
 	}, win)
+}
+
+// showSSHConfig builds a ~/.ssh/config Host block that tunnels through
+// "mcc ssh --proxy", the setup VSCode Remote-SSH and plain ssh use.
+func showSSHConfig() {
+	d, ok := selectedDevice()
+	if !ok {
+		return
+	}
+	host := widget.NewEntry()
+	host.SetText(strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(cmp.Or(d.Name, deviceName(d)))))
+	// Same default as ssh itself: the local user. Windows reports DOMAIN\user.
+	user := widget.NewEntry()
+	user.SetText("root")
+	if u, err := osuser.Current(); err == nil {
+		user.SetText(u.Username[strings.LastIndex(u.Username, `\`)+1:])
+	}
+	port := widget.NewEntry()
+	port.SetText("22")
+	port.Validator = portValidator(false)
+	mcc := widget.NewEntry()
+	mcc.SetText("mcc")
+	if p, err := exec.LookPath("mcc"); err == nil {
+		mcc.SetText(p)
+	}
+	preview := widget.NewLabel("")
+	preview.TextStyle.Monospace = true
+	preview.Selectable = true
+
+	snippet := func() string {
+		bin := mcc.Text
+		if strings.ContainsAny(bin, " \t") {
+			bin = `"` + bin + `"`
+		}
+		// Single quotes keep $ in node IDs away from sh -c, mcc strips them
+		// for launchers that pass them through (VSCodium). The profile is only
+		// quoted when it has to be, mcc doesn't strip those.
+		profile := session.profile
+		if strings.Trim(profile, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-") != "" {
+			profile = "'" + profile + "'"
+		}
+		cmd := fmt.Sprintf("%s ssh -i '%s' -P %s", bin, d.Id, profile)
+		if port.Text != "22" {
+			cmd += " -p " + port.Text
+		}
+		if session.insecure {
+			cmd += " -k"
+		}
+		return fmt.Sprintf("Host %s\n  User %s\n  ProxyCommand %s --proxy\n", host.Text, user.Text, cmd)
+	}
+	update := func(string) { preview.SetText(snippet()) }
+	host.OnChanged, user.OnChanged, port.OnChanged, mcc.OnChanged = update, update, update, update
+	update("")
+
+	form := widget.NewForm(
+		widget.NewFormItem("Host alias", host),
+		widget.NewFormItem("User", user),
+		widget.NewFormItem("SSH port", port),
+		widget.NewFormItem("mcc path", mcc))
+	d2 := dialog.NewCustomConfirm("SSH config for "+deviceName(d), "Copy", "Cancel", container.NewVBox(form, preview), func(ok bool) {
+		if ok {
+			fyne.CurrentApp().Clipboard().SetContent(snippet())
+			logf("Copied SSH config for %s, paste it into ~/.ssh/config", deviceName(d))
+		}
+	}, win)
+	d2.Resize(fyne.NewSize(640, 0))
+	d2.Show()
 }
 
 // showProfileDialog adds a profile. The first run goes through CreateConfig,
