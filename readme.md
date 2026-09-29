@@ -97,7 +97,7 @@ Note: IPv6 addresses aren't supported in the bind address.
 - `--debug` - Enable debug logging
 
 ### Command-Specific
-- `-i, --nodeid` - Target device ID (omit for interactive search)
+- `-i, --nodeid` - Target device ID, with or without the `node//` prefix (omit for interactive search)
 - `-L, --bind-address` - Port forward specification (route)
 - `-p, --port` - SSH remote port, default 22 (ssh)
 - `--proxy` - SSH proxy mode for ProxyCommand (ssh)
@@ -132,6 +132,7 @@ Enter 2FA token: 123456
 > **Note:** Node IDs containing special characters (e.g. `$`) must be wrapped in single quotes to prevent shell expansion:
 > ```bash
 > mcc ssh -i 'node//abc$def...'
+> mcc ssh -i 'abc$def...'   # node// prefix is optional
 > ```
 
 ## Security

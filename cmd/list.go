@@ -75,9 +75,13 @@ func init() {
 }
 
 // resolveNodeID connects to the server and, if nodeID is empty, prompts the
-// user to pick a device interactively. A given nodeID is checked against the
-// server's device list. Returns the resolved nodeID.
+// user to pick a device interactively. A given nodeID gets its "node//"
+// prefix added if missing and is checked against the server's device list.
+// Returns the resolved nodeID.
 func resolveNodeID(nodeID string, remotePort, localPort int, target string, insecure, debug bool) string {
+	if nodeID != "" {
+		nodeID = normalizeNodeID(nodeID)
+	}
 	meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
 	meshcentral.StartSocket()
 
@@ -91,6 +95,15 @@ func resolveNodeID(nodeID string, remotePort, localPort int, target string, inse
 	}
 
 	return nodeID
+}
+
+// normalizeNodeID accepts a bare ID as shown in the web UI (e.g. in gotonode=)
+// and adds the default-domain "node//" prefix the server expects.
+func normalizeNodeID(id string) string {
+	if strings.HasPrefix(id, "node/") {
+		return id
+	}
+	return "node//" + id
 }
 
 // checkNodeID exits if nodeID isn't among the devices the account can see,
