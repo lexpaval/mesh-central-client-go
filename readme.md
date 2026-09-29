@@ -12,6 +12,7 @@ Simple client for [MeshCentral](https://github.com/Ylianst/MeshCentral) using th
 * Multi-profile management
 * Secure password storage (OS keyring)
 * Cross-platform (Windows, Linux, macOS)
+* Optional desktop GUI (`mcc-gui`) with multiple simultaneous routes
 
 ## Installation
 ```bash
@@ -24,6 +25,22 @@ make build-all
 # Or build directly
 go build -o mcc
 ```
+
+### GUI
+
+`mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own.
+
+The GUI needs cgo, so it builds in the [fyne-cross](https://github.com/fyne-io/fyne-cross) image with podman and zig as the C compiler, no host packages needed:
+
+```bash
+make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>
+make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe
+make gui-all      # both
+```
+
+The Linux binaries support both X11 and Wayland (picked at runtime) and need glibc 2.36+ (Debian 12, Ubuntu 22.10, Fedora 37 or newer). macOS has to be built on a Mac.
+
+The CLI build doesn't link Fyne and stays cgo-free.
 
 ## Usage
 ```bash
