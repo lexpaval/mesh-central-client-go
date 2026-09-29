@@ -28,6 +28,20 @@ func (p *Profile) DeletePassword() error {
 	return keyring.Delete(keyringService, p.Name)
 }
 
+// The 2FA cookie is MeshCentral's "remember this device" cookie, kept in the
+// keyring next to the password so later logins skip the token prompt.
+func (p *Profile) GetTwoFactorCookie() (string, error) {
+	return keyring.Get(keyringService, p.Name+"/2fa")
+}
+
+func (p *Profile) SetTwoFactorCookie(cookie string) error {
+	return keyring.Set(keyringService, p.Name+"/2fa", cookie)
+}
+
+func (p *Profile) DeleteTwoFactorCookie() error {
+	return keyring.Delete(keyringService, p.Name+"/2fa")
+}
+
 func GetProfiles() []Profile {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
@@ -118,8 +132,9 @@ func RemoveProfile(name string) {
 
 	for i, p := range profiles {
 		if p.Name == name {
-			// Delete password from keyring
+			// Delete password and 2FA cookie from keyring
 			p.DeletePassword()
+			p.DeleteTwoFactorCookie()
 			profiles = append(profiles[:i], profiles[i+1:]...)
 			break
 		}

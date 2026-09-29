@@ -39,6 +39,17 @@ const maxControlReconnectAttempts = 8
 
 func StartSocket() error {
 	p := config.GetDefaultProfile()
+	settings.profileName = p.Name
+
+	// A remembered 2FA cookie stands in for the token until the server
+	// rejects it (expired, revoked), then it's dropped and the user prompted.
+	usingCookie := false
+	if settings.Token == "" && !settings.EmailToken && !settings.SMSToken {
+		if c, err := p.GetTwoFactorCookie(); err == nil && c != "" {
+			ApplyAuth("cookie="+c, false, false)
+			usingCookie = true
+		}
+	}
 
 	settings.Username = p.Username
 	settings.Password = p.Password
@@ -114,12 +125,30 @@ func StartSocket() error {
 
 		select {
 		case <-settings.WebChannel:
+			// A token typed this session is single use, trade it for a 2FA
+			// cookie so reconnects and later logins don't prompt again.
+			// Waits for the reply so short CLI commands don't close the socket
+			// before it's stored. Servers with remembering disabled never reply.
+			if settings.EmailToken || settings.SMSToken || (settings.Token != "" && !strings.HasPrefix(settings.Token, "cookie=")) {
+				settings.cookieChan = make(chan struct{})
+				if send([]byte(`{"action":"twoFactorCookie"}`)) == nil {
+					select {
+					case <-settings.cookieChan:
+					case <-time.After(5 * time.Second):
+					}
+				}
+			}
 			return nil
 		case err := <-settings.AuthErrChannel:
 			StopSocket()
 			ae, ok := err.(authError)
 			if !ok || ae.code != "tokenrequired" {
 				return err
+			}
+			if usingCookie {
+				p.DeleteTwoFactorCookie()
+				ApplyAuth("", false, false)
+				usingCookie = false
 			}
 			token, ok := TokenPrompt(ae.email2fa, ae.sms2fa, ae.emailSent)
 			if !ok {
@@ -241,6 +270,18 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			handleAuthCookieCommand(command)
 		case "serverAuth":
 			handleServerAuthCommand(command)
+		case "twoFactorCookie":
+			if c, _ := command["cookie"].(string); c != "" {
+				ApplyAuth("cookie="+c, false, false)
+				p := config.Profile{Name: settings.profileName}
+				if err := p.SetTwoFactorCookie(c); err != nil && settings.debug {
+					fmt.Println("Unable to store 2FA cookie:", err)
+				}
+			}
+			if settings.cookieChan != nil {
+				close(settings.cookieChan)
+				settings.cookieChan = nil
+			}
 		case "meshes":
 			handleMeshesCommand(command)
 		case "nodes":

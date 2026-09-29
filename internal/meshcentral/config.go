@@ -49,6 +49,8 @@ type Settings struct {
 	groups                map[string]string // mesh ID -> device group name
 	groupChan             chan struct{}
 	Insecure              bool
+	profileName           string // profile StartSocket logged in with, for the 2FA cookie
+	cookieChan            chan struct{}
 	debug                 bool
 	closing               bool
 	initialAuthDone       bool
