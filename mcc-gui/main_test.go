@@ -48,3 +48,41 @@ func TestDeviceRowTaps(t *testing.T) {
 		t.Fatal("slow second tap opened a shell")
 	}
 }
+
+func TestNodeEventsNeedConnection(t *testing.T) {
+	test.NewTempApp(t)
+	win = test.NewTempWindow(t, buildUI())
+	devices = []meshcentral.Device{{Id: "a", MeshID: "m", Group: "G", Name: "a", Pwr: 1}}
+	logLines = nil
+
+	// Events the server pushes while connect is still loading are ignored.
+	onNodeEvent("nodeconnect", "a", 0, 0)
+	onNodeEvent("changenode", "a", 0, 0)
+	if devices[0].Pwr != 1 || len(logLines) != 0 || reloadTimer != nil {
+		t.Fatalf("event applied while disconnected: pwr=%d log=%v reload=%v", devices[0].Pwr, logLines, reloadTimer != nil)
+	}
+
+	// Connected but the first list is still loading, which reflects them.
+	setConnected(true)
+	session.loading = true
+	onNodeEvent("nodeconnect", "a", 0, 0)
+	if devices[0].Pwr != 1 {
+		t.Fatal("event applied while the device list was loading")
+	}
+
+	session.loading = false
+	onNodeEvent("nodeconnect", "a", 0, 0)
+	if devices[0].Pwr != 0 {
+		t.Fatal("event not applied once loaded")
+	}
+
+	// A reload scheduled before a disconnect doesn't fire after it.
+	onNodeEvent("changenode", "a", 0, 0)
+	if reloadTimer == nil {
+		t.Fatal("change event scheduled no reload")
+	}
+	disconnect()
+	if reloadTimer != nil {
+		t.Fatal("disconnect left the reload scheduled")
+	}
+}

@@ -46,10 +46,14 @@ type activeRoute struct {
 var (
 	win       fyne.Window
 	connected bool
-	// What connect used, for the SSH config snippet.
+	// What connect used, for the SSH config snippet. id changes on every
+	// connect and disconnect, so late results from an older session are
+	// dropped. loading is set until the first device list arrives.
 	session struct {
 		profile  string
 		insecure bool
+		id       int
+		loading  bool
 	}
 	devices    []meshcentral.Device // everything the server returned
 	selectedID string               // selected device, "" if none
@@ -72,7 +76,7 @@ var (
 	deviceTree    *widget.Tree
 	routeList     *widget.List
 	deviceBtns    []*widget.Button
-	reloading     bool // a debounced device list reload is scheduled
+	reloadTimer   *time.Timer // pending debounced device list reload
 	// Right panel tabs: Routes first (not closable), then one per shell.
 	tabBar     *fyne.Container   // tab heads
 	tabContent *fyne.Container   // tab panes, only the selected one visible
@@ -440,11 +444,8 @@ func connect(insecure bool) {
 		meshcentral.ApplySettings(insecure, false)
 		meshcentral.ApplyAuth("", false, false)
 		err := meshcentral.StartSocket()
-		var devs []meshcentral.Device
-		if err == nil {
-			devs = meshcentral.GetDevices()
-		}
-		fyne.Do(func() {
+		var id int
+		fyne.DoAndWait(func() {
 			// Disabled only while connecting, once connected the profile bar is hidden.
 			connectBtn.Enable()
 			profileSel.Enable()
@@ -454,18 +455,40 @@ func connect(insecure bool) {
 				return
 			}
 			setConnected(true)
+			session.id++
+			id = session.id
+			session.profile, session.insecure, session.loading = name, insecure, true
 			p := config.GetDefaultProfile()
 			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
-			logf("Connected with profile %s, %d devices", name, len(devs))
-			session.profile, session.insecure = name, insecure
+			logf("Connected to %s as %s (profile %s), loading devices", p.Server, p.Username, name)
+		})
+		if err != nil {
+			return
+		}
+
+		// Large servers take a while to send the list, the session is already
+		// up (and reported) meanwhile.
+		devs := meshcentral.GetDevices()
+		fyne.Do(func() {
+			if id != session.id { // disconnected while loading
+				return
+			}
+			session.loading = false
 			devices = devs
 			applyFilter()
 			deviceTree.OpenAllBranches()
+			logf("Loaded %d devices", len(devs))
 		})
 	}()
 }
 
 func disconnect() {
+	session.id++
+	session.loading = false
+	if reloadTimer != nil {
+		reloadTimer.Stop()
+		reloadTimer = nil
+	}
 	for _, ar := range routes {
 		ar.route.Close()
 	}
@@ -509,9 +532,16 @@ func setConnected(c bool) {
 }
 
 func refreshDevices() {
+	if session.loading { // the first list is on its way
+		return
+	}
+	id := session.id
 	go func() {
 		devs := meshcentral.GetDevices()
 		fyne.Do(func() {
+			if !connected || id != session.id {
+				return
+			}
 			devices = devs
 			applyFilter()
 		})
@@ -537,14 +567,23 @@ func refreshProfiles() {
 // UI goroutine.
 func onNodeEvent(action, nodeID string, conn, pwr int) {
 	fyne.Do(func() {
+		// Events arriving while the first list loads are already reflected in
+		// it, and a reload then would overlap the load, GetDevices takes one
+		// request at a time.
+		if !connected || session.loading {
+			return
+		}
 		if action != "nodeconnect" {
 			// Adds, removes and renames arrive in bursts (e.g. agents updating
 			// their info), reload once they settle.
-			if !reloading {
-				reloading = true
-				time.AfterFunc(2*time.Second, func() {
-					fyne.Do(func() { reloading = false })
-					refreshDevices()
+			if reloadTimer == nil {
+				reloadTimer = time.AfterFunc(2*time.Second, func() {
+					fyne.Do(func() {
+						reloadTimer = nil
+						if connected {
+							refreshDevices()
+						}
+					})
 				})
 			}
 			return
