@@ -241,6 +241,8 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			handleAuthCookieCommand(command)
 		case "serverAuth":
 			handleServerAuthCommand(command)
+		case "meshes":
+			handleMeshesCommand(command)
 		case "nodes":
 			handleNodesCommand(command)
 		case "event":

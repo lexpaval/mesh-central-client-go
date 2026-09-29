@@ -3,10 +3,12 @@
 package main
 
 import (
+	"cmp"
 	"embed"
 	"errors"
 	"fmt"
 	"image/color"
+	"maps"
 	"net/url"
 	"os"
 	"os/exec"
@@ -37,26 +39,30 @@ type activeRoute struct {
 // UI state, only touched from the Fyne goroutine (background work hands
 // results back through fyne.Do).
 var (
-	win         fyne.Window
-	connected   bool
-	devices     []meshcentral.Device // everything the server returned
-	shown       []meshcentral.Device // devices after search/offline filter
-	selected    = -1
-	routes      []*activeRoute
-	logLines    []string
-	logLabel    *widget.Label
-	logScroll   *container.Scroll
-	statusLabel *widget.Label
-	profileSel  *widget.Select
-	profileBar  []fyne.CanvasObject // hidden while connected, the status shows the server
-	topBar      *fyne.Container
-	connectBtn  *widget.Button
-	searchEntry *widget.Entry
-	offlineChk  *widget.Check
-	deviceList  *widget.List
-	routeList   *widget.List
-	deviceBtns  []*widget.Button
-	reloading   bool // a debounced device list reload is scheduled
+	win        fyne.Window
+	connected  bool
+	devices    []meshcentral.Device // everything the server returned
+	selectedID string               // selected device, "" if none
+	// Tree view of the devices passing the search/offline filter, by group.
+	groupOrder    []string            // mesh IDs sorted by group name
+	groupChildren map[string][]string // mesh ID -> device IDs sorted by name
+	groupLabels   map[string][2]string
+	shownByID     map[string]meshcentral.Device
+	routes        []*activeRoute
+	logLines      []string
+	logLabel      *widget.Label
+	logScroll     *container.Scroll
+	statusLabel   *widget.Label
+	profileSel    *widget.Select
+	profileBar    []fyne.CanvasObject // hidden while connected, the status shows the server
+	topBar        *fyne.Container
+	connectBtn    *widget.Button
+	searchEntry   *widget.Entry
+	offlineChk    *widget.Check
+	deviceTree    *widget.Tree
+	routeList     *widget.List
+	deviceBtns    []*widget.Button
+	reloading     bool // a debounced device list reload is scheduled
 )
 
 var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
@@ -186,11 +192,36 @@ func buildUI() fyne.CanvasObject {
 	searchEntry.ActionItem = widget.NewIcon(icons["magnifying-glass"])
 	searchEntry.OnChanged = func(string) { applyFilter() }
 	offlineChk = widget.NewCheck("Show offline", func(bool) { applyFilter() })
-	deviceList = widget.NewList(
-		func() int { return len(shown) },
-		twoLineRow,
-		func(id widget.ListItemID, o fyne.CanvasObject) {
-			d := shown[id]
+	deviceTree = widget.NewTree(
+		func(id widget.TreeNodeID) []widget.TreeNodeID {
+			if id == "" {
+				return groupOrder
+			}
+			return groupChildren[id]
+		},
+		func(id widget.TreeNodeID) bool {
+			_, ok := groupChildren[id]
+			return id == "" || ok
+		},
+		func(branch bool) fyne.CanvasObject {
+			if branch {
+				text := widget.NewRichText(
+					&widget.TextSegment{Style: widget.RichTextStyle{Inline: true, TextStyle: fyne.TextStyle{Bold: true}}},
+					&widget.TextSegment{Style: widget.RichTextStyle{Inline: true, SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
+				text.Truncation = fyne.TextTruncateEllipsis
+				return container.NewThemeOverride(text, compactTheme)
+			}
+			return twoLineRow()
+		},
+		func(id widget.TreeNodeID, branch bool, o fyne.CanvasObject) {
+			if branch {
+				text := o.(*container.ThemeOverride).Content.(*widget.RichText)
+				text.Segments[0].(*widget.TextSegment).Text = groupLabels[id][0]
+				text.Segments[1].(*widget.TextSegment).Text = "  " + groupLabels[id][1]
+				text.Refresh()
+				return
+			}
+			d := shownByID[id]
 			img, text, title, sub := rowParts(o)
 			title.Text = deviceName(d)
 			sub.Text = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
@@ -204,8 +235,16 @@ func buildUI() fyne.CanvasObject {
 			img.Refresh()
 			text.Refresh()
 		})
-	deviceList.OnSelected = func(id widget.ListItemID) { selected = id }
-	deviceList.OnUnselected = func(widget.ListItemID) { selected = -1 }
+	deviceTree.OnSelected = func(id widget.TreeNodeID) {
+		if _, ok := groupChildren[id]; ok {
+			// A group row isn't a device, clicking it folds the group instead.
+			deviceTree.Unselect(id)
+			deviceTree.ToggleBranch(id)
+			return
+		}
+		selectedID = id
+	}
+	deviceTree.OnUnselected = func(widget.TreeNodeID) { selectedID = "" }
 	deviceBtns = []*widget.Button{
 		widget.NewButtonWithIcon("Add route", icons["plus"], showAddRoute),
 		widget.NewButtonWithIcon("Run command", icons["play"], showRunCommand),
@@ -213,7 +252,7 @@ func buildUI() fyne.CanvasObject {
 	}
 	left := container.NewBorder(
 		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2]),
-		nil, nil, deviceList)
+		nil, nil, container.NewThemeOverride(deviceTree, treeTheme))
 
 	routeList = widget.NewList(
 		func() int { return len(routes) },
@@ -330,6 +369,7 @@ func connect(insecure bool) {
 			logf("Connected with profile %s, %d devices", name, len(devs))
 			devices = devs
 			applyFilter()
+			deviceTree.OpenAllBranches()
 		})
 	}()
 }
@@ -432,55 +472,77 @@ func onNodeEvent(action, nodeID string, conn, pwr int) {
 	})
 }
 
-// applyFilter rebuilds the visible device list, keeping the selected device
-// selected if it's still shown.
+// applyFilter rebuilds the device tree from devices, keeping the selected
+// device selected if it's still shown. Groups with no matching device are
+// left out, the rest keep their open/closed state.
 func applyFilter() {
-	selID := ""
-	if selected >= 0 && selected < len(shown) {
-		selID = shown[selected].Id
-	}
 	q := strings.ToLower(searchEntry.Text)
-	shown = shown[:0]
-	for _, d := range devices {
+	sorted := slices.Clone(devices)
+	slices.SortFunc(sorted, func(a, b meshcentral.Device) int {
+		return strings.Compare(strings.ToLower(deviceName(a)), strings.ToLower(deviceName(b)))
+	})
+	groupChildren, shownByID = map[string][]string{}, map[string]meshcentral.Device{}
+	online, total := map[string]int{}, map[string]int{}
+	names := map[string]string{}
+	for _, d := range sorted {
+		names[d.MeshID] = cmp.Or(d.Group, "Unnamed group")
+		total[d.MeshID]++
+		if d.Pwr != 0 {
+			online[d.MeshID]++
+		}
 		if d.Pwr == 0 && !offlineChk.Checked {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(d.DisplayName+" "+d.Name+" "+d.IP+" "+d.OS), q) {
+		if q != "" && !strings.Contains(strings.ToLower(d.DisplayName+" "+d.Name+" "+d.IP+" "+d.OS+" "+d.Group), q) {
 			continue
 		}
-		shown = append(shown, d)
+		groupChildren[d.MeshID] = append(groupChildren[d.MeshID], d.Id)
+		shownByID[d.Id] = d
 	}
-	slices.SortFunc(shown, func(a, b meshcentral.Device) int {
-		return strings.Compare(strings.ToLower(deviceName(a)), strings.ToLower(deviceName(b)))
+	groupOrder = slices.Collect(maps.Keys(groupChildren))
+	slices.SortFunc(groupOrder, func(a, b string) int {
+		return strings.Compare(strings.ToLower(names[a]), strings.ToLower(names[b]))
 	})
-	selected = -1
-	deviceList.UnselectAll()
-	if i := slices.IndexFunc(shown, func(d meshcentral.Device) bool { return d.Id == selID }); selID != "" && i >= 0 {
-		deviceList.Select(i)
+	groupLabels = map[string][2]string{}
+	for _, id := range groupOrder {
+		groupLabels[id] = [2]string{names[id], fmt.Sprintf("%d of %d online", online[id], total[id])}
 	}
-	deviceList.Refresh()
+
+	sel := selectedID
+	deviceTree.UnselectAll()
+	if _, ok := shownByID[sel]; ok {
+		deviceTree.Select(sel)
+	}
+	if q != "" {
+		deviceTree.OpenAllBranches()
+	}
+	deviceTree.Refresh()
 }
+
+// sizeTheme overrides some sizes for a subtree (container.NewThemeOverride),
+// everything else comes from the active theme.
+type sizeTheme map[fyne.ThemeSizeName]float32
 
 // compactTheme tightens RichText padding inside list rows, which otherwise
-// pads each row as much as a standalone paragraph. Everything else comes from
-// the active theme.
-type compactTheme struct{}
+// pads each row as much as a standalone paragraph.
+var compactTheme = sizeTheme{theme.SizeNameInnerPadding: 3, theme.SizeNameLineSpacing: 1}
 
-func (compactTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
+// treeTheme shrinks the device tree's indent, which Fyne derives from the
+// inline icon size and padding, and the expand arrow with it.
+var treeTheme = sizeTheme{theme.SizeNameInlineIcon: 14, theme.SizeNamePadding: 2}
+
+func (sizeTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 	return fyne.CurrentApp().Settings().Theme().Color(n, v)
 }
-func (compactTheme) Font(s fyne.TextStyle) fyne.Resource {
+func (sizeTheme) Font(s fyne.TextStyle) fyne.Resource {
 	return fyne.CurrentApp().Settings().Theme().Font(s)
 }
-func (compactTheme) Icon(n fyne.ThemeIconName) fyne.Resource {
+func (sizeTheme) Icon(n fyne.ThemeIconName) fyne.Resource {
 	return fyne.CurrentApp().Settings().Theme().Icon(n)
 }
-func (compactTheme) Size(n fyne.ThemeSizeName) float32 {
-	switch n {
-	case theme.SizeNameInnerPadding:
-		return 3
-	case theme.SizeNameLineSpacing:
-		return 1
+func (t sizeTheme) Size(n fyne.ThemeSizeName) float32 {
+	if v, ok := t[n]; ok {
+		return v
 	}
 	return fyne.CurrentApp().Settings().Theme().Size(n)
 }
@@ -495,7 +557,7 @@ func twoLineRow() fyne.CanvasObject {
 		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}},
 		&widget.TextSegment{Style: widget.RichTextStyle{SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
 	text.Truncation = fyne.TextTruncateEllipsis
-	return container.NewBorder(nil, nil, container.NewPadded(img), nil, container.NewThemeOverride(text, compactTheme{}))
+	return container.NewBorder(nil, nil, container.NewPadded(img), nil, container.NewThemeOverride(text, compactTheme))
 }
 
 func rowParts(o fyne.CanvasObject) (img *canvas.Image, text *widget.RichText, title, sub *widget.TextSegment) {
@@ -527,11 +589,11 @@ func deviceName(d meshcentral.Device) string {
 }
 
 func selectedDevice() (meshcentral.Device, bool) {
-	if selected < 0 || selected >= len(shown) {
+	d, ok := shownByID[selectedID]
+	if !ok {
 		dialog.ShowInformation("No device", "Select a device first.", win)
-		return meshcentral.Device{}, false
 	}
-	return shown[selected], true
+	return d, ok
 }
 
 func showAddRoute() {

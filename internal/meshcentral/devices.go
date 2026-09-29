@@ -18,7 +18,7 @@ func handleNodesCommand(command map[string]interface{}) {
 	}
 	var devices []Device
 	nodeGroups := command["nodes"].(map[string]interface{})
-	for _, nodeGroup := range nodeGroups {
+	for meshID, nodeGroup := range nodeGroups {
 		nodes := nodeGroup.([]interface{})
 		for _, node := range nodes {
 			nodeMap := node.(map[string]interface{})
@@ -52,6 +52,8 @@ func handleNodesCommand(command map[string]interface{}) {
 				Icon:        int(nodeMap["icon"].(float64)),
 				Conn:        int(nodeMap["conn"].(float64)),
 				Pwr:         int(nodeMap["pwr"].(float64)),
+				MeshID:      meshID,
+				Group:       settings.groups[meshID],
 			}
 			devices = append(devices, device)
 		}
@@ -65,6 +67,22 @@ func handleNodesCommand(command map[string]interface{}) {
 	}
 }
 
+func handleMeshesCommand(command map[string]interface{}) {
+	groups := map[string]string{}
+	meshes, _ := command["meshes"].([]interface{})
+	for _, m := range meshes {
+		mesh, _ := m.(map[string]interface{})
+		id, _ := mesh["_id"].(string)
+		name, _ := mesh["name"].(string)
+		groups[id] = name
+	}
+	settings.groups = groups
+	if settings.groupChan != nil {
+		close(settings.groupChan)
+		settings.groupChan = nil
+	}
+}
+
 // handleEventCommand forwards device events, which the server sends to every
 // session that can see the device, to OnNodeEvent.
 func handleEventCommand(command map[string]interface{}) {
@@ -74,7 +92,7 @@ func handleEventCommand(command map[string]interface{}) {
 	}
 	action, _ := ev["action"].(string)
 	switch action {
-	case "nodeconnect", "addnode", "removenode", "changenode":
+	case "nodeconnect", "addnode", "removenode", "changenode", "createmesh", "deletemesh", "meshchange":
 		nodeID, _ := ev["nodeid"].(string)
 		conn, _ := ev["conn"].(float64)
 		pwr, _ := ev["pwr"].(float64)
@@ -83,6 +101,17 @@ func handleEventCommand(command map[string]interface{}) {
 }
 
 func GetDevices() []Device {
+	// Group names come from "meshes", fetched first so nodes can be labelled.
+	// A failure only leaves devices without group names.
+	settings.groupChan = make(chan struct{})
+	if err := send([]byte(`{"action":"meshes"}`)); err == nil {
+		select {
+		case <-settings.groupChan:
+		case <-time.After(deviceQueryTimeout):
+			fmt.Fprintln(os.Stderr, "Timed out waiting for device groups from server.")
+		}
+	}
+
 	settings.DeviceQueryState = 1
 	settings.deviceChan = make(chan struct{})
 	if err := send([]byte(`{"action":"nodes"}`)); err != nil {

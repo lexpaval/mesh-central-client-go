@@ -38,17 +38,18 @@ func TestScreenshot(t *testing.T) {
 		profileSel.SetSelected("default")
 		// Fictional names, IPs from the RFC 5737 documentation ranges.
 		devices = []meshcentral.Device{
-			{Id: "1", DisplayName: "Lab - Bench 1", Name: "lab-bench-1", IP: "192.0.2.10", OS: "Fedora Linux 44 (Server Edition)", Pwr: 1},
-			{Id: "2", DisplayName: "Site A - Office PC", Name: "DESKTOP-EXAMPLE1", IP: "198.51.100.20", OS: "Microsoft Windows 10 Pro - 22H2/19045", Pwr: 1},
-			{Id: "3", DisplayName: "Site B - Workstation 3", Name: "WS003", IP: "198.51.100.33", OS: "Microsoft Windows 11 Pro - 24H2/26100", Pwr: 1},
-			{Id: "4", DisplayName: "Site C - Gateway", Name: "gateway-n100-1", IP: "203.0.113.40", OS: "Fedora Linux 43 (Server Edition)", Pwr: 1},
-			{Id: "5", Name: "raspberrypi", IP: "192.0.2.12", OS: "Raspbian GNU/Linux 12 (bookworm)", Pwr: 1},
-			{Id: "7", DisplayName: "Build Server", Name: "build-01", IP: "203.0.113.70", OS: "openSUSE Tumbleweed", Pwr: 1},
-			{Id: "6", DisplayName: "Office Mac", Name: "office-mac", IP: "192.0.2.20", OS: "macOS 15.3", Pwr: 0},
+			{Id: "1", MeshID: "mesh//lab", Group: "Lab", DisplayName: "Lab - Bench 1", Name: "lab-bench-1", IP: "192.0.2.10", OS: "Fedora Linux 44 (Server Edition)", Pwr: 1},
+			{Id: "2", MeshID: "mesh//custa", Group: "Customer A", DisplayName: "Site A - Office PC", Name: "DESKTOP-EXAMPLE1", IP: "198.51.100.20", OS: "Microsoft Windows 10 Pro - 22H2/19045", Pwr: 1},
+			{Id: "3", MeshID: "mesh//custa", Group: "Customer A", DisplayName: "Site B - Workstation 3", Name: "WS003", IP: "198.51.100.33", OS: "Microsoft Windows 11 Pro - 24H2/26100", Pwr: 1},
+			{Id: "4", MeshID: "mesh//gw", Group: "Gateways", DisplayName: "Site C - Gateway", Name: "gateway-n100-1", IP: "203.0.113.40", OS: "Fedora Linux 43 (Server Edition)", Pwr: 1},
+			{Id: "5", MeshID: "mesh//lab", Group: "Lab", Name: "raspberrypi", IP: "192.0.2.12", OS: "Raspbian GNU/Linux 12 (bookworm)", Pwr: 1},
+			{Id: "7", MeshID: "mesh//lab", Group: "Lab", DisplayName: "Build Server", Name: "build-01", IP: "203.0.113.70", OS: "openSUSE Tumbleweed", Pwr: 1},
+			{Id: "6", MeshID: "mesh//office", Group: "Office", DisplayName: "Office Mac", Name: "office-mac", IP: "192.0.2.20", OS: "macOS 15.3", Pwr: 0},
 		}
 		offlineChk.SetChecked(true)
 		applyFilter()
-		deviceList.Select(1)
+		deviceTree.OpenAllBranches()
+		deviceTree.Select("1")
 		routes = []*activeRoute{
 			{device: "Lab - Bench 1", route: &meshcentral.Route{NodeID: "1", LocalPort: 40123, RemotePort: 22}},
 			{device: "Site A - Office PC", route: &meshcentral.Route{NodeID: "2", LocalPort: 40124, RemotePort: 3389}},

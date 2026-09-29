@@ -19,6 +19,8 @@ type Device struct {
 	Icon        int
 	Conn        int
 	Pwr         int
+	MeshID      string // device group
+	Group       string // device group name
 }
 
 type Settings struct {
@@ -44,6 +46,8 @@ type Settings struct {
 	Devices               []Device
 	DeviceQueryState      int
 	deviceChan            chan struct{}
+	groups                map[string]string // mesh ID -> device group name
+	groupChan             chan struct{}
 	Insecure              bool
 	debug                 bool
 	closing               bool
@@ -76,8 +80,9 @@ var OnConnectionLost = func(err error) {
 }
 
 // OnNodeEvent is called on the control socket reader for device events the
-// server pushes: "nodeconnect" carries the new conn/pwr state, "addnode",
-// "removenode" and "changenode" mean the device list is stale. Nil in the CLI.
+// server pushes: "nodeconnect" carries the new conn/pwr state, the others
+// (devices or groups added, removed, changed) mean the device list is stale.
+// Nil in the CLI.
 var OnNodeEvent func(action, nodeID string, conn, pwr int)
 
 // send writes a text message on the control socket, serialized against the
