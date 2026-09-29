@@ -105,7 +105,7 @@ func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, 
 			}
 			if msgType == websocket.BinaryMessage {
 				out.Write(msg)
-			} else if string(msg) == "c" {
+			} else if string(msg) == "c" || string(msg) == "cr" { // "cr" when the session is recorded
 				sendOptions()
 				if err := write(websocket.TextMessage, []byte(fmt.Sprintf("%d", protocol))); err != nil {
 					sessErr = err
