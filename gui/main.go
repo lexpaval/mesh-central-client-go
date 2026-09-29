@@ -146,7 +146,7 @@ func main() {
 	}()
 
 	if _, err := os.Stat(config.DefaultConfigPath); errors.Is(err, os.ErrNotExist) {
-		showProfileDialog(true)
+		showProfileDialog(true, nil)
 	} else if err := config.LoadConfig(); err != nil {
 		dialog.ShowError(fmt.Errorf("unable to read %s: %w", config.DefaultConfigPath, err), win)
 	} else {
@@ -176,7 +176,14 @@ func buildUI() fyne.CanvasObject {
 		}
 	})
 	connectBtn.Importance = widget.HighImportance
-	addProfileBtn := widget.NewButtonWithIcon("", icons["plus"], func() { showProfileDialog(false) })
+	addProfileBtn := widget.NewButtonWithIcon("", icons["plus"], func() { showProfileDialog(false, nil) })
+	editProfileBtn := widget.NewButtonWithIcon("", icons["pen-to-square"], func() {
+		for _, p := range config.GetProfiles() {
+			if p.Name == profileSel.Selected {
+				showProfileDialog(false, &p)
+			}
+		}
+	})
 	rmProfileBtn := widget.NewButtonWithIcon("", icons["trash-can"], func() {
 		name := profileSel.Selected
 		if name == "" || connected {
@@ -189,7 +196,7 @@ func buildUI() fyne.CanvasObject {
 			}
 		}, win)
 	})
-	profileBar = []fyne.CanvasObject{widget.NewLabel("Profile"), profileSel, addProfileBtn, rmProfileBtn, insecureChk}
+	profileBar = []fyne.CanvasObject{widget.NewLabel("Profile"), profileSel, addProfileBtn, editProfileBtn, rmProfileBtn, insecureChk}
 	topBar = container.NewHBox(append(profileBar, connectBtn)...)
 	top := container.NewBorder(nil, nil, topBar, nil, statusLabel)
 
@@ -779,15 +786,16 @@ func showSSHConfig() {
 	d2.Show()
 }
 
-// showProfileDialog adds a profile. The first run goes through CreateConfig,
-// which writes the config file and always names the profile "default".
-func showProfileDialog(firstRun bool) {
+// showProfileDialog adds a profile, or edits one when edit is set. The first
+// run goes through CreateConfig, which writes the config file and always names
+// the profile "default".
+func showProfileDialog(firstRun bool, edit *config.Profile) {
 	name := widget.NewEntry()
 	name.Validator = func(s string) error {
 		if strings.TrimSpace(s) == "" {
 			return errors.New("required")
 		}
-		if slices.Contains(profileSel.Options, s) {
+		if slices.Contains(profileSel.Options, s) && (edit == nil || s != edit.Name) {
 			return errors.New("already exists")
 		}
 		return nil
@@ -815,7 +823,15 @@ func showProfileDialog(firstRun bool) {
 		items = append([]*widget.FormItem{widget.NewFormItem("Name", name)}, items...)
 		items = append(items, widget.NewFormItem("", makeDefault))
 	}
-	dialog.ShowForm(title, "Save", "Cancel", items, func(ok bool) {
+	if edit != nil {
+		title = "Edit profile"
+		name.SetText(edit.Name)
+		server.SetText(edit.Server)
+		username.SetText(edit.Username)
+		password.SetPlaceHolder("unchanged")
+		makeDefault.SetChecked(config.GetDefaultProfileName() == edit.Name)
+	}
+	d := dialog.NewForm(title, "Save", "Cancel", items, func(ok bool) {
 		if !ok {
 			return
 		}
@@ -824,6 +840,9 @@ func showProfileDialog(firstRun bool) {
 			if err = config.CreateConfig(server.Text, username.Text, password.Text); err == nil {
 				err = config.LoadConfig()
 			}
+		} else if edit != nil {
+			p := config.Profile{Name: name.Text, Server: server.Text, Username: username.Text}
+			err = config.UpdateProfile(edit.Name, p, password.Text, makeDefault.Checked)
 		} else {
 			_, err = config.AddProfile(name.Text, makeDefault.Checked, server.Text, username.Text, password.Text)
 		}
@@ -836,6 +855,8 @@ func showProfileDialog(firstRun bool) {
 			profileSel.SetSelected(name.Text)
 		}
 	}, win)
+	d.Resize(fyne.NewSize(460, 0))
+	d.Show()
 }
 
 // promptToken runs on the StartSocket goroutine and blocks it until the user

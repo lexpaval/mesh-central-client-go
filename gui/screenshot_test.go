@@ -15,6 +15,7 @@ import (
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
@@ -68,6 +69,13 @@ func TestScreenshot(t *testing.T) {
 			deviceTree.Select("7")
 			showSSHConfig()
 			savePNG(t, filepath.Join(dir, "ssh-config.png"), win)
+
+			win = test.NewTempWindow(t, buildUI())
+			win.Resize(fyne.NewSize(1100, 700))
+			profileSel.SetOptions([]string{"default", "work"})
+			profileSel.SetSelected("work")
+			showProfileDialog(false, &config.Profile{Name: "work", Server: "mesh.example.com", Username: "alice"})
+			savePNG(t, filepath.Join(dir, "profile.png"), win)
 		}
 	}
 

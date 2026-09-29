@@ -1,6 +1,8 @@
 package config
 
 import (
+	"slices"
+
 	"github.com/spf13/viper"
 	"github.com/zalando/go-keyring"
 )
@@ -124,6 +126,46 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 
 	newProfile.Password = password // Set for return value
 	return &newProfile, nil
+}
+
+// UpdateProfile replaces profile oldName with p. An empty password keeps the
+// stored one. On a rename the password and 2FA cookie move with the profile,
+// and the cookie is dropped when the server or username change, since it
+// belongs to that account. The default profile follows a rename.
+func UpdateProfile(oldName string, p Profile, password string, isDefault bool) error {
+	var profiles []Profile
+	viper.UnmarshalKey("profiles", &profiles)
+	i := slices.IndexFunc(profiles, func(x Profile) bool { return x.Name == oldName })
+	if i < 0 {
+		return &ProfileNotFoundError{oldName}
+	}
+	old := profiles[i]
+	renamed := p.Name != oldName
+
+	if password == "" && renamed {
+		password, _ = old.GetPassword()
+	}
+	if password != "" {
+		if err := p.SetPassword(password); err != nil {
+			return err
+		}
+	}
+	if p.Server != old.Server || p.Username != old.Username {
+		old.DeleteTwoFactorCookie()
+	} else if c, err := old.GetTwoFactorCookie(); renamed && err == nil {
+		p.SetTwoFactorCookie(c)
+	}
+	if renamed {
+		old.DeletePassword()
+		old.DeleteTwoFactorCookie()
+	}
+
+	if isDefault || viper.GetString("default_profile") == oldName {
+		viper.Set("default_profile", p.Name)
+	}
+	profiles[i] = Profile{Name: p.Name, Server: p.Server, Username: p.Username}
+	viper.Set("profiles", profiles)
+	return viper.WriteConfig()
 }
 
 func RemoveProfile(name string) {
