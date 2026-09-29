@@ -644,11 +644,19 @@ func (t sizeTheme) Size(n fyne.ThemeSizeName) float32 {
 }
 
 // deviceRow is a device in the tree. Fyne's tree has no double-click, so the
-// row takes taps itself: a tap selects, a double-tap opens a shell.
+// row takes taps itself: a tap selects, a second tap on the same row within
+// the double-click delay opens a shell. Not fyne.DoubleTappable: the driver
+// then holds every tap for the delay and drops both when the second lands on
+// another row, which made quick selection unresponsive.
 type deviceRow struct {
 	widget.BaseWidget
 	content fyne.CanvasObject
 	id      string
+}
+
+var lastTap struct {
+	id string
+	at time.Time
 }
 
 func newDeviceRow() *deviceRow {
@@ -658,9 +666,14 @@ func newDeviceRow() *deviceRow {
 }
 
 func (r *deviceRow) CreateRenderer() fyne.WidgetRenderer { return widget.NewSimpleRenderer(r.content) }
-func (r *deviceRow) Tapped(*fyne.PointEvent)             { deviceTree.Select(r.id) }
-func (r *deviceRow) DoubleTapped(*fyne.PointEvent) {
+func (r *deviceRow) Tapped(*fyne.PointEvent) {
 	deviceTree.Select(r.id)
+	now := time.Now()
+	if r.id != lastTap.id || now.Sub(lastTap.at) > fyne.CurrentApp().Driver().DoubleTapDelay() {
+		lastTap.id, lastTap.at = r.id, now
+		return
+	}
+	lastTap.id = "" // a third tap starts over
 	if d, ok := shownByID[r.id]; ok {
 		openShell(d, 1)
 	}

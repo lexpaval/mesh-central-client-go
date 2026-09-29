@@ -1,4 +1,4 @@
-.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-shots clean version
+.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -88,6 +88,10 @@ ifneq ($(MACOS_SDK),)
 else
 	@echo "No macOS SDK found, skipping macOS packages (see gui-macos-sdk)"
 endif
+
+# GUI tests need cgo too, so they run in the gui-linux image.
+gui-test:
+	$(GUI_RUN) $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_LINUX_IMAGE) go test -count=1 .
 
 # Renders the main window (dark/light), dialogs and icons with sample data to
 # dist/shots, in the same image gui-linux builds in.
