@@ -27,6 +27,7 @@ type Settings struct {
 	AuthCookie            string
 	ServerID              string
 	LoginKey              string
+	LocalBindAddress      string
 	LocalPort             int
 	RemotePort            int
 	RemoteTarget          string
@@ -58,6 +59,11 @@ func ApplySettings(remoteNodeId string, remotePort int, localPort int, remoteTar
 	settings.RemoteTarget = remoteTarget
 	settings.Insecure = insecure
 	settings.debug = debug
+}
+
+// SetLocalBindAddress sets the local interface the router listens on, empty means 127.0.0.1
+func SetLocalBindAddress(addr string) {
+	settings.LocalBindAddress = addr
 }
 
 func ApplyAuth(token string, emailToken bool, smsToken bool) {

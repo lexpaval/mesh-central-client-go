@@ -37,6 +37,7 @@ mcc ls
 mcc route -L 8080:127.0.0.1:80 -i <nodeid>
 mcc route -L 8080:80              # Interactive search, omit target IP
 mcc route -L 80                   # Random local port
+mcc route -L 0.0.0.0:8080:127.0.0.1:80 -i <nodeid>  # Listen on all local interfaces
 
 # SSH (interactive mode)
 mcc ssh -i <nodeid>
@@ -65,17 +66,26 @@ mcc config
 
 ### Port Forward Format
 ```
-[localport]:[target]:[remoteport]
+[bind_address:]localport:target:remoteport
+localport:remoteport
+target:remoteport
+remoteport
 ```
 
+- `bind_address` - Optional, local interface to listen on, defaults to `127.0.0.1`. Use `0.0.0.0` to accept connections from other machines. Only valid in the 4-part form
 - `localport` - Optional, random if omitted
-- `target` - Optional, defaults to 127.0.0.1
+- `target` - Optional, host reachable from the mesh node, defaults to the node itself (`127.0.0.1`)
 - `remoteport` - Required
 
 Examples:
-- `8080:192.168.1.1:80` - Local 8080 at 192.168.1.1:80
-- `8080:80` - Local 8080 at 127.0.0.1:80
-- `80` - Random local port at 127.0.0.1:80
+- `127.0.0.1:3389:127.0.0.1:3389` - Local 127.0.0.1:3389 to the node's RDP port
+- `0.0.0.0:8080:192.168.1.1:80` - Local 8080 on all interfaces to 192.168.1.1:80 via the node
+- `8080:192.168.1.1:80` - Local 127.0.0.1:8080 to 192.168.1.1:80 via the node
+- `8080:80` - Local 127.0.0.1:8080 to port 80 on the node
+- `192.168.1.1:80` - Random local port to 192.168.1.1:80 via the node
+- `80` - Random local port to port 80 on the node
+
+Note: IPv6 addresses aren't supported in the bind address.
 
 ## Flags
 

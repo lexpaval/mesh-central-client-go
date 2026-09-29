@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"time"
 
@@ -19,9 +20,13 @@ func GetLocalPort() int {
 }
 
 func StartRouter(ready chan struct{}) {
-	listener, err := net.Listen("tcp", fmt.Sprintf(":%d", settings.LocalPort))
+	bindAddress := settings.LocalBindAddress
+	if bindAddress == "" {
+		bindAddress = "127.0.0.1"
+	}
+	listener, err := net.Listen("tcp", net.JoinHostPort(bindAddress, strconv.Itoa(settings.LocalPort)))
 	if err != nil {
-		fmt.Printf("Unable to bind to local TCP port %d: %v\n", settings.LocalPort, err)
+		fmt.Printf("Unable to bind to local TCP port %s:%d: %v\n", bindAddress, settings.LocalPort, err)
 		os.Exit(1)
 		return
 	}
@@ -31,7 +36,7 @@ func StartRouter(ready chan struct{}) {
 	<-settings.WebChannel
 
 	close(ready)
-	fmt.Printf("Redirecting local port %d to remote port %d.\n", listener.Addr().(*net.TCPAddr).Port, settings.RemotePort)
+	fmt.Printf("Redirecting %s to remote port %d.\n", listener.Addr(), settings.RemotePort)
 	fmt.Println("Press ctrl-c to exit.")
 
 	for {

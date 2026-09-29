@@ -1,7 +1,6 @@
 package cmd
 
 import (
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -23,11 +22,12 @@ var routeCmd = &cobra.Command{
 		debug, _ := cmd.Flags().GetBool("debug")
 		insecure, _ := cmd.Flags().GetBool("insecure")
 
-		localport, target, remoteport, err := parseBindAddress(bindAddress)
+		bindaddr, localport, target, remoteport, err := parseBindAddress(bindAddress)
 		if err != nil {
-			fmt.Println("Error parsing bind address: ", err)
+			fmt.Println("Error parsing bind address:", err)
 			return
 		}
+		meshcentral.SetLocalBindAddress(bindaddr)
 
 		nodeID = resolveNodeID(nodeID, remoteport, localport, target, insecure, debug)
 
@@ -40,20 +40,30 @@ func init() {
 	rootCmd.AddCommand(routeCmd)
 
 	routeCmd.Flags().StringP("nodeid", "i", "", "Mesh Central Node ID")
-	routeCmd.Flags().StringP("bind-address", "L", "", "localport:[target:]remoteport")
+	routeCmd.Flags().StringP("bind-address", "L", "", "[bind_address:]localport:target:remoteport, localport:remoteport or remoteport")
 	routeCmd.Flags().BoolP("insecure", "k", false, "Skip TLS certificate verification (insecure, for testing only)")
 	routeCmd.Flags().BoolP("debug", "", false, "Enable debug logging")
 }
 
 // parseBindAddress parses a bind address string in the format:
-// "localport:target:remoteport" or "localport:remoteport" or just "remoteport"
-func parseBindAddress(s string) (localPort int, target string, remotePort int, err error) {
+// "bindaddress:localport:target:remoteport", "localport:target:remoteport",
+// "localport:remoteport", "target:remoteport" or just "remoteport"
+func parseBindAddress(s string) (bindAddress string, localPort int, target string, remotePort int, err error) {
+	errFormat := fmt.Errorf("invalid bind address %q, expected [bind_address:]localport:target:remoteport, localport:remoteport or remoteport", s)
+
 	parts := strings.Split(s, ":")
+	if len(parts) == 4 {
+		bindAddress, parts = parts[0], parts[1:]
+		if bindAddress == "" {
+			return "", 0, "", 0, errFormat
+		}
+	}
+
 	switch len(parts) {
 	case 1:
 		remotePort, err = strconv.Atoi(parts[0])
 		if err != nil {
-			return 0, "", 0, errors.New("invalid bind address format")
+			return "", 0, "", 0, errFormat
 		}
 	case 2:
 		if isDigits(parts[0]) {
@@ -63,20 +73,20 @@ func parseBindAddress(s string) (localPort int, target string, remotePort int, e
 		}
 		remotePort, err = strconv.Atoi(parts[1])
 		if err != nil {
-			return 0, "", 0, errors.New("invalid bind address format")
+			return "", 0, "", 0, errFormat
 		}
 	case 3:
 		if !isDigits(parts[0]) {
-			return 0, "", 0, errors.New("invalid bind address format")
+			return "", 0, "", 0, errFormat
 		}
 		localPort, _ = strconv.Atoi(parts[0])
 		target = parts[1]
 		remotePort, err = strconv.Atoi(parts[2])
 		if err != nil {
-			return 0, "", 0, errors.New("invalid bind address format")
+			return "", 0, "", 0, errFormat
 		}
 	default:
-		return 0, "", 0, errors.New("invalid bind address format")
+		return "", 0, "", 0, errFormat
 	}
 
 	// If target is "127.0.0.1", set to nothing
@@ -84,7 +94,7 @@ func parseBindAddress(s string) (localPort int, target string, remotePort int, e
 		target = ""
 	}
 
-	return localPort, target, remotePort, nil
+	return bindAddress, localPort, target, remotePort, nil
 }
 
 func isDigits(s string) bool {
