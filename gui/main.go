@@ -248,10 +248,16 @@ func buildUI() fyne.CanvasObject {
 	deviceBtns = []*widget.Button{
 		widget.NewButtonWithIcon("Add route", icons["plus"], showAddRoute),
 		widget.NewButtonWithIcon("Run command", icons["play"], showRunCommand),
+		widget.NewButtonWithIcon("Copy ID", icons["copy"], func() {
+			if d, ok := selectedDevice(); ok {
+				fyne.CurrentApp().Clipboard().SetContent(d.Id)
+				logf("Copied node ID of %s", deviceName(d))
+			}
+		}),
 		widget.NewButtonWithIcon("Refresh", icons["rotate"], refreshDevices),
 	}
 	left := container.NewBorder(
-		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2]),
+		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2], deviceBtns[3]),
 		nil, nil, container.NewThemeOverride(deviceTree, treeTheme))
 
 	routeList = widget.NewList(
