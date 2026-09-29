@@ -209,13 +209,13 @@ func buildUI() fyne.CanvasObject {
 					&widget.TextSegment{Style: widget.RichTextStyle{Inline: true, TextStyle: fyne.TextStyle{Bold: true}}},
 					&widget.TextSegment{Style: widget.RichTextStyle{Inline: true, SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
 				text.Truncation = fyne.TextTruncateEllipsis
-				return container.NewThemeOverride(text, compactTheme)
+				return text
 			}
 			return twoLineRow()
 		},
 		func(id widget.TreeNodeID, branch bool, o fyne.CanvasObject) {
 			if branch {
-				text := o.(*container.ThemeOverride).Content.(*widget.RichText)
+				text := o.(*widget.RichText)
 				text.Segments[0].(*widget.TextSegment).Text = groupLabels[id][0]
 				text.Segments[1].(*widget.TextSegment).Text = "  " + groupLabels[id][1]
 				text.Refresh()
@@ -322,7 +322,7 @@ func buildUI() fyne.CanvasObject {
 			}
 		})
 	right := container.NewBorder(widget.NewLabelWithStyle("Routes", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil, nil, nil, routeList)
+		nil, nil, nil, container.NewThemeOverride(routeList, compactTheme))
 
 	logLabel = widget.NewLabel("")
 	logLabel.Selectable = true
@@ -521,16 +521,18 @@ func applyFilter() {
 }
 
 // sizeTheme overrides some sizes for a subtree (container.NewThemeOverride),
-// everything else comes from the active theme.
+// everything else comes from the active theme. Apply one per list, never per
+// row: Fyne caches a full set of parsed fonts per override and never frees it.
 type sizeTheme map[fyne.ThemeSizeName]float32
 
-// compactTheme tightens RichText padding inside list rows, which otherwise
+// compactTheme tightens RichText padding in the route list, which otherwise
 // pads each row as much as a standalone paragraph.
 var compactTheme = sizeTheme{theme.SizeNameInnerPadding: 3, theme.SizeNameLineSpacing: 1}
 
-// treeTheme shrinks the device tree's indent, which Fyne derives from the
-// inline icon size and padding, and the expand arrow with it.
-var treeTheme = sizeTheme{theme.SizeNameInlineIcon: 14, theme.SizeNamePadding: 2}
+// treeTheme is compactTheme for the device tree, plus a smaller indent, which
+// Fyne derives from the inline icon size and padding (the expand arrow too).
+var treeTheme = sizeTheme{theme.SizeNameInnerPadding: 3, theme.SizeNameLineSpacing: 1,
+	theme.SizeNameInlineIcon: 14, theme.SizeNamePadding: 2}
 
 func (sizeTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 	return fyne.CurrentApp().Settings().Theme().Color(n, v)
@@ -558,12 +560,12 @@ func twoLineRow() fyne.CanvasObject {
 		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}},
 		&widget.TextSegment{Style: widget.RichTextStyle{SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
 	text.Truncation = fyne.TextTruncateEllipsis
-	return container.NewBorder(nil, nil, container.NewPadded(img), nil, container.NewThemeOverride(text, compactTheme))
+	return container.NewBorder(nil, nil, container.NewPadded(img), nil, text)
 }
 
 func rowParts(o fyne.CanvasObject) (img *canvas.Image, text *widget.RichText, title, sub *widget.TextSegment) {
 	objs := o.(*fyne.Container).Objects
-	text = objs[0].(*container.ThemeOverride).Content.(*widget.RichText)
+	text = objs[0].(*widget.RichText)
 	img = objs[1].(*fyne.Container).Objects[0].(*canvas.Image)
 	return img, text, text.Segments[0].(*widget.TextSegment), text.Segments[1].(*widget.TextSegment)
 }
