@@ -83,7 +83,7 @@ func SetDefaultProfile(name string, commit bool) error {
 	return &ProfileNotFoundError{name}
 }
 
-func AddProfile(name string, isDefault bool, server string, username string, password string) *Profile {
+func AddProfile(name string, isDefault bool, server string, username string, password string) (*Profile, error) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
@@ -93,10 +93,8 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 		Username: username,
 	}
 
-	// Store password in keyring
 	if err := newProfile.SetPassword(password); err != nil {
-		// Handle error - could log or return error instead
-		panic(err)
+		return nil, err
 	}
 
 	profiles = append(profiles, newProfile)
@@ -106,10 +104,12 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 	}
 
 	viper.Set("profiles", profiles)
-	viper.WriteConfig()
+	if err := viper.WriteConfig(); err != nil {
+		return nil, err
+	}
 
 	newProfile.Password = password // Set for return value
-	return &newProfile
+	return &newProfile, nil
 }
 
 func RemoveProfile(name string) {
