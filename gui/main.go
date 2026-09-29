@@ -56,6 +56,7 @@ var (
 	deviceList  *widget.List
 	routeList   *widget.List
 	deviceBtns  []*widget.Button
+	reloading   bool // a debounced device list reload is scheduled
 )
 
 var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
@@ -110,6 +111,7 @@ func main() {
 	viper.SetConfigFile(config.DefaultConfigPath)
 
 	meshcentral.TokenPrompt = promptToken
+	meshcentral.OnNodeEvent = onNodeEvent
 	meshcentral.OnConnectionLost = func(err error) {
 		fyne.Do(func() {
 			disconnect()
@@ -252,6 +254,10 @@ func buildUI() fyne.CanvasObject {
 			img.Resource = res
 			title.Text = ar.device + " · " + svc
 			sub.Text = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
+			if i := slices.IndexFunc(devices, func(d meshcentral.Device) bool { return d.Id == r.NodeID }); i >= 0 && devices[i].Pwr == 0 {
+				img.Resource = theme.NewDisabledResource(res)
+				sub.Text += " · device offline"
+			}
 			img.Refresh()
 			text.Refresh()
 			if openCmd(r) == nil {
@@ -393,7 +399,46 @@ func refreshProfiles() {
 	}
 }
 
+// onNodeEvent runs on the control socket reader, so it only hands off to the
+// UI goroutine.
+func onNodeEvent(action, nodeID string, conn, pwr int) {
+	fyne.Do(func() {
+		if action != "nodeconnect" {
+			// Adds, removes and renames arrive in bursts (e.g. agents updating
+			// their info), reload once they settle.
+			if !reloading {
+				reloading = true
+				time.AfterFunc(2*time.Second, func() {
+					fyne.Do(func() { reloading = false })
+					refreshDevices()
+				})
+			}
+			return
+		}
+		i := slices.IndexFunc(devices, func(d meshcentral.Device) bool { return d.Id == nodeID })
+		if i < 0 {
+			return
+		}
+		if (devices[i].Pwr == 0) != (pwr == 0) {
+			state := "online"
+			if pwr == 0 {
+				state = "offline"
+			}
+			logf("%s is %s", deviceName(devices[i]), state)
+		}
+		devices[i].Conn, devices[i].Pwr = conn, pwr
+		applyFilter()
+		routeList.Refresh()
+	})
+}
+
+// applyFilter rebuilds the visible device list, keeping the selected device
+// selected if it's still shown.
 func applyFilter() {
+	selID := ""
+	if selected >= 0 && selected < len(shown) {
+		selID = shown[selected].Id
+	}
 	q := strings.ToLower(searchEntry.Text)
 	shown = shown[:0]
 	for _, d := range devices {
@@ -410,6 +455,9 @@ func applyFilter() {
 	})
 	selected = -1
 	deviceList.UnselectAll()
+	if i := slices.IndexFunc(shown, func(d meshcentral.Device) bool { return d.Id == selID }); selID != "" && i >= 0 {
+		deviceList.Select(i)
+	}
 	deviceList.Refresh()
 }
 

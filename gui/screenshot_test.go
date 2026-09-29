@@ -50,13 +50,15 @@ func TestScreenshot(t *testing.T) {
 		applyFilter()
 		deviceList.Select(1)
 		routes = []*activeRoute{
-			{device: "Lab - Bench 1", route: &meshcentral.Route{LocalPort: 40123, RemotePort: 22}},
-			{device: "Site A - Office PC", route: &meshcentral.Route{LocalPort: 40124, RemotePort: 3389}},
-			{device: "Site C - Gateway", route: &meshcentral.Route{LocalPort: 8080, Target: "192.0.2.50", RemotePort: 443}},
-			{device: "Build Server", route: &meshcentral.Route{LocalPort: 40125, RemotePort: 9090}},
+			{device: "Lab - Bench 1", route: &meshcentral.Route{NodeID: "1", LocalPort: 40123, RemotePort: 22}},
+			{device: "Site A - Office PC", route: &meshcentral.Route{NodeID: "2", LocalPort: 40124, RemotePort: 3389}},
+			{device: "Site C - Gateway", route: &meshcentral.Route{NodeID: "4", LocalPort: 8080, Target: "192.0.2.50", RemotePort: 443}},
+			{device: "Build Server", route: &meshcentral.Route{NodeID: "7", LocalPort: 40125, RemotePort: 9090}},
 		}
 		routeList.Refresh()
 		logf("Connected with profile default, 6 devices")
+		// The selected device drops off while it's selected, as a server event would report.
+		onNodeEvent("nodeconnect", "1", 0, 0)
 		logf("Site A - Office PC: Tunnel to remote port 3389 failed: device accepted the tunnel but closed it without sending data")
 
 		savePNG(t, filepath.Join(dir, name+".png"), win)

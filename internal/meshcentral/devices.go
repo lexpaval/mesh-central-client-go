@@ -65,6 +65,23 @@ func handleNodesCommand(command map[string]interface{}) {
 	}
 }
 
+// handleEventCommand forwards device events, which the server sends to every
+// session that can see the device, to OnNodeEvent.
+func handleEventCommand(command map[string]interface{}) {
+	ev, ok := command["event"].(map[string]interface{})
+	if !ok || OnNodeEvent == nil {
+		return
+	}
+	action, _ := ev["action"].(string)
+	switch action {
+	case "nodeconnect", "addnode", "removenode", "changenode":
+		nodeID, _ := ev["nodeid"].(string)
+		conn, _ := ev["conn"].(float64)
+		pwr, _ := ev["pwr"].(float64)
+		OnNodeEvent(action, nodeID, int(conn), int(pwr))
+	}
+}
+
 func GetDevices() []Device {
 	settings.DeviceQueryState = 1
 	settings.deviceChan = make(chan struct{})

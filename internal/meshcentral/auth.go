@@ -243,6 +243,8 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			handleServerAuthCommand(command)
 		case "nodes":
 			handleNodesCommand(command)
+		case "event":
+			handleEventCommand(command)
 		}
 	}
 }
