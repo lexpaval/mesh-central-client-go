@@ -2,6 +2,7 @@ package meshcentral
 
 import (
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -108,10 +109,18 @@ func onTcpClientConnected(conn net.Conn) {
 	onWebSocket(wsConn, conn)
 }
 
+// Tunnel failures the relay reports only by closing the WebSocket, turned
+// into errors so callers can tell the user what went wrong.
+var (
+	errTunnelNotEstablished = errors.New("server closed the tunnel before the device connected (device offline, wrong node ID, or no access)")
+	errTunnelNoData         = errors.New("device accepted the tunnel but closed it without sending data (is a service listening on the remote port?)")
+)
+
 // pumpBidirectional relays bytes between wsConn and a local stream (src/dst
 // may be the same net.Conn, or split streams like stdin/stdout). It blocks
 // until either side closes, then returns the error that caused the shutdown
-// (nil for a graceful WebSocket close or a clean EOF on src). It only closes
+// (nil for a graceful WebSocket close or a clean EOF on src, or one of the
+// errTunnel* errors if the relay closes before any data flowed). It only closes
 // wsConn itself; closing src/dst is the caller's responsibility, since some
 // callers (stdin/stdout) must not be closed.
 func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, debugOut io.Writer) error {
@@ -127,12 +136,18 @@ func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, deb
 	}
 
 	// WS -> dst: each WS message is already a complete chunk, write it
-	// straight to dst with no intermediate buffering.
+	// straight to dst with no intermediate buffering. The relay sends "c"
+	// (or "cr" when recorded) once the device side joins the tunnel.
 	go func() {
+		established, gotData := false, false
 		for {
 			messageType, message, err := wsConn.ReadMessage()
 			if err != nil {
-				if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+				if !established {
+					closeAll(errTunnelNotEstablished)
+				} else if !gotData {
+					closeAll(errTunnelNoData)
+				} else if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 					closeAll(nil)
 				} else {
 					if settings.debug {
@@ -142,7 +157,11 @@ func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, deb
 				}
 				return
 			}
+			if messageType == websocket.TextMessage && (string(message) == "c" || string(message) == "cr") {
+				established = true
+			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
+				established, gotData = true, true
 				if _, err := dst.Write(message); err != nil {
 					if settings.debug {
 						fmt.Fprintln(debugOut, "Write error (WS -> dst):", err)
@@ -190,7 +209,10 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 	if settings.debug {
 		fmt.Println("Websocket connected")
 	}
-	pumpBidirectional(wsConn, tcpConn, tcpConn, os.Stdout)
+	cause := pumpBidirectional(wsConn, tcpConn, tcpConn, os.Stdout)
+	if errors.Is(cause, errTunnelNotEstablished) || errors.Is(cause, errTunnelNoData) {
+		fmt.Printf("Tunnel to remote port %d failed: %v\n", settings.RemotePort, cause)
+	}
 }
 
 // StartProxyRouter runs the SSH ProxyCommand tunnel: stdin/stdout of this

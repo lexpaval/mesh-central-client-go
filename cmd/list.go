@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"fmt"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -74,19 +75,42 @@ func init() {
 }
 
 // resolveNodeID connects to the server and, if nodeID is empty, prompts the
-// user to pick a device interactively. Returns the resolved nodeID.
+// user to pick a device interactively. A given nodeID is checked against the
+// server's device list. Returns the resolved nodeID.
 func resolveNodeID(nodeID string, remotePort, localPort int, target string, insecure, debug bool) string {
 	meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
 	meshcentral.StartSocket()
 
+	devices := meshcentral.GetDevices()
 	if nodeID == "" {
-		devices := meshcentral.GetDevices()
 		filterAndSortDevices(&devices)
 		nodeID = searchDevices(&devices)
 		meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
+	} else {
+		checkNodeID(nodeID, devices)
 	}
 
 	return nodeID
+}
+
+// checkNodeID exits if nodeID isn't among the devices the account can see,
+// and warns if it's offline. Messages go to stderr since stdout is the SSH
+// stream in proxy mode. Skipped if the device list is empty (query timed out).
+func checkNodeID(nodeID string, devices []meshcentral.Device) {
+	if len(devices) == 0 {
+		return
+	}
+	for _, d := range devices {
+		if d.Id != nodeID {
+			continue
+		}
+		if d.Pwr == 0 {
+			fmt.Fprintf(os.Stderr, "Warning: device %s (%s) appears offline, connection will likely fail.\n", d.Name, nodeID)
+		}
+		return
+	}
+	fmt.Fprintf(os.Stderr, "Device %s not found, or your account has no access to it. Run 'mcc list' or omit -i to pick one.\n", nodeID)
+	os.Exit(1)
 }
 
 func filterAndSortDevices(d *[]meshcentral.Device) {
