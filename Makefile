@@ -1,4 +1,4 @@
-.PHONY: build build-all gui-linux gui-windows gui-all gui-shots clean version
+.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-shots clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -12,38 +12,88 @@ LDFLAGS := -ldflags "\
 build:
 	go build $(LDFLAGS) -o mcc .
 
-# The GUI needs cgo, so it builds in fyne-cross's image: zig is the C compiler
-# for every target (bundles mingw for Windows), with multiarch GL/X11/Wayland
-# libs for Linux.
-# Linux pins glibc 2.36 (Debian 12), the image's own libs need newer symbols
-# but aren't shipped, hence --allow-shlib-undefined. The image has an older
+# The GUI needs cgo. gui-linux/windows/macos build portable single files in
+# podman with fyne-cross's images directly, zig as the C compiler and the image's
+# fyne CLI embedding FyneApp.toml metadata (icon, version) and the Windows exe
+# icon. gui-release packages with fyne-cross instead (.tar.xz, .zip, .app).
+# Linux targets glibc 2.38+ (Debian 13, Ubuntu 24.04). The images ship an older
 # Go, GOTOOLCHAIN=auto fetches the one go.mod asks for.
-GUI_IMAGE := docker.io/fyneio/fyne-cross-images:v1.3.2-linux
-GUI_LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(DATE)"
-GUI_RUN := podman run --rm --security-opt label=disable -v $(CURDIR):/src -w /src \
+GUI_NAME := MeshCentral Client
+GUI_ID := com.github.lexpaval.mcc-gui
+APP_VERSION := $(or $(shell echo $(VERSION) | sed -nE 's/^v?([0-9]+\.[0-9]+\.[0-9]+).*/\1/p'),0.0.1)
+APP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
+GUI_META := --metadata version=$(VERSION) --metadata commit=$(COMMIT) --metadata buildDate=$(DATE)
+GUI_PKG := --app-id $(GUI_ID) --app-version $(APP_VERSION) --app-build $(APP_BUILD) $(GUI_META)
+
+GUI_LINUX_IMAGE := docker.io/fyneio/fyne-cross-images:linux
+GUI_DARWIN_IMAGE := docker.io/fyneio/fyne-cross-images:darwin
+GUI_RUN := podman run --rm --security-opt label=disable -v $(CURDIR):/src -w /src/mcc-gui \
 	-v mcc-gomod:/go/pkg/mod -v mcc-gocache:/root/.cache/go-build \
 	-e GOTOOLCHAIN=auto -e CGO_ENABLED=1 -e GOFLAGS=-buildvcs=false
 GUI_LINUX_CC = -e GOOS=linux -e GOARCH=$(1) -e PKG_CONFIG_PATH=/usr/lib/$(2)-linux-gnu/pkgconfig \
-	-e CC="zig cc -target $(2)-linux-gnu.2.36 -isystem /usr/include -L/usr/lib/$(2)-linux-gnu -Wl,--allow-shlib-undefined"
+	-e CC="zig cc -target $(2)-linux-gnu.2.38 -isystem /usr/include -L/usr/lib/$(2)-linux-gnu"
 # zig's linker ignores Go's -H=windowsgui, the subsystem flag hides the console window
 GUI_WINDOWS_CC = -e GOOS=windows -e GOARCH=$(1) -e CC="zig cc -target $(2)-windows-gnu -Wdeprecated-non-prototype -Wl,--subsystem,windows"
+# Same zig setup fyne-cross uses for darwin, $(3) is the minimum macOS version
+GUI_DARWIN_CC = -e GOOS=darwin -e GOARCH=$(1) -v "$(MACOS_SDK)":/sdk:ro -e GOFLAGS="-buildvcs=false -buildmode=pie" \
+	-e CC="zig cc -target $(2)-macos.$(3) -isysroot /sdk -iwithsysroot /usr/include -iframeworkwithsysroot /System/Library/Frameworks" \
+	-e CGO_LDFLAGS="--sysroot /sdk -F/System/Library/Frameworks -L/usr/lib"
+
+# macOS needs the SDK from Apple's Command Line Tools for Xcode, extracted by
+# gui-macos-sdk next to the .dmg (Downloads by default).
+MACOS_SDK ?= $(firstword $(wildcard $(HOME)/Downloads/SDKs/MacOSX*.sdk))
+NEED_SDK = @test -n "$(MACOS_SDK)" || { echo "No macOS SDK found, run: make gui-macos-sdk XCODE_DMG=~/Downloads/Command_Line_Tools_for_Xcode_<ver>.dmg (or set MACOS_SDK)"; exit 1; }
 
 gui-linux:
 	mkdir -p dist
-	$(GUI_RUN) $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-linux-amd64-$(VERSION) ./gui
-	$(GUI_RUN) $(call GUI_LINUX_CC,arm64,aarch64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-linux-arm64-$(VERSION) ./gui
+	$(GUI_RUN) $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_LINUX_IMAGE) fyne build --os linux $(GUI_META) -o /src/dist/mcc-gui-linux-amd64-$(VERSION)
+	$(GUI_RUN) $(call GUI_LINUX_CC,arm64,aarch64) $(GUI_LINUX_IMAGE) fyne build --os linux $(GUI_META) -o /src/dist/mcc-gui-linux-arm64-$(VERSION)
 
 gui-windows:
 	mkdir -p dist
-	$(GUI_RUN) $(call GUI_WINDOWS_CC,amd64,x86_64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-windows-amd64-$(VERSION).exe ./gui
-	$(GUI_RUN) $(call GUI_WINDOWS_CC,arm64,aarch64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-windows-arm64-$(VERSION).exe ./gui
+	$(GUI_RUN) $(call GUI_WINDOWS_CC,amd64,x86_64) $(GUI_LINUX_IMAGE) sh -c 'fyne package --os windows --name mcc-gui $(GUI_PKG) && mv mcc-gui.exe /src/dist/mcc-gui-windows-amd64-$(VERSION).exe'
+	$(GUI_RUN) $(call GUI_WINDOWS_CC,arm64,aarch64) $(GUI_LINUX_IMAGE) sh -c 'fyne package --os windows --name mcc-gui $(GUI_PKG) && mv mcc-gui.exe /src/dist/mcc-gui-windows-arm64-$(VERSION).exe'
+
+gui-macos:
+	$(NEED_SDK)
+	mkdir -p dist
+	$(GUI_RUN) $(call GUI_DARWIN_CC,amd64,x86_64,10.12) $(GUI_DARWIN_IMAGE) sh -c 'fyne package --os darwin --name "$(GUI_NAME)" $(GUI_PKG) && zip -qry /src/dist/mcc-gui-darwin-amd64-$(VERSION).zip "$(GUI_NAME).app" && rm -rf "$(GUI_NAME).app"'
+	$(GUI_RUN) $(call GUI_DARWIN_CC,arm64,aarch64,11.1) $(GUI_DARWIN_IMAGE) sh -c 'fyne package --os darwin --name "$(GUI_NAME)" $(GUI_PKG) && zip -qry /src/dist/mcc-gui-darwin-arm64-$(VERSION).zip "$(GUI_NAME).app" && rm -rf "$(GUI_NAME).app"'
 
 gui-all: gui-linux gui-windows
 
-# Renders the main window (dark/light) and all icons with sample data to dist/shots
+gui-macos-sdk:
+	@test -n "$(XCODE_DMG)" || { echo "Set XCODE_DMG to the Command Line Tools for Xcode .dmg from developer.apple.com/download/all"; exit 1; }
+	$(FYNE_CROSS) darwin-sdk-extract -engine podman -xcode-path "$(XCODE_DMG)"
+
+# Release packages via fyne-cross, pinned in tools.mod apart from go.mod since
+# it pulls in Kubernetes and AWS clients. macOS is included when the SDK is found.
+FYNE_CROSS := go tool -modfile=tools.mod fyne-cross
+FC_FLAGS = -engine podman -env GOTOOLCHAIN=auto -name "$(GUI_NAME)" -icon mcc-gui/Icon.png \
+	-app-id $(GUI_ID) -app-version $(APP_VERSION) -app-build $(APP_BUILD) \
+	-metadata version=$(VERSION) -metadata commit=$(COMMIT) -metadata buildDate=$(DATE)
+FC_DIST := fyne-cross/dist
+
+gui-release:
+	mkdir -p dist
+	$(FYNE_CROSS) linux $(FC_FLAGS) -arch=amd64,arm64 ./mcc-gui
+	$(FYNE_CROSS) windows $(FC_FLAGS) -arch=amd64,arm64 ./mcc-gui
+	for a in amd64 arm64; do \
+		cp "$(FC_DIST)/linux-$$a/$(GUI_NAME).tar.xz" dist/mcc-gui-linux-$$a-$(VERSION).tar.xz; \
+		cp "$(FC_DIST)/windows-$$a/$(GUI_NAME).zip" dist/mcc-gui-windows-$$a-$(VERSION).zip; \
+	done
+ifneq ($(MACOS_SDK),)
+	$(FYNE_CROSS) darwin $(FC_FLAGS) -arch=amd64,arm64 -macosx-sdk-path "$(MACOS_SDK)" ./mcc-gui
+	for a in amd64 arm64; do (cd "$(FC_DIST)/darwin-$$a" && zip -qry "$(CURDIR)/dist/mcc-gui-darwin-$$a-$(VERSION).app.zip" "$(GUI_NAME).app"); done
+else
+	@echo "No macOS SDK found, skipping macOS packages (see gui-macos-sdk)"
+endif
+
+# Renders the main window (dark/light), dialogs and icons with sample data to
+# dist/shots, in the same image gui-linux builds in.
 gui-shots:
 	mkdir -p dist/shots
-	$(GUI_RUN) -e SHOT_DIR=/src/dist/shots $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_IMAGE) go test -run TestScreenshot -count=1 ./gui
+	$(GUI_RUN) -e SHOT_DIR=/src/dist/shots $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_LINUX_IMAGE) go test -run TestScreenshot -count=1 .
 
 build-all:
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64-$(VERSION) .
@@ -53,8 +103,9 @@ build-all:
 	GOOS=windows GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-windows-amd64-$(VERSION).exe .
 	GOOS=windows GOARCH=arm64 go build $(LDFLAGS) -o dist/mcc-windows-arm64-$(VERSION).exe .
 
-release: build-all
-	cd dist && sha256sum mcc-linux-amd64-$(VERSION) mcc-linux-arm64-$(VERSION) mcc-darwin-amd64-$(VERSION) mcc-darwin-arm64-$(VERSION) mcc-windows-amd64-$(VERSION).exe mcc-windows-arm64-$(VERSION).exe > sha256sums.txt
+release: build-all gui-release
+	cd dist && sha256sum mcc-linux-amd64-$(VERSION) mcc-linux-arm64-$(VERSION) mcc-darwin-amd64-$(VERSION) mcc-darwin-arm64-$(VERSION) mcc-windows-amd64-$(VERSION).exe mcc-windows-arm64-$(VERSION).exe \
+		$$(ls mcc-gui-*-$(VERSION).tar.xz mcc-gui-*-$(VERSION).zip mcc-gui-*-$(VERSION).app.zip 2>/dev/null) > sha256sums.txt
 
 version:
 	@echo "Version:    $(VERSION)"
@@ -63,4 +114,4 @@ version:
 
 clean:
 	rm -f mcc
-	rm -rf dist/
+	rm -rf dist/ fyne-cross/ .cache/ .config/

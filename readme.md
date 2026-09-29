@@ -30,15 +30,27 @@ go build -o mcc
 
 `mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices. **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH.
 
-The GUI needs cgo, so it builds in the [fyne-cross](https://github.com/fyne-io/fyne-cross) image with podman and zig as the C compiler, no host packages needed:
+The GUI needs cgo, so it's built in podman with the [fyne-cross](https://github.com/fyne-io/fyne-cross) images, no host packages needed. The builds embed the app icon and version:
 
 ```bash
-make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>
-make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe
-make gui-all      # both
+make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>        portable binaries
+make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe  portable .exe with icon
+make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.zip   zipped .app
+make gui-all      # Linux and Windows
+make release      # CLI for all platforms + GUI packages via fyne-cross + sha256sums.txt
 ```
 
-The Linux binaries support both X11 and Wayland (picked at runtime) and need glibc 2.36+ (Debian 12, Ubuntu 22.10, Fedora 37 or newer). macOS has to be built on a Mac. `make gui-shots` renders the window in dark and light mode with sample data to `dist/shots`.
+`make release` packages the GUI with fyne-cross (pinned in `tools.mod`, run through `go tool`): Linux `.tar.xz` with binary, `.desktop` entry and icon (`sudo make install` inside), Windows `.zip`, and macOS `.app.zip` when the SDK is available.
+
+The Linux builds support both X11 and Wayland (picked at runtime) and target glibc 2.38+ (Debian 13, Ubuntu 24.04, Fedora 39 or newer).
+
+macOS builds need the macOS SDK from Apple's *Command Line Tools for Xcode* (developer.apple.com/download/all, Apple ID required, read the Xcode license first). Extract it once, it lands in `SDKs/` next to the `.dmg`, which the macOS targets pick up from `~/Downloads` (or set `MACOS_SDK`):
+
+```bash
+make gui-macos-sdk XCODE_DMG=~/Downloads/Command_Line_Tools_for_Xcode_<ver>.dmg
+```
+
+`make gui-shots` renders the window, dialogs and icons in dark and light mode with sample data to `dist/shots`.
 
 GUI icons are from [Font Awesome Free](https://fontawesome.com) by Fonticons, Inc., licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 

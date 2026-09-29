@@ -1,0 +1,8 @@
+Website = "https://github.com/alexpaval/mesh-central-client-go"
+
+[Details]
+Icon = "Icon.png"
+Name = "MeshCentral Client"
+ID = "com.github.lexpaval.mcc-gui"
+Version = "1.3.0"
+Build = 18

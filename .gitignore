@@ -2,3 +2,6 @@
 test.json
 mcc
 dist
+fyne-cross
+.cache
+.config

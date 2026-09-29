@@ -81,9 +81,6 @@ var (
 	currentTab *tab
 )
 
-// Set at build time by the Makefile, like the CLI's version command.
-var version, commit, buildDate = "dev", "unknown", "unknown"
-
 var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
 
 // Font Awesome Free icons (CC BY 4.0, attribution in each file), themed so
@@ -978,7 +975,11 @@ func showAbout() {
 	repo, _ := url.Parse("https://github.com/alexpaval/mesh-central-client-go")
 	title := widget.NewLabelWithStyle("MeshCentral Client", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
 	title.SizeName = theme.SizeNameSubHeadingText
-	info := widget.NewLabel(fmt.Sprintf("Version %s\nCommit %s, built %s\n%s, Fyne GUI", version, commit, buildDate, runtime.Version()))
+	// Build details come as fyne package metadata from the Makefile, plain go
+	// builds have none.
+	meta := fyne.CurrentApp().Metadata().Custom
+	info := widget.NewLabel(fmt.Sprintf("Version %s\nCommit %s, built %s\n%s, Fyne GUI",
+		cmp.Or(meta["version"], "dev"), cmp.Or(meta["commit"], "unknown"), cmp.Or(meta["buildDate"], "unknown"), runtime.Version()))
 	info.Selectable = true
 	desc := widget.NewLabel("Desktop client for MeshCentral: devices, port routes and remote commands,\nsharing profiles and 2FA login with the mcc CLI. Not affiliated with MeshCentral.")
 	credits := widget.NewLabel("MIT License. Icons by Font Awesome Free (CC BY 4.0), UI by Fyne (BSD-3).")
