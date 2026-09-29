@@ -134,6 +134,13 @@ Enter 2FA token: 123456
 > mcc ssh -i 'node//abc$def...'
 > mcc ssh -i 'abc$def...'   # node// prefix is optional
 > ```
+>
+> The same applies to `ProxyCommand` in `~/.ssh/config`. Use single quotes, since OpenSSH runs it through `sh -c`. Some launchers (e.g. VSCodium's open-remote-ssh) spawn it without a shell and pass the quotes through literally; mcc strips them, so single quotes work in both:
+> ```
+> Host my-node
+>   User root
+>   ProxyCommand mcc ssh -i 'node//abc$def...' --proxy
+> ```
 
 ## Security
 

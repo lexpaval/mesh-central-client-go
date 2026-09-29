@@ -98,8 +98,11 @@ func resolveNodeID(nodeID string, remotePort, localPort int, target string, inse
 }
 
 // normalizeNodeID accepts a bare ID as shown in the web UI (e.g. in gotonode=)
-// and adds the default-domain "node//" prefix the server expects.
+// and adds the default-domain "node//" prefix the server expects. Surrounding
+// quotes are stripped too: launchers that spawn ProxyCommand without a shell
+// (e.g. VSCodium's open-remote-ssh) pass single quotes through literally.
 func normalizeNodeID(id string) string {
+	id = strings.Trim(id, `'"`)
 	if strings.HasPrefix(id, "node/") {
 		return id
 	}
