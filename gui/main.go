@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"image/color"
+	"io"
 	"maps"
 	"net/url"
 	"os"
@@ -17,6 +18,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"fyne.io/fyne/v2"
@@ -24,8 +26,10 @@ import (
 	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
 	"fyne.io/fyne/v2/dialog"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
+	"github.com/fyne-io/terminal"
 	"github.com/spf13/viper"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/config"
@@ -69,6 +73,12 @@ var (
 	routeList     *widget.List
 	deviceBtns    []*widget.Button
 	reloading     bool // a debounced device list reload is scheduled
+	// Right panel tabs: Routes first (not closable), then one per shell.
+	tabBar     *fyne.Container   // tab heads
+	tabContent *fyne.Container   // tab panes, only the selected one visible
+	tabScroll  *container.Scroll // lets the heads overflow, the wheel scrolls it sideways
+	tabList    []*tab
+	currentTab *tab
 )
 
 // Set at build time by the Makefile, like the CLI's version command.
@@ -229,7 +239,7 @@ func buildUI() fyne.CanvasObject {
 				text.Truncation = fyne.TextTruncateEllipsis
 				return text
 			}
-			return twoLineRow()
+			return newDeviceRow()
 		},
 		func(id widget.TreeNodeID, branch bool, o fyne.CanvasObject) {
 			if branch {
@@ -240,7 +250,9 @@ func buildUI() fyne.CanvasObject {
 				return
 			}
 			d := shownByID[id]
-			img, text, title, sub := rowParts(o)
+			row := o.(*deviceRow)
+			row.id = id
+			img, text, title, sub := rowParts(row.content)
 			title.Text = deviceName(d)
 			sub.Text = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
 			img.Resource = osIcon(d.OS)
@@ -264,12 +276,28 @@ func buildUI() fyne.CanvasObject {
 	}
 	deviceTree.OnUnselected = func(widget.TreeNodeID) { selectedID = "" }
 	deviceBtns = []*widget.Button{
+		widget.NewButtonWithIcon("Shell", icons["terminal"], nil),
 		widget.NewButtonWithIcon("Add route", icons["plus"], showAddRoute),
 		widget.NewButtonWithIcon("Run command", icons["play"], showRunCommand),
 		widget.NewButtonWithIcon("Copy", icons["copy"], nil),
-		widget.NewButtonWithIcon("Refresh", icons["rotate"], refreshDevices),
+		widget.NewButtonWithIcon("", icons["rotate"], refreshDevices),
 	}
-	copyBtn := deviceBtns[2]
+	shellBtn := deviceBtns[0]
+	shellBtn.OnTapped = func() {
+		d, ok := selectedDevice()
+		if !ok {
+			return
+		}
+		if !strings.Contains(strings.ToLower(d.OS), "windows") {
+			openShell(d, 1)
+			return
+		}
+		menu := fyne.NewMenu("",
+			fyne.NewMenuItem("Command prompt", func() { openShell(d, 1) }),
+			fyne.NewMenuItem("PowerShell", func() { openShell(d, 6) }))
+		widget.ShowPopUpMenuAtRelativePosition(menu, win.Canvas(), fyne.NewPos(0, shellBtn.Size().Height), shellBtn)
+	}
+	copyBtn := deviceBtns[3]
 	copyBtn.OnTapped = func() {
 		menu := fyne.NewMenu("",
 			fyne.NewMenuItem("Node ID", func() {
@@ -282,7 +310,7 @@ func buildUI() fyne.CanvasObject {
 		widget.ShowPopUpMenuAtRelativePosition(menu, win.Canvas(), fyne.NewPos(0, copyBtn.Size().Height), copyBtn)
 	}
 	left := container.NewBorder(
-		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2], deviceBtns[3]),
+		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2], deviceBtns[3], deviceBtns[4]),
 		nil, nil, container.NewThemeOverride(deviceTree, treeTheme))
 
 	routeList = widget.NewList(
@@ -352,8 +380,18 @@ func buildUI() fyne.CanvasObject {
 				logf("%s: stopped %s", ar.device, localAddr(r))
 			}
 		})
-	right := container.NewBorder(widget.NewLabelWithStyle("Routes", fyne.TextAlignLeading, fyne.TextStyle{Bold: true}),
-		nil, nil, nil, container.NewThemeOverride(routeList, compactTheme))
+	// A hand-made tab strip, Fyne's DocTabs puts a close button on every tab
+	// and Routes must not have one.
+	routes := &tab{pane: container.NewThemeOverride(routeList, compactTheme)}
+	routes.btn = widget.NewButtonWithIcon("Routes", icons["network-wired"], func() { selectTab(routes) })
+	routes.head = routes.btn
+	tabList = []*tab{routes}
+	tabBar = container.NewHBox(routes.head)
+	tabContent = container.NewStack(routes.pane)
+	tabScroll = nil
+	selectTab(routes)
+	tabScroll = container.NewHScroll(tabBar)
+	right := container.NewBorder(container.NewVBox(tabScroll, widget.NewSeparator()), nil, nil, nil, tabContent)
 
 	logLabel = widget.NewLabel("")
 	logLabel.Selectable = true
@@ -410,6 +448,9 @@ func connect(insecure bool) {
 func disconnect() {
 	for _, ar := range routes {
 		ar.route.Close()
+	}
+	for _, tb := range slices.Clone(tabList[1:]) {
+		tb.close()
 	}
 	routes = nil
 	routeList.Refresh()
@@ -580,6 +621,148 @@ func (t sizeTheme) Size(n fyne.ThemeSizeName) float32 {
 		return v
 	}
 	return fyne.CurrentApp().Settings().Theme().Size(n)
+}
+
+// deviceRow is a device in the tree. Fyne's tree has no double-click, so the
+// row takes taps itself: a tap selects, a double-tap opens a shell.
+type deviceRow struct {
+	widget.BaseWidget
+	content fyne.CanvasObject
+	id      string
+}
+
+func newDeviceRow() *deviceRow {
+	r := &deviceRow{content: twoLineRow()}
+	r.ExtendBaseWidget(r)
+	return r
+}
+
+func (r *deviceRow) CreateRenderer() fyne.WidgetRenderer { return widget.NewSimpleRenderer(r.content) }
+func (r *deviceRow) Tapped(*fyne.PointEvent)             { deviceTree.Select(r.id) }
+func (r *deviceRow) DoubleTapped(*fyne.PointEvent) {
+	deviceTree.Select(r.id)
+	if d, ok := shownByID[r.id]; ok {
+		openShell(d, 1)
+	}
+}
+
+// openShell opens a tab with a shell on d, protocol 1 is the device's
+// default shell, 6 PowerShell. Closing the tab ends the session.
+func openShell(d meshcentral.Device, protocol int) {
+	name := deviceName(d)
+	t := terminal.New()
+
+	inR, inW := io.Pipe()   // keystrokes, terminal -> device
+	outR, outW := io.Pipe() // output, device -> terminal
+
+	// The terminal reports its size on every layout, keep the latest for the
+	// session's handshake and nudge it to resend.
+	var mu sync.Mutex
+	var cols, rows int
+	resize := make(chan struct{}, 1)
+	configs := make(chan terminal.Config, 1)
+	done := make(chan struct{})
+	t.AddListener(configs)
+	go func() {
+		for {
+			select {
+			case c := <-configs:
+				mu.Lock()
+				cols, rows = int(c.Columns), int(c.Rows)
+				mu.Unlock()
+				select {
+				case resize <- struct{}{}:
+				default:
+				}
+			case <-done:
+				return
+			}
+		}
+	}()
+	size := func() (int, int) {
+		mu.Lock()
+		defer mu.Unlock()
+		return cols, rows
+	}
+
+	// Shutdown order matters: the terminal only stops reading on EOF (a
+	// closed reader makes it retry forever), so closing the tab ends the
+	// input, RunShell then closes the output writer, and the reader is only
+	// closed once the terminal is done, in case it never started reading.
+	go func() {
+		t.RunWithConnection(inW, outR)
+		outR.Close()
+	}()
+	go func() {
+		err := meshcentral.RunShell(d.Id, protocol, inR, outW, size, resize)
+		msg := "\r\n[session closed]\r\n"
+		if err != nil {
+			msg = fmt.Sprintf("\r\n[%v]\r\n", err)
+		}
+		outW.Write([]byte(msg))
+		outW.Close()
+		logf("%s: shell closed", name)
+	}()
+
+	title := name
+	if protocol == 6 {
+		title += " · PowerShell"
+	}
+	tb := &tab{pane: t}
+	tb.btn = widget.NewButtonWithIcon(title, icons["terminal"], func() { selectTab(tb) })
+	closeBtn := widget.NewButtonWithIcon("", icons["xmark"], nil)
+	closeBtn.Importance = widget.LowImportance
+	tb.head = container.New(layout.NewCustomPaddedHBoxLayout(0), tb.btn, closeBtn)
+	tb.close = func() {
+		if !slices.Contains(tabList, tb) {
+			return
+		}
+		tabList = slices.DeleteFunc(tabList, func(x *tab) bool { return x == tb })
+		tabBar.Remove(tb.head)
+		tabContent.Remove(tb.pane)
+		if currentTab == tb {
+			selectTab(tabList[0])
+		}
+		t.Close()
+		inW.Close() // t.Close only does this once it has connected
+		close(done)
+	}
+	closeBtn.OnTapped = tb.close
+	tabList = append(tabList, tb)
+	tabBar.Add(tb.head)
+	tabContent.Add(tb.pane)
+	selectTab(tb)
+	win.Canvas().Focus(t)
+	logf("%s: shell opened", name)
+}
+
+type tab struct {
+	btn   *widget.Button
+	head  fyne.CanvasObject // btn, plus the close button for shells
+	pane  fyne.CanvasObject
+	close func() // nil for Routes
+}
+
+func selectTab(sel *tab) {
+	currentTab = sel
+	for _, tb := range tabList {
+		tb.btn.Importance = widget.LowImportance
+		tb.pane.Hide()
+		if tb == sel {
+			tb.btn.Importance = widget.MediumImportance
+			tb.pane.Show()
+		}
+		tb.btn.Refresh()
+	}
+	// Bring the selected head into view when the strip overflows.
+	if tabScroll != nil {
+		x, w, view := sel.head.Position().X, sel.head.Size().Width, tabScroll.Size().Width
+		if x < tabScroll.Offset.X {
+			tabScroll.ScrollToOffset(fyne.NewPos(x, 0))
+		} else if x+w > tabScroll.Offset.X+view {
+			tabScroll.ScrollToOffset(fyne.NewPos(x+w-view, 0))
+		}
+	}
 }
 
 // twoLineRow is the list item template shared by devices and routes: an

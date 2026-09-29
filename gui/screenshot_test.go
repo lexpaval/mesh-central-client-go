@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"testing"
+	"time"
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/canvas"
@@ -81,6 +82,18 @@ func TestScreenshot(t *testing.T) {
 			win.Resize(fyne.NewSize(1100, 700))
 			showAbout()
 			savePNG(t, filepath.Join(dir, "about.png"), win)
+
+			// No server here, so the session fails and the tab shows why.
+			win = test.NewTempWindow(t, buildUI())
+			win.Resize(fyne.NewSize(1100, 700))
+			setConnected(true)
+			applyFilter()
+			deviceTree.OpenAllBranches()
+			for _, d := range devices[:5] { // enough tabs to overflow the strip
+				openShell(d, 1)
+			}
+			time.Sleep(time.Second)
+			savePNG(t, filepath.Join(dir, "shell.png"), win)
 		}
 	}
 
