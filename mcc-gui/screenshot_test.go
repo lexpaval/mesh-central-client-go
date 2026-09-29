@@ -132,4 +132,4 @@ func (t variantTheme) Color(n fyne.ThemeColorName, _ fyne.ThemeVariant) color.Co
 }
 func (variantTheme) Font(s fyne.TextStyle) fyne.Resource     { return theme.DefaultTheme().Font(s) }
 func (variantTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
-func (variantTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultTheme().Size(n) }
+func (variantTheme) Size(n fyne.ThemeSizeName) float32       { return appTheme{}.Size(n) }

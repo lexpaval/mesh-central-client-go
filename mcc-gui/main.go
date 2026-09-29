@@ -125,7 +125,30 @@ func (appTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
 
 func (appTheme) Font(s fyne.TextStyle) fyne.Resource     { return theme.DefaultTheme().Font(s) }
 func (appTheme) Icon(n fyne.ThemeIconName) fyne.Resource { return theme.DefaultTheme().Icon(n) }
-func (appTheme) Size(n fyne.ThemeSizeName) float32       { return theme.DefaultTheme().Size(n) }
+
+// desktopSizes pulls Fyne's touch-sized defaults toward a desktop density
+// similar to Qt's Fusion style (default in comments).
+var desktopSizes = map[fyne.ThemeSizeName]float32{
+	theme.SizeNameText:            13, // 14
+	theme.SizeNamePadding:         3,  // 4
+	theme.SizeNameInnerPadding:    6,  // 8, sets button and input height
+	theme.SizeNameInlineIcon:      16, // 20
+	theme.SizeNameLineSpacing:     3,  // 4
+	theme.SizeNameHeadingText:     20, // 24
+	theme.SizeNameSubHeadingText:  16, // 18
+	theme.SizeNameScrollBar:       10, // 12
+	theme.SizeNameInputRadius:     3,  // 5
+	theme.SizeNameButtonRadius:    3,  // 5
+	theme.SizeNameSelectionRadius: 2,  // 3
+	theme.SizeNameDialogRadius:    6,  // 10
+}
+
+func (appTheme) Size(n fyne.ThemeSizeName) float32 {
+	if v, ok := desktopSizes[n]; ok {
+		return v
+	}
+	return theme.DefaultTheme().Size(n)
+}
 
 func main() {
 	a := app.NewWithID("com.github.lexpaval.mcc-gui")
@@ -767,7 +790,7 @@ func selectTab(sel *tab) {
 func twoLineRow() fyne.CanvasObject {
 	img := canvas.NewImageFromResource(nil)
 	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSquareSize(20))
+	img.SetMinSize(fyne.NewSquareSize(18))
 	text := widget.NewRichText(
 		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}},
 		&widget.TextSegment{Style: widget.RichTextStyle{SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
