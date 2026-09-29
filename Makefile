@@ -19,6 +19,7 @@ build:
 # but aren't shipped, hence --allow-shlib-undefined. The image has an older
 # Go, GOTOOLCHAIN=auto fetches the one go.mod asks for.
 GUI_IMAGE := docker.io/fyneio/fyne-cross-images:v1.3.2-linux
+GUI_LDFLAGS := -ldflags "-X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(DATE)"
 GUI_RUN := podman run --rm --security-opt label=disable -v $(CURDIR):/src -w /src \
 	-v mcc-gomod:/go/pkg/mod -v mcc-gocache:/root/.cache/go-build \
 	-e GOTOOLCHAIN=auto -e CGO_ENABLED=1 -e GOFLAGS=-buildvcs=false
@@ -29,13 +30,13 @@ GUI_WINDOWS_CC = -e GOOS=windows -e GOARCH=$(1) -e CC="zig cc -target $(2)-windo
 
 gui-linux:
 	mkdir -p dist
-	$(GUI_RUN) $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_IMAGE) go build -o dist/mcc-gui-linux-amd64-$(VERSION) ./gui
-	$(GUI_RUN) $(call GUI_LINUX_CC,arm64,aarch64) $(GUI_IMAGE) go build -o dist/mcc-gui-linux-arm64-$(VERSION) ./gui
+	$(GUI_RUN) $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-linux-amd64-$(VERSION) ./gui
+	$(GUI_RUN) $(call GUI_LINUX_CC,arm64,aarch64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-linux-arm64-$(VERSION) ./gui
 
 gui-windows:
 	mkdir -p dist
-	$(GUI_RUN) $(call GUI_WINDOWS_CC,amd64,x86_64) $(GUI_IMAGE) go build -o dist/mcc-gui-windows-amd64-$(VERSION).exe ./gui
-	$(GUI_RUN) $(call GUI_WINDOWS_CC,arm64,aarch64) $(GUI_IMAGE) go build -o dist/mcc-gui-windows-arm64-$(VERSION).exe ./gui
+	$(GUI_RUN) $(call GUI_WINDOWS_CC,amd64,x86_64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-windows-amd64-$(VERSION).exe ./gui
+	$(GUI_RUN) $(call GUI_WINDOWS_CC,arm64,aarch64) $(GUI_IMAGE) go build $(GUI_LDFLAGS) -o dist/mcc-gui-windows-arm64-$(VERSION).exe ./gui
 
 gui-all: gui-linux gui-windows
 

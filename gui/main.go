@@ -71,12 +71,16 @@ var (
 	reloading     bool // a debounced device list reload is scheduled
 )
 
+// Set at build time by the Makefile, like the CLI's version command.
+var version, commit, buildDate = "dev", "unknown", "unknown"
+
 var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
 
 // Font Awesome Free icons (CC BY 4.0, attribution in each file), themed so
-// they follow the text color in both variants. Arcs in circle-stop,
-// magnifying-glass, opensuse, server and ubuntu were converted to cubic
-// curves, Fyne's rasterizer fills the wrong side of exact half-circle arcs.
+// they follow the text color in both variants. Arcs in circle-info,
+// circle-stop, magnifying-glass, opensuse, server and ubuntu were converted
+// to cubic curves, Fyne's rasterizer fills the wrong side of exact half-circle
+// arcs.
 //
 //go:embed icons/*.svg
 var iconFiles embed.FS
@@ -198,7 +202,8 @@ func buildUI() fyne.CanvasObject {
 	})
 	profileBar = []fyne.CanvasObject{widget.NewLabel("Profile"), profileSel, addProfileBtn, editProfileBtn, rmProfileBtn, insecureChk}
 	topBar = container.NewHBox(append(profileBar, connectBtn)...)
-	top := container.NewBorder(nil, nil, topBar, nil, statusLabel)
+	aboutBtn := widget.NewButtonWithIcon("", icons["circle-info"], showAbout)
+	top := container.NewBorder(nil, nil, topBar, aboutBtn, statusLabel)
 
 	searchEntry = widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search name, hostname, IP or OS")
@@ -784,6 +789,19 @@ func showSSHConfig() {
 	}, win)
 	d2.Resize(fyne.NewSize(640, 0))
 	d2.Show()
+}
+
+func showAbout() {
+	repo, _ := url.Parse("https://github.com/alexpaval/mesh-central-client-go")
+	title := widget.NewLabelWithStyle("MeshCentral Client", fyne.TextAlignLeading, fyne.TextStyle{Bold: true})
+	title.SizeName = theme.SizeNameSubHeadingText
+	info := widget.NewLabel(fmt.Sprintf("Version %s\nCommit %s, built %s\n%s, Fyne GUI", version, commit, buildDate, runtime.Version()))
+	info.Selectable = true
+	desc := widget.NewLabel("Desktop client for MeshCentral: devices, port routes and remote commands,\nsharing profiles and 2FA login with the mcc CLI. Not affiliated with MeshCentral.")
+	credits := widget.NewLabel("MIT License. Icons by Font Awesome Free (CC BY 4.0), UI by Fyne (BSD-3).")
+	credits.Importance = widget.LowImportance
+	dialog.ShowCustom("About", "Close",
+		container.NewVBox(title, info, desc, widget.NewHyperlink("github.com/alexpaval/mesh-central-client-go", repo), credits), win)
 }
 
 // showProfileDialog adds a profile, or edits one when edit is set. The first

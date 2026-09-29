@@ -76,6 +76,11 @@ func TestScreenshot(t *testing.T) {
 			profileSel.SetSelected("work")
 			showProfileDialog(false, &config.Profile{Name: "work", Server: "mesh.example.com", Username: "alice"})
 			savePNG(t, filepath.Join(dir, "profile.png"), win)
+
+			win = test.NewTempWindow(t, buildUI())
+			win.Resize(fyne.NewSize(1100, 700))
+			showAbout()
+			savePNG(t, filepath.Join(dir, "about.png"), win)
 		}
 	}
 
