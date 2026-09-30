@@ -62,7 +62,7 @@ var (
 	groupOrder    []string            // mesh IDs sorted by group name
 	groupChildren map[string][]string // mesh ID -> device IDs sorted by name
 	groupLabels   map[string][2]string
-	shown         map[string]bool // device IDs in the tree
+	shown         []bool // by device index, in the tree
 	routes        []*activeRoute
 	logLines      []string
 	logList       *widget.List
@@ -269,26 +269,9 @@ func buildUI() fyne.CanvasObject {
 			}
 			return newDeviceRow()
 		},
-		func(id widget.TreeNodeID, branch bool, o fyne.CanvasObject) {
-			if branch {
-				text := o.(*rowText)
-				text.Title, text.Sub = groupLabels[id][0], "  "+groupLabels[id][1]
-				text.Refresh()
-				return
-			}
-			d, _ := shownDevice(id)
-			row := o.(*deviceRow)
-			row.id = id
-			text := row.text
-			text.Title = deviceName(d)
-			text.Sub = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
-			text.Muted = d.Pwr == 0
-			text.Icon = osIcon(d.OS)
-			if d.Pwr == 0 {
-				text.Icon = disabledIcon(text.Icon)
-				text.Sub = "offline · " + text.Sub
-			}
-			text.Refresh()
+		func(id widget.TreeNodeID, _ bool, o fyne.CanvasObject) {
+			treeRows[o] = id
+			bindTreeRow(id, o)
 		})
 	deviceTree.OnSelected = func(id widget.TreeNodeID) {
 		if _, ok := groupChildren[id]; ok {
@@ -658,7 +641,9 @@ func flushNodeEvents() {
 	if len(events) == 0 || !connected || session.loading {
 		return
 	}
-	resort := false
+	// resort: names changed or devices were added. refilter: the tree's
+	// contents may change, otherwise only rows are redrawn.
+	resort, refilter := false, searchEntry.Text != ""
 	// Rows that may have changed, devices and their groups ("n of m online").
 	touched := map[string]bool{}
 	touch := func(d meshcentral.Device) { touched[d.Id], touched[d.MeshID] = true, true }
@@ -677,18 +662,21 @@ func flushNodeEvents() {
 				}
 				logf("%s is %s", deviceName(*d), state)
 				touch(*d)
+				refilter = true
 			}
 			d.Conn, d.Pwr = e.Conn, e.Pwr
 		case e.Action == "removenode" && known:
 			touch(devices[i])
 			devices = slices.Delete(devices, i, i+1)
 			reindexDevices()
+			refilter = true
 		case e.Device != nil: // addnode, changenode
 			d := *e.Device
 			if known { // the event's state isn't live, nodeconnect keeps it
 				touch(devices[i]) // it may have moved group
 				d.Conn, d.Pwr = devices[i].Conn, devices[i].Pwr
 				resort = resort || deviceName(d) != deviceName(devices[i])
+				refilter = refilter || d.MeshID != devices[i].MeshID || d.Group != devices[i].Group
 				devices[i] = d
 			} else {
 				deviceIdx[d.Id] = len(devices)
@@ -704,23 +692,54 @@ func flushNodeEvents() {
 	}
 	if resort {
 		sortDevices()
+		refilter = true
 	}
 	if len(touched) == 0 {
 		return
 	}
 	// Fyne's Tree.Refresh builds throwaway template rows that are only freed
-	// once the window repaints, which a minimized window never does, so the
-	// changed rows are redrawn one by one. That also lays out rows that
-	// appeared or went away, the canvas fits the scroll extent on its next paint.
-	filterDevices()
-	if len(touched) > 50 {
+	// once the window repaints, which a minimized window never does. One
+	// RefreshItem lays out rows that appeared or went away (the canvas fits
+	// the scroll extent on its next paint), rows kept are redrawn here.
+	if refilter && filterDevices() {
+		deviceTree.RefreshItem("")
+	}
+	if len(treeRows) > 500 { // rows the tree dropped add up, start over
+		clear(treeRows)
 		deviceTree.Refresh()
 	} else {
-		for id := range touched {
-			deviceTree.RefreshItem(id)
+		for o, id := range treeRows {
+			if touched[id] {
+				bindTreeRow(id, o)
+			}
 		}
 	}
 	refreshRouteRows()
+}
+
+// treeRows maps the tree's rows to the device or group each shows, so event
+// updates can redraw them directly. Tree.RefreshItem walks all the nodes.
+var treeRows = map[fyne.CanvasObject]string{}
+
+func bindTreeRow(id string, o fyne.CanvasObject) {
+	if text, ok := o.(*rowText); ok { // a group
+		text.Title, text.Sub = groupLabels[id][0], "  "+groupLabels[id][1]
+		text.Refresh()
+		return
+	}
+	d, _ := shownDevice(id)
+	row := o.(*deviceRow)
+	row.id = id
+	text := row.text
+	text.Title = deviceName(d)
+	text.Sub = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
+	text.Muted = d.Pwr == 0
+	text.Icon = osIcon(d.OS)
+	if d.Pwr == 0 {
+		text.Icon = disabledIcon(text.Icon)
+		text.Sub = "offline · " + text.Sub
+	}
+	text.Refresh()
 }
 
 // setDevices replaces the device list and rebuilds the tree.
@@ -751,10 +770,11 @@ func reindexDevices() {
 
 // shownDevice returns the device with id if the tree shows it.
 func shownDevice(id string) (meshcentral.Device, bool) {
-	if !shown[id] {
+	i, ok := deviceIdx[id]
+	if !ok || !shown[i] {
 		return meshcentral.Device{}, false
 	}
-	return devices[deviceIdx[id]], true
+	return devices[i], true
 }
 
 // applyFilter rebuilds the device tree from devices, keeping the selected
@@ -765,17 +785,46 @@ func applyFilter() {
 	deviceTree.Refresh()
 }
 
-// filterDevices recomputes the tree's contents.
-func filterDevices() {
+// groupAcc collects each group's counts and shown devices in filterDevices.
+// children has one slice per treeBuf, so the previous shape stays intact for
+// the comparison and both keep their storage.
+type groupAcc struct {
+	name          string
+	online, total int
+	children      [2][]string
+}
+
+var (
+	groups  = map[string]*groupAcc{}
+	treeBuf int // which children and order filterDevices fills
+	orders  [2][]string
+	kids    = [2]map[string][]string{{}, {}}
+)
+
+// filterDevices recomputes the tree's contents and reports whether its shape
+// (the groups or the devices in them) changed.
+func filterDevices() (reshaped bool) {
+	oldOrder, oldChildren := groupOrder, groupChildren
+	treeBuf ^= 1
+	children := kids[treeBuf]
+	clear(children)
+	for _, g := range groups {
+		g.online, g.total, g.children[treeBuf] = 0, 0, g.children[treeBuf][:0]
+	}
+	shown = slices.Grow(shown[:0], len(devices))[:len(devices)]
+	clear(shown)
+
 	q := strings.ToLower(searchEntry.Text)
-	groupChildren, shown = map[string][]string{}, map[string]bool{}
-	online, total := map[string]int{}, map[string]int{}
-	names := map[string]string{}
-	for _, d := range devices {
-		names[d.MeshID] = cmp.Or(d.Group, "Unnamed group")
-		total[d.MeshID]++
+	for i, d := range devices {
+		g := groups[d.MeshID]
+		if g == nil {
+			g = &groupAcc{}
+			groups[d.MeshID] = g
+		}
+		g.name = cmp.Or(d.Group, "Unnamed group")
+		g.total++
 		if d.Pwr != 0 {
-			online[d.MeshID]++
+			g.online++
 		}
 		if d.Pwr == 0 && !offlineChk.Checked {
 			continue
@@ -783,22 +832,33 @@ func filterDevices() {
 		if q != "" && !strings.Contains(strings.ToLower(d.DisplayName+" "+d.Name+" "+d.IP+" "+d.OS+" "+d.Group), q) {
 			continue
 		}
-		groupChildren[d.MeshID] = append(groupChildren[d.MeshID], d.Id)
-		shown[d.Id] = true
-	}
-	groupOrder = slices.Collect(maps.Keys(groupChildren))
-	slices.SortFunc(groupOrder, func(a, b string) int {
-		// Same-named groups keep a stable order, map order changes every pass.
-		return cmp.Or(strings.Compare(strings.ToLower(names[a]), strings.ToLower(names[b])), strings.Compare(a, b))
-	})
-	groupLabels = map[string][2]string{}
-	for _, id := range groupOrder {
-		groupLabels[id] = [2]string{names[id], fmt.Sprintf("%d of %d online", online[id], total[id])}
+		g.children[treeBuf] = append(g.children[treeBuf], d.Id)
+		shown[i] = true
 	}
 
-	if selectedID != "" && !shown[selectedID] {
+	order := orders[treeBuf][:0]
+	for id, g := range groups {
+		if len(g.children[treeBuf]) > 0 {
+			children[id] = g.children[treeBuf]
+			order = append(order, id)
+		}
+	}
+	slices.SortFunc(order, func(a, b string) int {
+		// Same-named groups keep a stable order, map order changes every pass.
+		return cmp.Or(strings.Compare(strings.ToLower(groups[a].name), strings.ToLower(groups[b].name)), strings.Compare(a, b))
+	})
+	orders[treeBuf] = order
+	groupLabels = map[string][2]string{}
+	for _, id := range order {
+		g := groups[id]
+		groupLabels[id] = [2]string{g.name, fmt.Sprintf("%d of %d online", g.online, g.total)}
+	}
+	groupOrder, groupChildren = order, children
+
+	if _, ok := shownDevice(selectedID); selectedID != "" && !ok {
 		deviceTree.UnselectAll()
 	}
+	return !slices.Equal(oldOrder, groupOrder) || !maps.EqualFunc(oldChildren, groupChildren, slices.Equal)
 }
 
 // disabledIcons holds the greyed out icons, rows ask for them on every update.

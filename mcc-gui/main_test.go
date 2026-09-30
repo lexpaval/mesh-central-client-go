@@ -115,6 +115,11 @@ func TestNodeEventsUpdateInPlace(t *testing.T) {
 	if devices[deviceIdx["b"]].Pwr != 0 {
 		t.Fatal("offline event not applied")
 	}
+	for o, id := range treeRows {
+		if r, ok := o.(*deviceRow); ok && id == "b" && r.id == "b" && !r.text.Muted {
+			t.Fatal("row of the offline device not redrawn")
+		}
+	}
 	event("nodeconnect", "b", 1)
 
 	// A rename keeps the live state and moves the device, an add inserts one,
