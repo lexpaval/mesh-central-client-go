@@ -2,9 +2,11 @@ package main
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
@@ -143,4 +145,35 @@ func TestNodeEventsUpdateInPlace(t *testing.T) {
 	if selectedID != "" {
 		t.Fatal("removed device still selected")
 	}
+}
+
+func TestLogKeepsNewestLines(t *testing.T) {
+	test.NewTempApp(t)
+	win = test.NewTempWindow(t, buildUI())
+	win.Resize(fyne.NewSize(1100, 700))
+	logLines = nil
+	check := func() {
+		t.Helper()
+		last := false
+		for l, id := range logRows {
+			if l.Text != logLines[id] {
+				t.Fatalf("row %d shows %q, want %q", id, l.Text, logLines[id])
+			}
+			last = last || id == len(logLines)-1
+		}
+		if !last {
+			t.Fatal("newest line not shown")
+		}
+	}
+
+	// Past logMax the rows are relabeled in place instead of refreshed.
+	for i := range logMax + 10 {
+		logf("line %d", i)
+	}
+	if len(logLines) != logMax || !strings.HasSuffix(logLines[0], "line 10") {
+		t.Fatalf("%d lines, first %q", len(logLines), logLines[0])
+	}
+	check()
+	logf("newest")
+	check()
 }

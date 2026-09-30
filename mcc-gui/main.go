@@ -65,8 +65,7 @@ var (
 	shown         map[string]bool // device IDs in the tree
 	routes        []*activeRoute
 	logLines      []string
-	logLabel      *widget.Label
-	logScroll     *container.Scroll
+	logList       *widget.List
 	statusLabel   *widget.Label
 	profileSel    *widget.Select
 	profileBar    []fyne.CanvasObject // hidden while connected, the status shows the server
@@ -357,14 +356,27 @@ func buildUI() fyne.CanvasObject {
 	tabScroll = container.NewHScroll(tabBar)
 	right := container.NewBorder(container.NewVBox(tabScroll, widget.NewSeparator()), nil, nil, nil, tabContent)
 
-	logLabel = widget.NewLabel("")
-	logLabel.Selectable = true
-	logLabel.TextStyle.Monospace = true
-	logScroll = container.NewVScroll(logLabel)
+	logList = widget.NewList(
+		func() int { return len(logLines) },
+		func() fyne.CanvasObject {
+			l := widget.NewLabel("")
+			l.Selectable = true
+			l.TextStyle.Monospace = true
+			l.Truncation = fyne.TextTruncateEllipsis
+			return container.New(logRowLayout{}, l)
+		},
+		func(id widget.ListItemID, o fyne.CanvasObject) {
+			l := o.(*fyne.Container).Objects[0].(*widget.Label)
+			logRows[l] = id
+			l.SetText(logLines[id])
+		})
+	logList.HideSeparators = true
 
 	hsplit := container.NewHSplit(left, right)
 	hsplit.Offset = 0.45
-	vsplit := container.NewVSplit(hsplit, logScroll)
+	// The margin the single log label had, so the first and last lines clear the edges.
+	pad := theme.Size(theme.SizeNameInnerPadding)
+	vsplit := container.NewVSplit(hsplit, container.New(layout.NewCustomPaddedLayout(pad, pad, 0, 0), logList))
 	vsplit.Offset = 0.78
 	setConnected(false)
 	return container.NewBorder(top, nil, nil, nil, vsplit)
@@ -1478,7 +1490,9 @@ var pendingLog struct {
 	lines []string
 }
 
-// logf is safe from any goroutine, the log view keeps the last 500 lines.
+const logMax = 500
+
+// logf is safe from any goroutine, the log view keeps the last logMax lines.
 func logf(format string, args ...any) {
 	line := time.Now().Format("15:04:05 ") + fmt.Sprintf(format, args...)
 	pendingLog.Lock()
@@ -1495,10 +1509,45 @@ func flushLog() {
 	lines := pendingLog.lines
 	pendingLog.lines = nil
 	pendingLog.Unlock()
+	grew := len(logLines) < logMax
 	logLines = append(logLines, lines...)
-	if len(logLines) > 500 {
-		logLines = slices.Clone(logLines[len(logLines)-500:])
+	if len(logLines) > logMax {
+		logLines = slices.Clone(logLines[len(logLines)-logMax:])
 	}
-	logLabel.SetText(strings.Join(logLines, "\n"))
-	logScroll.ScrollToBottom()
+	// List.Refresh builds a throwaway template row that Fyne frees only once
+	// the window repaints, so it's only used while the log grows. Once full,
+	// every line moves up one row and the shown rows are relabeled in place.
+	// Rows the list dropped stay in logRows, it's reset once that adds up.
+	if grew || len(logRows) > 100 {
+		clear(logRows)
+		logList.Refresh()
+	} else {
+		for l, id := range logRows {
+			l.SetText(logLines[id])
+		}
+	}
+	logList.ScrollToBottom()
+}
+
+// logRows maps the log's rows to the line each shows.
+var logRows = map[*widget.Label]widget.ListItemID{}
+
+// logRowLayout spaces log lines like the lines of one label: a Label pads
+// itself like a standalone widget and the list adds padding between rows.
+// The label's padding overlaps the neighbouring rows, it holds no text.
+type logRowLayout struct{}
+
+func (logRowLayout) MinSize(objs []fyne.CanvasObject) fyne.Size {
+	th := fyne.CurrentApp().Settings().Theme()
+	h := fyne.MeasureText("M", th.Size(theme.SizeNameText), objs[0].(*widget.Label).TextStyle).Height
+	return fyne.NewSize(objs[0].MinSize().Width, h-th.Size(theme.SizeNamePadding))
+}
+
+// Layout puts the bottom of the text on the row's, so the overlap is the
+// headroom above the line and the last row isn't cut off.
+func (logRowLayout) Layout(objs []fyne.CanvasObject, s fyne.Size) {
+	h := objs[0].MinSize().Height
+	pad := fyne.CurrentApp().Settings().Theme().Size(theme.SizeNameInnerPadding)
+	objs[0].Move(fyne.NewPos(0, s.Height-h+pad))
+	objs[0].Resize(fyne.NewSize(s.Width, h))
 }
