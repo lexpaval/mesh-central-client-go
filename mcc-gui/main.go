@@ -78,8 +78,6 @@ var (
 	routeList     *widget.List
 	deviceBtns    []*widget.Button
 	reloadTimer   *time.Timer // pending debounced device list reload
-	// Pending full tree refresh after event updates changed its shape.
-	treeRefreshTimer *time.Timer
 	// A reload is running, and another was asked for meanwhile. A large
 	// server takes seconds to send the list, overlapping loads pile up.
 	reloading, reloadAgain bool
@@ -259,34 +257,28 @@ func buildUI() fyne.CanvasObject {
 		},
 		func(branch bool) fyne.CanvasObject {
 			if branch {
-				text := widget.NewRichText(
-					&widget.TextSegment{Style: widget.RichTextStyle{Inline: true, TextStyle: fyne.TextStyle{Bold: true}}},
-					&widget.TextSegment{Style: widget.RichTextStyle{Inline: true, SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
-				text.Truncation = fyne.TextTruncateEllipsis
-				return text
+				return newRowText(true)
 			}
 			return newDeviceRow()
 		},
 		func(id widget.TreeNodeID, branch bool, o fyne.CanvasObject) {
 			if branch {
-				text := o.(*widget.RichText)
-				text.Segments[0].(*widget.TextSegment).Text = groupLabels[id][0]
-				text.Segments[1].(*widget.TextSegment).Text = "  " + groupLabels[id][1]
+				text := o.(*rowText)
+				text.Title, text.Sub = groupLabels[id][0], "  "+groupLabels[id][1]
 				text.Refresh()
 				return
 			}
 			d, _ := shownDevice(id)
 			row := o.(*deviceRow)
 			row.id = id
-			img, text, title, sub := rowParts(row.content)
-			title.Text = deviceName(d)
-			sub.Text = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
+			img, text := rowParts(row.content)
+			text.Title = deviceName(d)
+			text.Sub = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
+			text.Muted = d.Pwr == 0
 			img.Resource = osIcon(d.OS)
-			title.Style.ColorName = theme.ColorNameForeground
 			if d.Pwr == 0 {
-				title.Style.ColorName = theme.ColorNamePlaceHolder
 				img.Resource = disabledIcon(img.Resource)
-				sub.Text = "offline · " + sub.Text
+				text.Sub = "offline · " + text.Sub
 			}
 			img.Refresh()
 			text.Refresh()
@@ -337,7 +329,7 @@ func buildUI() fyne.CanvasObject {
 	}
 	left := container.NewBorder(
 		container.NewVBox(searchEntry, offlineChk), container.NewHBox(deviceBtns[0], deviceBtns[1], deviceBtns[2], deviceBtns[3], deviceBtns[4]),
-		nil, nil, container.NewThemeOverride(deviceTree, treeTheme))
+		nil, nil, deviceTree)
 
 	routeList = widget.NewList(
 		func() int { return len(routes) },
@@ -355,7 +347,7 @@ func buildUI() fyne.CanvasObject {
 		})
 	// A hand-made tab strip, Fyne's DocTabs puts a close button on every tab
 	// and Routes must not have one.
-	routes := &tab{pane: container.NewThemeOverride(routeList, compactTheme)}
+	routes := &tab{pane: routeList}
 	routes.btn = widget.NewButtonWithIcon("Routes", icons["network-wired"], func() { selectTab(routes) })
 	routes.head = routes.btn
 	tabList = []*tab{routes}
@@ -437,10 +429,6 @@ func disconnect() {
 	if reloadTimer != nil {
 		reloadTimer.Stop()
 		reloadTimer = nil
-	}
-	if treeRefreshTimer != nil {
-		treeRefreshTimer.Stop()
-		treeRefreshTimer = nil
 	}
 	for _, ar := range routes {
 		ar.route.Close()
@@ -583,13 +571,13 @@ func bindRouteRow(o fyne.CanvasObject, ar *activeRoute) {
 	case 5900:
 		svc, res = "VNC", icons["display"]
 	}
-	img, text, title, sub := rowParts(objs[0])
+	img, text := rowParts(objs[0])
 	img.Resource = res
-	title.Text = ar.device + " · " + svc
-	sub.Text = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
+	text.Title = ar.device + " · " + svc
+	text.Sub = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
 	if i, ok := deviceIdx[r.NodeID]; ok && devices[i].Pwr == 0 {
 		img.Resource = disabledIcon(res)
-		sub.Text += " · device offline"
+		text.Sub += " · device offline"
 	}
 	img.Refresh()
 	text.Refresh()
@@ -625,10 +613,7 @@ var pendingEvents struct {
 	armed  bool // a flush is scheduled
 }
 
-const (
-	eventFlushDelay  = time.Second
-	treeRefreshDelay = 30 * time.Second
-)
+const eventFlushDelay = time.Second
 
 func onNodeEvent(e meshcentral.NodeEvent) {
 	pendingEvents.Lock()
@@ -706,35 +691,17 @@ func flushNodeEvents() {
 	}
 	// Fyne's Tree.Refresh builds throwaway template rows that are only freed
 	// once the window repaints, which a minimized window never does, so the
-	// changed rows are redrawn one by one. That lays out rows that appeared
-	// or went away too, only the scroll extent waits for a full refresh.
-	reshaped := filterDevices()
+	// changed rows are redrawn one by one. That also lays out rows that
+	// appeared or went away, the canvas fits the scroll extent on its next paint.
+	filterDevices()
 	if len(touched) > 50 {
 		refreshTree()
 	} else {
 		for id := range touched {
 			deviceTree.RefreshItem(id)
 		}
-		if reshaped {
-			scheduleTreeRefresh()
-		}
 	}
 	refreshRouteRows()
-}
-
-// scheduleTreeRefresh fully refreshes the tree within treeRefreshDelay.
-func scheduleTreeRefresh() {
-	if treeRefreshTimer != nil {
-		return
-	}
-	treeRefreshTimer = time.AfterFunc(treeRefreshDelay, func() {
-		fyne.Do(func() {
-			treeRefreshTimer = nil
-			if connected {
-				refreshTree()
-			}
-		})
-	})
 }
 
 // setDevices replaces the device list and rebuilds the tree.
@@ -779,10 +746,8 @@ func applyFilter() {
 	refreshTree()
 }
 
-// filterDevices recomputes the tree's contents and reports whether its shape
-// (the groups or the devices in them) changed.
-func filterDevices() (reshaped bool) {
-	oldOrder, oldChildren := groupOrder, groupChildren
+// filterDevices recomputes the tree's contents.
+func filterDevices() {
 	q := strings.ToLower(searchEntry.Text)
 	groupChildren, shown = map[string][]string{}, map[string]bool{}
 	online, total := map[string]int{}, map[string]int{}
@@ -815,7 +780,6 @@ func filterDevices() (reshaped bool) {
 	if selectedID != "" && !shown[selectedID] {
 		deviceTree.UnselectAll()
 	}
-	return !slices.Equal(oldOrder, groupOrder) || !maps.EqualFunc(oldChildren, groupChildren, slices.Equal)
 }
 
 // refreshTree redraws the whole tree, a search opens every group with a match.
@@ -837,36 +801,6 @@ func disabledIcon(r fyne.Resource) fyne.Resource {
 		disabledIcons[r] = d
 	}
 	return d
-}
-
-// sizeTheme overrides some sizes for a subtree (container.NewThemeOverride),
-// everything else comes from the active theme. Apply one per list, never per
-// row: Fyne caches a full set of parsed fonts per override and never frees it.
-type sizeTheme map[fyne.ThemeSizeName]float32
-
-// compactTheme tightens RichText padding in the route list, which otherwise
-// pads each row as much as a standalone paragraph.
-var compactTheme = sizeTheme{theme.SizeNameInnerPadding: 3, theme.SizeNameLineSpacing: 1}
-
-// treeTheme is compactTheme for the device tree, plus a smaller indent, which
-// Fyne derives from the inline icon size and padding (the expand arrow too).
-var treeTheme = sizeTheme{theme.SizeNameInnerPadding: 3, theme.SizeNameLineSpacing: 1,
-	theme.SizeNameInlineIcon: 14, theme.SizeNamePadding: 2}
-
-func (sizeTheme) Color(n fyne.ThemeColorName, v fyne.ThemeVariant) color.Color {
-	return fyne.CurrentApp().Settings().Theme().Color(n, v)
-}
-func (sizeTheme) Font(s fyne.TextStyle) fyne.Resource {
-	return fyne.CurrentApp().Settings().Theme().Font(s)
-}
-func (sizeTheme) Icon(n fyne.ThemeIconName) fyne.Resource {
-	return fyne.CurrentApp().Settings().Theme().Icon(n)
-}
-func (t sizeTheme) Size(n fyne.ThemeSizeName) float32 {
-	if v, ok := t[n]; ok {
-		return v
-	}
-	return fyne.CurrentApp().Settings().Theme().Size(n)
 }
 
 // deviceRow is a device in the tree. Fyne's tree has no double-click, so the
@@ -1025,23 +959,116 @@ func selectTab(sel *tab) {
 }
 
 // twoLineRow is the list item template shared by devices and routes: an
-// icon beside a bold title and a smaller muted line, both ellipsized.
+// icon beside a rowText.
 func twoLineRow() fyne.CanvasObject {
 	img := canvas.NewImageFromResource(nil)
 	img.FillMode = canvas.ImageFillContain
 	img.SetMinSize(fyne.NewSquareSize(18))
-	text := widget.NewRichText(
-		&widget.TextSegment{Style: widget.RichTextStyle{TextStyle: fyne.TextStyle{Bold: true}}},
-		&widget.TextSegment{Style: widget.RichTextStyle{SizeName: theme.SizeNameCaptionText, ColorName: theme.ColorNamePlaceHolder}})
-	text.Truncation = fyne.TextTruncateEllipsis
-	return container.NewBorder(nil, nil, container.NewPadded(img), nil, text)
+	return container.NewBorder(nil, nil, container.NewPadded(img), nil, newRowText(false))
 }
 
-func rowParts(o fyne.CanvasObject) (img *canvas.Image, text *widget.RichText, title, sub *widget.TextSegment) {
+func rowParts(o fyne.CanvasObject) (*canvas.Image, *rowText) {
 	objs := o.(*fyne.Container).Objects
-	text = objs[0].(*widget.RichText)
-	img = objs[1].(*fyne.Container).Objects[0].(*canvas.Image)
-	return img, text, text.Segments[0].(*widget.TextSegment), text.Segments[1].(*widget.TextSegment)
+	return objs[1].(*fyne.Container).Objects[0].(*canvas.Image), objs[0].(*rowText)
+}
+
+// rowText is a bold title over a smaller muted line (after it when inline),
+// both ellipsized. RichText pads like a paragraph, making it compact took a
+// ThemeOverride, whose rows Fyne leaks on every list or tree Refresh.
+type rowText struct {
+	widget.BaseWidget
+	Title, Sub string
+	Muted      bool // title in the placeholder color, for offline devices
+	inline     bool
+}
+
+// Padding around and between the lines, RichText's is 6 and 3.
+const rowPad, rowLineGap = 3, 1
+
+func newRowText(inline bool) *rowText {
+	t := &rowText{inline: inline}
+	t.ExtendBaseWidget(t)
+	return t
+}
+
+func (t *rowText) CreateRenderer() fyne.WidgetRenderer {
+	r := &rowTextRenderer{t: t, title: canvas.NewText("", nil), sub: canvas.NewText("", nil)}
+	r.title.TextStyle.Bold = true
+	r.Refresh()
+	return r
+}
+
+type rowTextRenderer struct {
+	t          *rowText
+	title, sub *canvas.Text
+}
+
+func (r *rowTextRenderer) Destroy()                     {}
+func (r *rowTextRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.title, r.sub} }
+
+func (r *rowTextRenderer) MinSize() fyne.Size {
+	h := fyne.MeasureText("M", r.title.TextSize, r.title.TextStyle).Height
+	if !r.t.inline {
+		h += rowLineGap + fyne.MeasureText("M", r.sub.TextSize, r.sub.TextStyle).Height
+	}
+	return fyne.NewSize(0, h+2*rowPad)
+}
+
+func (r *rowTextRenderer) Refresh() {
+	th, v := r.t.Theme(), fyne.CurrentApp().Settings().ThemeVariant()
+	r.title.TextSize, r.sub.TextSize = th.Size(theme.SizeNameText), th.Size(theme.SizeNameCaptionText)
+	r.title.Color, r.sub.Color = th.Color(theme.ColorNameForeground, v), th.Color(theme.ColorNamePlaceHolder, v)
+	if r.t.Muted {
+		r.title.Color = r.sub.Color
+	}
+	r.Layout(r.t.Size())
+	r.title.Refresh()
+	r.sub.Refresh()
+}
+
+// setText sets a line's text, redrawing it if a resize changed its ellipsis.
+func setText(t *canvas.Text, s string) {
+	if t.Text != s {
+		t.Text = s
+		t.Refresh()
+	}
+}
+
+func (r *rowTextRenderer) Layout(s fyne.Size) {
+	w := s.Width - 2*rowPad
+	setText(r.title, ellipsize(r.t.Title, w, r.title.TextSize, r.title.TextStyle))
+	ts := fyne.MeasureText(r.title.Text, r.title.TextSize, r.title.TextStyle)
+	r.title.Move(fyne.NewPos(rowPad, rowPad))
+	r.title.Resize(ts)
+	pos := fyne.NewPos(rowPad, rowPad+ts.Height+rowLineGap)
+	if r.t.inline {
+		w -= ts.Width
+	}
+	setText(r.sub, ellipsize(r.t.Sub, w, r.sub.TextSize, r.sub.TextStyle))
+	ss := fyne.MeasureText(r.sub.Text, r.sub.TextSize, r.sub.TextStyle)
+	if r.t.inline { // bottoms aligned, close to a shared baseline
+		pos = fyne.NewPos(rowPad+ts.Width, rowPad+ts.Height-ss.Height)
+	}
+	r.sub.Move(pos)
+	r.sub.Resize(ss)
+}
+
+// ellipsize shortens s to fit width, ending it with "…".
+func ellipsize(s string, width, size float32, style fyne.TextStyle) string {
+	if fyne.MeasureText(s, size, style).Width <= width {
+		return s
+	}
+	runes := []rune(s)
+	lo, hi := 0, len(runes) // longest prefix that fits with the ellipsis
+	for lo < hi {
+		m := (lo + hi + 1) / 2
+		if fyne.MeasureText(string(runes[:m])+"…", size, style).Width <= width {
+			lo = m
+		} else {
+			hi = m - 1
+		}
+	}
+	return string(runes[:lo]) + "…"
 }
 
 func osIcon(desc string) fyne.Resource {

@@ -109,8 +109,8 @@ func TestNodeEventsUpdateInPlace(t *testing.T) {
 
 	// Going offline with offline devices shown only redraws rows.
 	event("nodeconnect", "b", 0)
-	if devices[deviceIdx["b"]].Pwr != 0 || treeRefreshTimer != nil {
-		t.Fatalf("pwr=%d, full refresh scheduled=%v", devices[deviceIdx["b"]].Pwr, treeRefreshTimer != nil)
+	if devices[deviceIdx["b"]].Pwr != 0 {
+		t.Fatal("offline event not applied")
 	}
 	event("nodeconnect", "b", 1)
 
@@ -128,9 +128,6 @@ func TestNodeEventsUpdateInPlace(t *testing.T) {
 	if reloadTimer != nil {
 		t.Fatal("event carrying the device scheduled a reload")
 	}
-	if treeRefreshTimer == nil {
-		t.Fatal("new rows scheduled no full refresh for the scroll extent")
-	}
 	if groupLabels["m"][1] != "2 of 3 online" {
 		t.Fatalf("group label %q", groupLabels["m"][1])
 	}
@@ -145,9 +142,5 @@ func TestNodeEventsUpdateInPlace(t *testing.T) {
 	event("removenode", "b", 0)
 	if selectedID != "" {
 		t.Fatal("removed device still selected")
-	}
-	disconnect()
-	if treeRefreshTimer != nil {
-		t.Fatal("disconnect left the tree refresh scheduled")
 	}
 }
