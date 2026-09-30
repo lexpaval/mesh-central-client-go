@@ -9,7 +9,10 @@ import (
 
 	"fyne.io/fyne/v2"
 	"fyne.io/fyne/v2/test"
+	"github.com/spf13/viper"
+	"github.com/zalando/go-keyring"
 
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
@@ -211,5 +214,32 @@ func TestSearchKeepsCollapsedGroups(t *testing.T) {
 	setDevices(slices.Clone(devs))
 	if deviceTree.IsBranchOpen("mesh//0") {
 		t.Fatal("collapsed group reopened by a reload")
+	}
+}
+
+func TestProfileSelection(t *testing.T) {
+	keyring.MockInit()
+	test.NewTempApp(t)
+	viper.Set("profiles", []map[string]any{{"name": "cli"}, {"name": "gui"}})
+	viper.Set("default_profile", "cli")
+	t.Cleanup(viper.Reset)
+	win = test.NewTempWindow(t, buildUI())
+
+	refreshProfiles()
+	if profileSel.Selected != "cli" {
+		t.Fatalf("selected %q with nothing remembered, want the CLI default", profileSel.Selected)
+	}
+	fyne.CurrentApp().Preferences().SetString("lastProfile", "gui")
+	refreshProfiles()
+	if profileSel.Selected != "gui" {
+		t.Fatalf("selected %q, want the last connected profile", profileSel.Selected)
+	}
+	fyne.CurrentApp().Preferences().SetString("lastProfile", "removed")
+	refreshProfiles()
+	if profileSel.Selected != "cli" {
+		t.Fatalf("selected %q for a removed last profile, want the CLI default", profileSel.Selected)
+	}
+	if p, ok := config.GetProfile("gui"); !ok || p.Name != "gui" || config.GetDefaultProfileName() != "cli" {
+		t.Fatalf("GetProfile = %+v %v, default %q", p, ok, config.GetDefaultProfileName())
 	}
 }

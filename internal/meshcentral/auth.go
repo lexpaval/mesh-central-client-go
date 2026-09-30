@@ -37,8 +37,12 @@ func (e authError) Error() string {
 // infinite silent retry loop.
 const maxControlReconnectAttempts = 8
 
-func StartSocket() error {
-	p := config.GetDefaultProfile()
+// StartSocket logs in with the default profile, see StartSocketAs.
+func StartSocket() error { return StartSocketAs(config.GetDefaultProfile()) }
+
+// StartSocketAs logs in with p and keeps the control socket open, reconnecting
+// after drops.
+func StartSocketAs(p config.Profile) error {
 	settings.profileName = p.Name
 
 	// A remembered 2FA cookie stands in for the token until the server

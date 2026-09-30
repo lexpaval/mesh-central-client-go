@@ -59,22 +59,26 @@ func GetProfiles() []Profile {
 }
 
 func GetDefaultProfile() Profile {
+	p, _ := GetProfile(viper.GetString("default_profile"))
+	return p
+}
+
+// GetProfile returns the profile called name, with its password.
+func GetProfile(name string) (Profile, bool) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
-	defaultProfile := viper.GetString("default_profile")
-
 	for _, p := range profiles {
-		if p.Name == defaultProfile {
+		if p.Name == name {
 			// Load password from keyring
 			if pwd, err := p.GetPassword(); err == nil {
 				p.Password = pwd
 			}
-			return p
+			return p, true
 		}
 	}
 
-	return Profile{}
+	return Profile{}, false
 }
 
 func GetDefaultProfileName() string {

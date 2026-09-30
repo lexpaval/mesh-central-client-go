@@ -384,10 +384,12 @@ func connect(insecure bool) {
 	profileSel.Disable()
 	statusLabel.SetText("Connecting to " + name + "...")
 	go func() {
-		config.SetDefaultProfile(name, false)
+		// Not through the default profile, that's the CLI's and would be
+		// saved with the next profile edit.
+		p, _ := config.GetProfile(name)
 		meshcentral.ApplySettings(insecure, false)
 		meshcentral.ApplyAuth("", false, false)
-		err := meshcentral.StartSocket()
+		err := meshcentral.StartSocketAs(p)
 		var id int
 		fyne.DoAndWait(func() {
 			// Disabled only while connecting, once connected the profile bar is hidden.
@@ -402,7 +404,7 @@ func connect(insecure bool) {
 			session.id++
 			id = session.id
 			session.profile, session.insecure, session.loading = name, insecure, true
-			p := config.GetDefaultProfile()
+			fyne.CurrentApp().Preferences().SetString("lastProfile", name)
 			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
 			logf("Connected to %s as %s (profile %s), loading devices", p.Server, p.Username, name)
 		})
@@ -523,9 +525,14 @@ func refreshProfiles() {
 		names = append(names, p.Name)
 	}
 	profileSel.SetOptions(names)
-	if def := config.GetDefaultProfileName(); slices.Contains(names, def) {
-		profileSel.SetSelected(def)
-	} else if len(names) > 0 {
+	// The last one connected to, then the CLI's default.
+	for _, n := range []string{fyne.CurrentApp().Preferences().String("lastProfile"), config.GetDefaultProfileName()} {
+		if slices.Contains(names, n) {
+			profileSel.SetSelected(n)
+			return
+		}
+	}
+	if len(names) > 0 {
 		profileSel.SetSelected(names[0])
 	} else {
 		profileSel.ClearSelected()
