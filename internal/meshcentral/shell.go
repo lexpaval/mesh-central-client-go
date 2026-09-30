@@ -53,7 +53,7 @@ func dialShellTunnel(nodeID string) (*websocket.Conn, error) {
 // runShellSession pipes one tunnel session between input and out. Returns
 // (inputClosed, err): inputClosed means the user ended it, err is set when
 // the tunnel dropped unexpectedly.
-func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, out io.Writer, size func() (int, int), resize <-chan struct{}) (bool, error) {
+func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, out io.Writer, size func() (int, int), resize <-chan struct{}, recorded func()) (bool, error) {
 	if settings.debug {
 		fmt.Fprintln(os.Stderr, "Websocket connected")
 	}
@@ -106,6 +106,9 @@ func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, 
 			if msgType == websocket.BinaryMessage {
 				out.Write(msg)
 			} else if string(msg) == "c" || string(msg) == "cr" { // "cr" when the session is recorded
+				if string(msg) == "cr" && recorded != nil {
+					recorded()
+				}
 				sendOptions()
 				if err := write(websocket.TextMessage, []byte(fmt.Sprintf("%d", protocol))); err != nil {
 					sessErr = err
@@ -148,8 +151,9 @@ const maxShellReconnectAttempts = 8
 // default shell, 6 PowerShell on Windows agents) between in and out,
 // redialing if the tunnel drops. It returns once in hits EOF, the remote shell
 // exits, or the session can't be restored. size reports the terminal size,
-// resize (may be nil) signals that it changed.
-func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size func() (cols, rows int), resize <-chan struct{}) error {
+// resize (may be nil) signals that it changed. recorded (may be nil) is
+// called when the server says it records the session, again on reconnects.
+func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size func() (cols, rows int), resize <-chan struct{}, recorded func()) error {
 	done := make(chan struct{})
 	defer close(done)
 
@@ -181,7 +185,7 @@ func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size fun
 			return fmt.Errorf("unable to connect to server: %w", err)
 		}
 
-		inputClosed, err := runShellSession(wsConn, protocol, input, out, size, resize)
+		inputClosed, err := runShellSession(wsConn, protocol, input, out, size, resize, recorded)
 		if inputClosed || err == nil {
 			return nil
 		}
@@ -220,7 +224,11 @@ func StartShell(nodeID string, protocol int) {
 		cols, rows, _ := term.GetSize(int(os.Stdout.Fd()))
 		return cols, rows
 	}
-	if err := RunShell(nodeID, protocol, in, os.Stdout, size, nil); err != nil {
+	var once sync.Once
+	recorded := func() {
+		once.Do(func() { fmt.Fprint(os.Stderr, "\r\n[recorded] The server records this session\r\n") })
+	}
+	if err := RunShell(nodeID, protocol, in, os.Stdout, size, nil, recorded); err != nil {
 		fmt.Fprintf(os.Stderr, "\r\n%v\r\n", err)
 	}
 }

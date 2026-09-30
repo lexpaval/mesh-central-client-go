@@ -582,6 +582,9 @@ func bindRouteRow(o fyne.CanvasObject, ar *activeRoute) {
 		text.Icon = disabledIcon(res)
 		text.Sub += " · device offline"
 	}
+	if r.Recorded() {
+		text.Sub += " · recorded"
+	}
 	text.Refresh()
 	if openCmd(r) == nil {
 		open.Hide()
@@ -948,6 +951,23 @@ func openShell(d meshcentral.Device, protocol int) {
 		return cols, rows
 	}
 
+	title := name
+	if protocol == 6 {
+		title += " · PowerShell"
+	}
+	tb := &tab{pane: t}
+	tb.btn = widget.NewButtonWithIcon(title, icons["terminal"], func() { selectTab(tb) })
+	recorded := false
+	onRecorded := func() {
+		fyne.Do(func() {
+			if !recorded {
+				recorded = true
+				tb.btn.SetText(title + " · recorded")
+				logf("%s: the server records this shell", name)
+			}
+		})
+	}
+
 	// Shutdown order matters: the terminal only stops reading on EOF (a
 	// closed reader makes it retry forever), so closing the tab ends the
 	// input, RunShell then closes the output writer, and the reader is only
@@ -957,7 +977,7 @@ func openShell(d meshcentral.Device, protocol int) {
 		outR.Close()
 	}()
 	go func() {
-		err := meshcentral.RunShell(d.Id, protocol, inR, outW, size, resize)
+		err := meshcentral.RunShell(d.Id, protocol, inR, outW, size, resize, onRecorded)
 		msg := "\r\n[session closed]\r\n"
 		if err != nil {
 			msg = fmt.Sprintf("\r\n[%v]\r\n", err)
@@ -967,12 +987,6 @@ func openShell(d meshcentral.Device, protocol int) {
 		logf("%s: shell closed", name)
 	}()
 
-	title := name
-	if protocol == 6 {
-		title += " · PowerShell"
-	}
-	tb := &tab{pane: t}
-	tb.btn = widget.NewButtonWithIcon(title, icons["terminal"], func() { selectTab(tb) })
 	closeBtn := widget.NewButtonWithIcon("", icons["xmark"], nil)
 	closeBtn.Importance = widget.LowImportance
 	tb.head = container.New(layout.NewCustomPaddedHBoxLayout(0), tb.btn, closeBtn)

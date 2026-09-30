@@ -11,6 +11,7 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -30,6 +31,7 @@ type Route struct {
 	mu       sync.Mutex
 	conns    map[net.Conn]struct{}
 	closed   bool
+	recorded atomic.Bool
 }
 
 // Start binds the local listener and accepts in the background until Close.
@@ -79,6 +81,9 @@ func (r *Route) Close() {
 	r.mu.Unlock()
 }
 
+// Recorded reports whether the server has recorded a connection on this route.
+func (r *Route) Recorded() bool { return r.recorded.Load() }
+
 // Active returns the number of connections currently tunnelled.
 func (r *Route) Active() int {
 	r.mu.Lock()
@@ -116,7 +121,11 @@ func (r *Route) handleConn(conn net.Conn) {
 	if settings.debug {
 		fmt.Fprintln(r.Out, "Websocket connected")
 	}
-	cause := pumpBidirectional(wsConn, conn, conn, r.Out)
+	cause := pumpBidirectional(wsConn, conn, conn, r.Out, func() {
+		if r.recorded.CompareAndSwap(false, true) {
+			fmt.Fprintln(r.Out, "The server records the connections on this route")
+		}
+	})
 	if errors.Is(cause, errTunnelNotEstablished) || errors.Is(cause, errTunnelNoData) {
 		fmt.Fprintf(r.Out, "Tunnel to remote port %d failed: %v\n", r.RemotePort, cause)
 	}
@@ -176,8 +185,9 @@ var (
 // (nil for a graceful WebSocket close or a clean EOF on src, or one of the
 // errTunnel* errors if the relay closes before any data flowed). It only closes
 // wsConn itself; closing src/dst is the caller's responsibility, since some
-// callers (stdin/stdout) must not be closed.
-func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, debugOut io.Writer) error {
+// callers (stdin/stdout) must not be closed. recorded (may be nil) is called
+// if the relay says it records the tunnel.
+func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, debugOut io.Writer, recorded func()) error {
 	done := make(chan struct{})
 	var once sync.Once
 	var cause error
@@ -213,6 +223,9 @@ func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, deb
 			}
 			if messageType == websocket.TextMessage && (string(message) == "c" || string(message) == "cr") {
 				established = true
+				if string(message) == "cr" && recorded != nil {
+					recorded()
+				}
 			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
 				established, gotData = true, true
@@ -281,7 +294,7 @@ func StartProxyRouter(r *Route) {
 		fmt.Fprintf(os.Stderr, "Proxy WebSocket connected\n")
 	}
 
-	cause := pumpBidirectional(wsConn, os.Stdin, os.Stdout, os.Stderr)
+	cause := pumpBidirectional(wsConn, os.Stdin, os.Stdout, os.Stderr, nil)
 
 	if cause != nil {
 		fmt.Fprintf(os.Stderr, "\nProxy tunnel to MeshCentral lost: %v\n", cause)
