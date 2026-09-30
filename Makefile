@@ -1,4 +1,4 @@
-.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots qt qt-test qt-shots qt-linux qt-windows qt-macos qt-all qt-release clean version
+.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots qt qt-test qt-shots qt-linux qt-windows qt-macos qt-all qt-release gui-bench clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -167,6 +167,14 @@ qt-release:
 	$(call QT_RUN,windows) windows arm64 package
 	$(call QT_RUN,macos-arm64) macos arm64
 	$(call QT_RUN,macos-x86_64) macos x86_64
+
+# Compares the CPU and memory use of the Fyne and Qt GUIs on this desktop
+# (Linux), each against the same fake server with thousands of devices, a
+# stream of events and shells redrawing like top (tools/guibench). Their
+# windows open in turn. BENCH_FLAGS passes flags, see go run ./tools/guibench -h.
+gui-bench: qt
+	test -x dist/mcc-gui-linux-amd64-$(VERSION) || $(MAKE) gui-linux
+	go run ./tools/guibench $(BENCH_FLAGS) dist/mcc-gui-linux-amd64-$(VERSION) dist/mcc-qt
 
 build-all:
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64-$(VERSION) .

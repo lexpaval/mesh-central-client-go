@@ -142,6 +142,7 @@ func main() {
 		showError(fmt.Errorf("unable to read %s: %w", config.DefaultConfigPath, err))
 	} else {
 		refreshProfiles()
+		benchStart()
 	}
 	qt.QApplication_Exec()
 }
@@ -528,6 +529,7 @@ func connect(insecure bool) {
 			clear(collapsed)
 			setDevices(devs)
 			logf("Loaded %d devices", len(devs))
+			benchLoaded()
 		})
 	}()
 }

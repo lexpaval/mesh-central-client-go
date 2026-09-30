@@ -190,6 +190,7 @@ func main() {
 		dialog.ShowError(fmt.Errorf("unable to read %s: %w", config.DefaultConfigPath, err), win)
 	} else {
 		refreshProfiles()
+		benchStart()
 	}
 
 	win.SetOnClosed(func() {
@@ -427,6 +428,7 @@ func connect(insecure bool) {
 			setDevices(devs)
 			deviceTree.OpenAllBranches()
 			logf("Loaded %d devices", len(devs))
+			benchLoaded()
 		})
 	}()
 }
