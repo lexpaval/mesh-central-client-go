@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -176,4 +177,34 @@ func TestLogKeepsNewestLines(t *testing.T) {
 	check()
 	logf("newest")
 	check()
+}
+
+func TestSearchKeepsCollapsedGroups(t *testing.T) {
+	test.NewTempApp(t)
+	win = test.NewTempWindow(t, buildUI())
+	setConnected(true)
+	var devs []meshcentral.Device
+	for i := range 60 {
+		devs = append(devs, meshcentral.Device{Id: fmt.Sprintf("node//%d", i), MeshID: fmt.Sprintf("mesh//%d", i%2), Group: fmt.Sprintf("G%d", i%2), Name: fmt.Sprintf("host-%02d", i), Pwr: 1})
+	}
+	offlineChk.SetChecked(true)
+	setDevices(slices.Clone(devs))
+	searchEntry.SetText("host")
+	if !deviceTree.IsBranchOpen("mesh//0") {
+		t.Fatal("search didn't open the matching groups")
+	}
+	deviceTree.CloseBranch("mesh//0")
+
+	// A burst big enough for a full refresh, then a reload, keep it collapsed.
+	for i := range 60 {
+		onNodeEvent(meshcentral.NodeEvent{Action: "nodeconnect", NodeID: fmt.Sprintf("node//%d", i), Pwr: 0})
+	}
+	flushNodeEvents()
+	if deviceTree.IsBranchOpen("mesh//0") {
+		t.Fatal("collapsed group reopened by an event burst")
+	}
+	setDevices(slices.Clone(devs))
+	if deviceTree.IsBranchOpen("mesh//0") {
+		t.Fatal("collapsed group reopened by a reload")
+	}
 }

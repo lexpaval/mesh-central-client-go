@@ -241,7 +241,16 @@ func buildUI() fyne.CanvasObject {
 	searchEntry = widget.NewEntry()
 	searchEntry.SetPlaceHolder("Search name, hostname, IP or OS")
 	searchEntry.ActionItem = widget.NewIcon(icons["magnifying-glass"])
-	searchEntry.OnChanged = func(string) { applyFilter() }
+	// Typing opens the groups with a match. Only then, so a group collapsed
+	// during a search stays collapsed through updates.
+	searchEntry.OnChanged = func(q string) {
+		if q == "" {
+			applyFilter()
+			return
+		}
+		filterDevices()
+		deviceTree.OpenAllBranches()
+	}
 	offlineChk = widget.NewCheck("Show offline", func(bool) { applyFilter() })
 	deviceTree = widget.NewTree(
 		func(id widget.TreeNodeID) []widget.TreeNodeID {
@@ -705,7 +714,7 @@ func flushNodeEvents() {
 	// appeared or went away, the canvas fits the scroll extent on its next paint.
 	filterDevices()
 	if len(touched) > 50 {
-		refreshTree()
+		deviceTree.Refresh()
 	} else {
 		for id := range touched {
 			deviceTree.RefreshItem(id)
@@ -753,7 +762,7 @@ func shownDevice(id string) (meshcentral.Device, bool) {
 // left out, the rest keep their open/closed state.
 func applyFilter() {
 	filterDevices()
-	refreshTree()
+	deviceTree.Refresh()
 }
 
 // filterDevices recomputes the tree's contents.
@@ -789,15 +798,6 @@ func filterDevices() {
 
 	if selectedID != "" && !shown[selectedID] {
 		deviceTree.UnselectAll()
-	}
-}
-
-// refreshTree redraws the whole tree, a search opens every group with a match.
-func refreshTree() {
-	if searchEntry.Text != "" {
-		deviceTree.OpenAllBranches()
-	} else {
-		deviceTree.Refresh()
 	}
 }
 
