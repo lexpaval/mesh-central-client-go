@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"testing"
@@ -241,5 +242,42 @@ func TestProfileSelection(t *testing.T) {
 	}
 	if p, ok := config.GetProfile("gui"); !ok || p.Name != "gui" || config.GetDefaultProfileName() != "cli" {
 		t.Fatalf("GetProfile = %+v %v, default %q", p, ok, config.GetDefaultProfileName())
+	}
+}
+
+func TestRoutesReopen(t *testing.T) {
+	test.NewTempApp(t)
+	win = test.NewTempWindow(t, buildUI())
+	session.profile = "p"
+	closeAll := func() {
+		for _, ar := range routes {
+			ar.route.Close()
+		}
+		routes = nil
+	}
+	t.Cleanup(closeAll)
+
+	// An automatic local port is remembered as the one it got.
+	if err := startRoute("dev", &meshcentral.Route{NodeID: "node//1", RemotePort: 22}); err != nil {
+		t.Fatal(err)
+	}
+	saveRoutes()
+	port := routes[0].route.LocalPort
+	closeAll() // as disconnect does, without saving
+	restoreRoutes()
+	if len(routes) != 1 || routes[0].route.LocalPort != port || routes[0].device != "dev" || routes[0].route.NodeID != "node//1" {
+		t.Fatalf("reopened %+v", routes)
+	}
+
+	// A port taken meanwhile fails that route, which is then forgotten.
+	closeAll()
+	l, err := net.Listen("tcp", fmt.Sprintf("127.0.0.1:%d", port))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	restoreRoutes()
+	if len(routes) != 0 || fyne.CurrentApp().Preferences().String(routesKey("p")) != "" {
+		t.Fatalf("routes %d, saved %q", len(routes), fyne.CurrentApp().Preferences().String(routesKey("p")))
 	}
 }

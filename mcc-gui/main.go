@@ -5,6 +5,7 @@ package main
 import (
 	"cmp"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"image/color"
@@ -229,6 +230,7 @@ func buildUI() fyne.CanvasObject {
 		dialog.ShowConfirm("Remove profile", "Remove profile "+name+" and its stored password?", func(ok bool) {
 			if ok {
 				config.RemoveProfile(name)
+				fyne.CurrentApp().Preferences().RemoveValue(routesKey(name))
 				refreshProfiles()
 			}
 		}, win)
@@ -407,6 +409,7 @@ func connect(insecure bool) {
 			fyne.CurrentApp().Preferences().SetString("lastProfile", name)
 			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
 			logf("Connected to %s as %s (profile %s), loading devices", p.Server, p.Username, name)
+			restoreRoutes()
 		})
 		if err != nil {
 			return
@@ -612,6 +615,7 @@ func bindRouteRow(o fyne.CanvasObject, ar *activeRoute) {
 		r.Close()
 		routes = slices.DeleteFunc(routes, func(x *activeRoute) bool { return x == ar })
 		routeList.Refresh()
+		saveRoutes()
 		logf("%s: stopped %s", ar.device, localAddr(r))
 	}
 }
@@ -1246,22 +1250,74 @@ func showAddRoute() {
 		if t == "127.0.0.1" { // same as the device itself, matches the CLI
 			t = ""
 		}
-		r := &meshcentral.Route{
+		err := startRoute(name, &meshcentral.Route{
 			NodeID:      d.Id,
 			BindAddress: strings.TrimSpace(bind.Text),
 			LocalPort:   lp,
 			Target:      t,
 			RemotePort:  rp,
-			Out:         logWriter(name),
-		}
-		if err := r.Start(); err != nil {
+		})
+		if err != nil {
 			dialog.ShowError(err, win)
 			return
 		}
-		routes = append(routes, &activeRoute{route: r, device: name})
-		routeList.Refresh()
-		logf("%s: listening on %s for port %d", name, localAddr(r), rp)
+		saveRoutes()
 	}, win)
+}
+
+func startRoute(device string, r *meshcentral.Route) error {
+	r.Out = logWriter(device)
+	if err := r.Start(); err != nil {
+		return err
+	}
+	routes = append(routes, &activeRoute{route: r, device: device})
+	routeList.Refresh()
+	logf("%s: listening on %s for port %d", device, localAddr(r), r.RemotePort)
+	return nil
+}
+
+// savedRoute is a route remembered per profile, reopened on the next connect.
+// LocalPort is the one it got, so clients pointed at it keep working.
+type savedRoute struct {
+	Device, NodeID, BindAddress, Target string
+	LocalPort, RemotePort               int
+}
+
+func routesKey(profile string) string { return "routes/" + profile }
+
+// saveRoutes remembers the running routes. Adding and stopping one saves,
+// disconnecting doesn't, those are the routes to reopen.
+func saveRoutes() {
+	var saved []savedRoute
+	for _, ar := range routes {
+		r := ar.route
+		saved = append(saved, savedRoute{ar.device, r.NodeID, r.BindAddress, r.Target, r.LocalPort, r.RemotePort})
+	}
+	prefs := fyne.CurrentApp().Preferences()
+	if len(saved) == 0 {
+		prefs.RemoveValue(routesKey(session.profile))
+		return
+	}
+	b, _ := json.Marshal(saved)
+	prefs.SetString(routesKey(session.profile), string(b))
+}
+
+// restoreRoutes reopens the routes running at the last disconnect, one that
+// can't bind its port any more is logged and forgotten.
+func restoreRoutes() {
+	var saved []savedRoute
+	if json.Unmarshal([]byte(fyne.CurrentApp().Preferences().String(routesKey(session.profile))), &saved) != nil {
+		return
+	}
+	for _, sr := range saved {
+		err := startRoute(sr.Device, &meshcentral.Route{NodeID: sr.NodeID, BindAddress: sr.BindAddress, LocalPort: sr.LocalPort, Target: sr.Target, RemotePort: sr.RemotePort})
+		if err != nil {
+			logf("%s: route for port %d not reopened, %v", sr.Device, sr.RemotePort, err)
+		}
+	}
+	if len(routes) != len(saved) {
+		saveRoutes()
+	}
 }
 
 func showRunCommand() {
@@ -1442,7 +1498,15 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 			}
 		} else if edit != nil {
 			p := config.Profile{Name: name.Text, Server: server.Text, Username: username.Text}
-			err = config.UpdateProfile(edit.Name, p, password.Text, makeDefault.Checked)
+			if err = config.UpdateProfile(edit.Name, p, password.Text, makeDefault.Checked); err == nil && p.Name != edit.Name {
+				// The GUI's own memory of the profile follows a rename.
+				prefs := fyne.CurrentApp().Preferences()
+				prefs.SetString(routesKey(p.Name), prefs.String(routesKey(edit.Name)))
+				prefs.RemoveValue(routesKey(edit.Name))
+				if prefs.String("lastProfile") == edit.Name {
+					prefs.SetString("lastProfile", p.Name)
+				}
+			}
 		} else {
 			_, err = config.AddProfile(name.Text, makeDefault.Checked, server.Text, username.Text, password.Text)
 		}
