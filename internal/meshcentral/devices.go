@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"sync"
 	"time"
 )
 
@@ -17,45 +18,15 @@ func handleNodesCommand(command map[string]interface{}) {
 		fmt.Println("Received nodes command")
 	}
 	var devices []Device
-	nodeGroups := command["nodes"].(map[string]interface{})
+	nodeGroups, _ := command["nodes"].(map[string]interface{})
 	for meshID, nodeGroup := range nodeGroups {
-		nodes := nodeGroup.([]interface{})
+		nodes, _ := nodeGroup.([]interface{})
 		for _, node := range nodes {
-			nodeMap := node.(map[string]interface{})
-
-			// Check for nil values and set defaults
-			if nodeMap["name"] == nil {
-				nodeMap["name"] = ""
+			if nodeMap, ok := node.(map[string]interface{}); ok {
+				if d, ok := parseNode(meshID, nodeMap); ok {
+					devices = append(devices, d)
+				}
 			}
-			if nodeMap["rname"] == nil {
-				nodeMap["rname"] = ""
-			}
-			if nodeMap["osdesc"] == nil {
-				nodeMap["osdesc"] = ""
-			}
-			if nodeMap["ip"] == nil {
-				nodeMap["ip"] = ""
-			}
-			if nodeMap["pwr"] == nil {
-				nodeMap["pwr"] = 0.0
-			}
-			if nodeMap["conn"] == nil {
-				nodeMap["conn"] = 0.0
-			}
-
-			device := Device{
-				Id:          nodeMap["_id"].(string),
-				Name:        nodeMap["rname"].(string),
-				DisplayName: nodeMap["name"].(string),
-				OS:          nodeMap["osdesc"].(string),
-				IP:          nodeMap["ip"].(string),
-				Icon:        int(nodeMap["icon"].(float64)),
-				Conn:        int(nodeMap["conn"].(float64)),
-				Pwr:         int(nodeMap["pwr"].(float64)),
-				MeshID:      meshID,
-				Group:       settings.groups[meshID],
-			}
-			devices = append(devices, device)
 		}
 	}
 
@@ -65,6 +36,26 @@ func handleNodesCommand(command map[string]interface{}) {
 		close(settings.deviceChan)
 		settings.deviceChan = nil
 	}
+}
+
+// parseNode reads a node as the server sends it in "nodes" and in events,
+// missing fields are left empty. ok is false without a node ID.
+func parseNode(meshID string, node map[string]interface{}) (d Device, ok bool) {
+	str := func(k string) string { s, _ := node[k].(string); return s }
+	num := func(k string) int { f, _ := node[k].(float64); return int(f) }
+	d = Device{
+		Id:          str("_id"),
+		Name:        str("rname"),
+		DisplayName: str("name"),
+		OS:          str("osdesc"),
+		IP:          str("ip"),
+		Icon:        num("icon"),
+		Conn:        num("conn"),
+		Pwr:         num("pwr"),
+		MeshID:      meshID,
+		Group:       settings.groups[meshID],
+	}
+	return d, d.Id != ""
 }
 
 func handleMeshesCommand(command map[string]interface{}) {
@@ -90,17 +81,36 @@ func handleEventCommand(command map[string]interface{}) {
 	if !ok || OnNodeEvent == nil {
 		return
 	}
-	action, _ := ev["action"].(string)
-	switch action {
+	e := NodeEvent{}
+	e.Action, _ = ev["action"].(string)
+	switch e.Action {
 	case "nodeconnect", "addnode", "removenode", "changenode", "createmesh", "deletemesh", "meshchange":
-		nodeID, _ := ev["nodeid"].(string)
-		conn, _ := ev["conn"].(float64)
-		pwr, _ := ev["pwr"].(float64)
-		OnNodeEvent(action, nodeID, int(conn), int(pwr))
+	default:
+		return
 	}
+	e.NodeID, _ = ev["nodeid"].(string)
+	conn, _ := ev["conn"].(float64)
+	pwr, _ := ev["pwr"].(float64)
+	e.Conn, e.Pwr = int(conn), int(pwr)
+	if node, ok := ev["node"].(map[string]interface{}); ok && (e.Action == "addnode" || e.Action == "changenode") {
+		// Without its group the device can't be placed, the list gets reloaded.
+		meshID, _ := node["meshid"].(string)
+		if d, ok := parseNode(meshID, node); ok && meshID != "" {
+			e.Device = &d
+			e.NodeID = d.Id // device edits from the web UI only set it in node
+		}
+	}
+	OnNodeEvent(e)
 }
 
+// devicesMu serializes GetDevices, the replies carry no request ID so only
+// one query can be waiting at a time.
+var devicesMu sync.Mutex
+
 func GetDevices() []Device {
+	devicesMu.Lock()
+	defer devicesMu.Unlock()
+
 	// Group names come from "meshes", fetched first so nodes can be labelled.
 	// A failure only leaves devices without group names.
 	settings.groupChan = make(chan struct{})

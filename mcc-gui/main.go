@@ -55,13 +55,14 @@ var (
 		id       int
 		loading  bool
 	}
-	devices    []meshcentral.Device // everything the server returned
+	devices    []meshcentral.Device // everything the server returned, sorted by name (setDevices)
+	deviceIdx  map[string]int       // device ID -> index in devices
 	selectedID string               // selected device, "" if none
 	// Tree view of the devices passing the search/offline filter, by group.
 	groupOrder    []string            // mesh IDs sorted by group name
 	groupChildren map[string][]string // mesh ID -> device IDs sorted by name
 	groupLabels   map[string][2]string
-	shownByID     map[string]meshcentral.Device
+	shown         map[string]bool // device IDs in the tree
 	routes        []*activeRoute
 	logLines      []string
 	logLabel      *widget.Label
@@ -77,6 +78,11 @@ var (
 	routeList     *widget.List
 	deviceBtns    []*widget.Button
 	reloadTimer   *time.Timer // pending debounced device list reload
+	// Pending full tree refresh after event updates changed its shape.
+	treeRefreshTimer *time.Timer
+	// A reload is running, and another was asked for meanwhile. A large
+	// server takes seconds to send the list, overlapping loads pile up.
+	reloading, reloadAgain bool
 	// Right panel tabs: Routes first (not closable), then one per shell.
 	tabBar     *fyne.Container   // tab heads
 	tabContent *fyne.Container   // tab panes, only the selected one visible
@@ -175,11 +181,7 @@ func main() {
 	// Active-connection counts change without any UI event.
 	go func() {
 		for range time.Tick(time.Second) {
-			fyne.Do(func() {
-				if len(routes) > 0 {
-					routeList.Refresh()
-				}
-			})
+			fyne.Do(refreshRouteRows)
 		}
 	}()
 
@@ -273,7 +275,7 @@ func buildUI() fyne.CanvasObject {
 				text.Refresh()
 				return
 			}
-			d := shownByID[id]
+			d, _ := shownDevice(id)
 			row := o.(*deviceRow)
 			row.id = id
 			img, text, title, sub := rowParts(row.content)
@@ -283,7 +285,7 @@ func buildUI() fyne.CanvasObject {
 			title.Style.ColorName = theme.ColorNameForeground
 			if d.Pwr == 0 {
 				title.Style.ColorName = theme.ColorNamePlaceHolder
-				img.Resource = theme.NewDisabledResource(img.Resource)
+				img.Resource = disabledIcon(img.Resource)
 				sub.Text = "offline · " + sub.Text
 			}
 			img.Refresh()
@@ -348,61 +350,8 @@ func buildUI() fyne.CanvasObject {
 				twoLineRow())
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
-			ar := routes[id]
-			r := ar.route
-			objs := o.(*fyne.Container).Objects
-			btns := objs[1].(*fyne.Container).Objects
-			open, cp, stop := btns[0].(*widget.Button), btns[1].(*widget.Button), btns[2].(*widget.Button)
-			target := r.Target
-			if target == "" {
-				target = "device"
-			}
-			svc, res := fmt.Sprintf("Port %d", r.RemotePort), icons["network-wired"]
-			switch r.RemotePort {
-			case 22:
-				svc, res = "SSH", icons["terminal"]
-			case 3389:
-				svc, res = "RDP", icons["desktop"]
-			case 80, 8080:
-				svc, res = "HTTP", icons["globe"]
-			case 443, 8443:
-				svc, res = "HTTPS", icons["globe"]
-			case 9090:
-				svc, res = "Cockpit", icons["globe"]
-			case 5900:
-				svc, res = "VNC", icons["display"]
-			}
-			img, text, title, sub := rowParts(objs[0])
-			img.Resource = res
-			title.Text = ar.device + " · " + svc
-			sub.Text = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
-			if i := slices.IndexFunc(devices, func(d meshcentral.Device) bool { return d.Id == r.NodeID }); i >= 0 && devices[i].Pwr == 0 {
-				img.Resource = theme.NewDisabledResource(res)
-				sub.Text += " · device offline"
-			}
-			img.Refresh()
-			text.Refresh()
-			if openCmd(r) == nil {
-				open.Hide()
-			} else {
-				open.Show()
-				open.OnTapped = func() {
-					if err := openCmd(r)(); err != nil {
-						dialog.ShowError(err, win)
-					}
-				}
-			}
-			cp.OnTapped = func() {
-				s := copyText(r)
-				fyne.CurrentApp().Clipboard().SetContent(s)
-				logf("Copied %q", s)
-			}
-			stop.OnTapped = func() {
-				r.Close()
-				routes = slices.DeleteFunc(routes, func(x *activeRoute) bool { return x == ar })
-				routeList.Refresh()
-				logf("%s: stopped %s", ar.device, localAddr(r))
-			}
+			routeRows[o] = routes[id]
+			bindRouteRow(o, routes[id])
 		})
 	// A hand-made tab strip, Fyne's DocTabs puts a close button on every tab
 	// and Routes must not have one.
@@ -474,8 +423,7 @@ func connect(insecure bool) {
 				return
 			}
 			session.loading = false
-			devices = devs
-			applyFilter()
+			setDevices(devs)
 			deviceTree.OpenAllBranches()
 			logf("Loaded %d devices", len(devs))
 		})
@@ -485,9 +433,14 @@ func connect(insecure bool) {
 func disconnect() {
 	session.id++
 	session.loading = false
+	reloading, reloadAgain = false, false
 	if reloadTimer != nil {
 		reloadTimer.Stop()
 		reloadTimer = nil
+	}
+	if treeRefreshTimer != nil {
+		treeRefreshTimer.Stop()
+		treeRefreshTimer = nil
 	}
 	for _, ar := range routes {
 		ar.route.Close()
@@ -498,8 +451,7 @@ func disconnect() {
 	routes = nil
 	routeList.Refresh()
 	meshcentral.StopSocket()
-	devices = nil
-	applyFilter()
+	setDevices(nil)
 	setConnected(false)
 	statusLabel.SetText("Disconnected")
 	logf("Disconnected")
@@ -531,10 +483,17 @@ func setConnected(c bool) {
 	}
 }
 
+// refreshDevices reloads the list in the background. One load runs at a
+// time, a request made during one reloads again once it's done.
 func refreshDevices() {
 	if session.loading { // the first list is on its way
 		return
 	}
+	if reloading {
+		reloadAgain = true
+		return
+	}
+	reloading = true
 	id := session.id
 	go func() {
 		devs := meshcentral.GetDevices()
@@ -542,10 +501,29 @@ func refreshDevices() {
 			if !connected || id != session.id {
 				return
 			}
-			devices = devs
-			applyFilter()
+			reloading = false
+			setDevices(devs)
+			if reloadAgain {
+				reloadAgain = false
+				refreshDevices()
+			}
 		})
 	}()
+}
+
+// scheduleReload reloads the list once a burst of changes has settled.
+func scheduleReload() {
+	if reloadTimer != nil {
+		return
+	}
+	reloadTimer = time.AfterFunc(2*time.Second, func() {
+		fyne.Do(func() {
+			reloadTimer = nil
+			if connected {
+				refreshDevices()
+			}
+		})
+	})
 }
 
 func refreshProfiles() {
@@ -563,61 +541,253 @@ func refreshProfiles() {
 	}
 }
 
-// onNodeEvent runs on the control socket reader, so it only hands off to the
-// UI goroutine.
-func onNodeEvent(action, nodeID string, conn, pwr int) {
-	fyne.Do(func() {
-		// Events arriving while the first list loads are already reflected in
-		// it, and a reload then would overlap the load, GetDevices takes one
-		// request at a time.
-		if !connected || session.loading {
-			return
+// routeRows maps the route list's rows to the route each shows, so the
+// periodic update can redraw them in place. routeList.Refresh builds a
+// throwaway template row that Fyne only frees once the window repaints,
+// which a minimized window never does.
+var routeRows = map[fyne.CanvasObject]*activeRoute{}
+
+// refreshRouteRows redraws the shown routes, for their connection counts and
+// device state.
+func refreshRouteRows() {
+	for o, ar := range routeRows {
+		if slices.Contains(routes, ar) {
+			bindRouteRow(o, ar)
+		} else {
+			delete(routeRows, o) // stopped, the list rebinds the row if it reuses it
 		}
-		if action != "nodeconnect" {
-			// Adds, removes and renames arrive in bursts (e.g. agents updating
-			// their info), reload once they settle.
-			if reloadTimer == nil {
-				reloadTimer = time.AfterFunc(2*time.Second, func() {
-					fyne.Do(func() {
-						reloadTimer = nil
-						if connected {
-							refreshDevices()
-						}
-					})
-				})
+	}
+}
+
+func bindRouteRow(o fyne.CanvasObject, ar *activeRoute) {
+	r := ar.route
+	objs := o.(*fyne.Container).Objects
+	btns := objs[1].(*fyne.Container).Objects
+	open, cp, stop := btns[0].(*widget.Button), btns[1].(*widget.Button), btns[2].(*widget.Button)
+	target := r.Target
+	if target == "" {
+		target = "device"
+	}
+	svc, res := fmt.Sprintf("Port %d", r.RemotePort), icons["network-wired"]
+	switch r.RemotePort {
+	case 22:
+		svc, res = "SSH", icons["terminal"]
+	case 3389:
+		svc, res = "RDP", icons["desktop"]
+	case 80, 8080:
+		svc, res = "HTTP", icons["globe"]
+	case 443, 8443:
+		svc, res = "HTTPS", icons["globe"]
+	case 9090:
+		svc, res = "Cockpit", icons["globe"]
+	case 5900:
+		svc, res = "VNC", icons["display"]
+	}
+	img, text, title, sub := rowParts(objs[0])
+	img.Resource = res
+	title.Text = ar.device + " · " + svc
+	sub.Text = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
+	if i, ok := deviceIdx[r.NodeID]; ok && devices[i].Pwr == 0 {
+		img.Resource = disabledIcon(res)
+		sub.Text += " · device offline"
+	}
+	img.Refresh()
+	text.Refresh()
+	if openCmd(r) == nil {
+		open.Hide()
+	} else {
+		open.Show()
+		open.OnTapped = func() {
+			if err := openCmd(r)(); err != nil {
+				dialog.ShowError(err, win)
 			}
-			return
 		}
-		i := slices.IndexFunc(devices, func(d meshcentral.Device) bool { return d.Id == nodeID })
-		if i < 0 {
-			return
-		}
-		if (devices[i].Pwr == 0) != (pwr == 0) {
-			state := "online"
-			if pwr == 0 {
-				state = "offline"
-			}
-			logf("%s is %s", deviceName(devices[i]), state)
-		}
-		devices[i].Conn, devices[i].Pwr = conn, pwr
-		applyFilter()
+	}
+	cp.OnTapped = func() {
+		s := copyText(r)
+		fyne.CurrentApp().Clipboard().SetContent(s)
+		logf("Copied %q", s)
+	}
+	stop.OnTapped = func() {
+		r.Close()
+		routes = slices.DeleteFunc(routes, func(x *activeRoute) bool { return x == ar })
 		routeList.Refresh()
+		logf("%s: stopped %s", ar.device, localAddr(r))
+	}
+}
+
+// Node events are queued by the control socket reader and applied together,
+// since every tree update walks all devices and a large server sends many
+// events per second.
+var pendingEvents struct {
+	sync.Mutex
+	events []meshcentral.NodeEvent
+	armed  bool // a flush is scheduled
+}
+
+const (
+	eventFlushDelay  = time.Second
+	treeRefreshDelay = 30 * time.Second
+)
+
+func onNodeEvent(e meshcentral.NodeEvent) {
+	pendingEvents.Lock()
+	defer pendingEvents.Unlock()
+	pendingEvents.events = append(pendingEvents.events, e)
+	if !pendingEvents.armed {
+		pendingEvents.armed = true
+		time.AfterFunc(eventFlushDelay, func() { fyne.Do(flushNodeEvents) })
+	}
+}
+
+// flushNodeEvents applies the queued events. The tree is only rebuilt when a
+// device was added, removed, changed or went on/offline, rows show nothing
+// else of the connection state.
+func flushNodeEvents() {
+	pendingEvents.Lock()
+	events := pendingEvents.events
+	pendingEvents.events, pendingEvents.armed = nil, false
+	pendingEvents.Unlock()
+
+	// Events arriving while the first list loads are already reflected in it,
+	// and a reload then would only queue behind the load.
+	if len(events) == 0 || !connected || session.loading {
+		return
+	}
+	resort := false
+	// Rows that may have changed, devices and their groups ("n of m online").
+	touched := map[string]bool{}
+	touch := func(d meshcentral.Device) { touched[d.Id], touched[d.MeshID] = true, true }
+	for _, e := range events {
+		i, known := deviceIdx[e.NodeID]
+		switch {
+		case e.Action == "nodeconnect":
+			if !known {
+				continue
+			}
+			d := &devices[i]
+			if (d.Pwr == 0) != (e.Pwr == 0) {
+				state := "online"
+				if e.Pwr == 0 {
+					state = "offline"
+				}
+				logf("%s is %s", deviceName(*d), state)
+				touch(*d)
+			}
+			d.Conn, d.Pwr = e.Conn, e.Pwr
+		case e.Action == "removenode" && known:
+			touch(devices[i])
+			devices = slices.Delete(devices, i, i+1)
+			reindexDevices()
+		case e.Device != nil: // addnode, changenode
+			d := *e.Device
+			if known { // the event's state isn't live, nodeconnect keeps it
+				touch(devices[i]) // it may have moved group
+				d.Conn, d.Pwr = devices[i].Conn, devices[i].Pwr
+				resort = resort || deviceName(d) != deviceName(devices[i])
+				devices[i] = d
+			} else {
+				deviceIdx[d.Id] = len(devices)
+				devices = append(devices, d)
+				resort = true
+			}
+			touch(d)
+		case e.Action != "removenode":
+			// Group changes, or a device change without the device, reload
+			// once the burst settles.
+			scheduleReload()
+		}
+	}
+	if resort {
+		sortDevices()
+	}
+	if len(touched) == 0 {
+		return
+	}
+	// Fyne's Tree.Refresh builds throwaway template rows that are only freed
+	// once the window repaints, which a minimized window never does, so the
+	// changed rows are redrawn one by one. That lays out rows that appeared
+	// or went away too, only the scroll extent waits for a full refresh.
+	reshaped := filterDevices()
+	if len(touched) > 50 {
+		refreshTree()
+	} else {
+		for id := range touched {
+			deviceTree.RefreshItem(id)
+		}
+		if reshaped {
+			scheduleTreeRefresh()
+		}
+	}
+	refreshRouteRows()
+}
+
+// scheduleTreeRefresh fully refreshes the tree within treeRefreshDelay.
+func scheduleTreeRefresh() {
+	if treeRefreshTimer != nil {
+		return
+	}
+	treeRefreshTimer = time.AfterFunc(treeRefreshDelay, func() {
+		fyne.Do(func() {
+			treeRefreshTimer = nil
+			if connected {
+				refreshTree()
+			}
+		})
 	})
+}
+
+// setDevices replaces the device list and rebuilds the tree.
+func setDevices(devs []meshcentral.Device) {
+	devices = devs
+	sortDevices()
+	applyFilter()
+}
+
+// sortDevices sorts devices by name, the order the tree shows them in.
+func sortDevices() {
+	keys := make(map[string]string, len(devices))
+	for _, d := range devices {
+		keys[d.Id] = strings.ToLower(deviceName(d))
+	}
+	slices.SortFunc(devices, func(a, b meshcentral.Device) int {
+		return cmp.Or(strings.Compare(keys[a.Id], keys[b.Id]), strings.Compare(a.Id, b.Id))
+	})
+	reindexDevices()
+}
+
+func reindexDevices() {
+	deviceIdx = make(map[string]int, len(devices))
+	for i, d := range devices {
+		deviceIdx[d.Id] = i
+	}
+}
+
+// shownDevice returns the device with id if the tree shows it.
+func shownDevice(id string) (meshcentral.Device, bool) {
+	if !shown[id] {
+		return meshcentral.Device{}, false
+	}
+	return devices[deviceIdx[id]], true
 }
 
 // applyFilter rebuilds the device tree from devices, keeping the selected
 // device selected if it's still shown. Groups with no matching device are
 // left out, the rest keep their open/closed state.
 func applyFilter() {
+	filterDevices()
+	refreshTree()
+}
+
+// filterDevices recomputes the tree's contents and reports whether its shape
+// (the groups or the devices in them) changed.
+func filterDevices() (reshaped bool) {
+	oldOrder, oldChildren := groupOrder, groupChildren
 	q := strings.ToLower(searchEntry.Text)
-	sorted := slices.Clone(devices)
-	slices.SortFunc(sorted, func(a, b meshcentral.Device) int {
-		return strings.Compare(strings.ToLower(deviceName(a)), strings.ToLower(deviceName(b)))
-	})
-	groupChildren, shownByID = map[string][]string{}, map[string]meshcentral.Device{}
+	groupChildren, shown = map[string][]string{}, map[string]bool{}
 	online, total := map[string]int{}, map[string]int{}
 	names := map[string]string{}
-	for _, d := range sorted {
+	for _, d := range devices {
 		names[d.MeshID] = cmp.Or(d.Group, "Unnamed group")
 		total[d.MeshID]++
 		if d.Pwr != 0 {
@@ -630,26 +800,43 @@ func applyFilter() {
 			continue
 		}
 		groupChildren[d.MeshID] = append(groupChildren[d.MeshID], d.Id)
-		shownByID[d.Id] = d
+		shown[d.Id] = true
 	}
 	groupOrder = slices.Collect(maps.Keys(groupChildren))
 	slices.SortFunc(groupOrder, func(a, b string) int {
-		return strings.Compare(strings.ToLower(names[a]), strings.ToLower(names[b]))
+		// Same-named groups keep a stable order, map order changes every pass.
+		return cmp.Or(strings.Compare(strings.ToLower(names[a]), strings.ToLower(names[b])), strings.Compare(a, b))
 	})
 	groupLabels = map[string][2]string{}
 	for _, id := range groupOrder {
 		groupLabels[id] = [2]string{names[id], fmt.Sprintf("%d of %d online", online[id], total[id])}
 	}
 
-	sel := selectedID
-	deviceTree.UnselectAll()
-	if _, ok := shownByID[sel]; ok {
-		deviceTree.Select(sel)
+	if selectedID != "" && !shown[selectedID] {
+		deviceTree.UnselectAll()
 	}
-	if q != "" {
+	return !slices.Equal(oldOrder, groupOrder) || !maps.EqualFunc(oldChildren, groupChildren, slices.Equal)
+}
+
+// refreshTree redraws the whole tree, a search opens every group with a match.
+func refreshTree() {
+	if searchEntry.Text != "" {
 		deviceTree.OpenAllBranches()
+	} else {
+		deviceTree.Refresh()
 	}
-	deviceTree.Refresh()
+}
+
+// disabledIcons holds the greyed out icons, rows ask for them on every update.
+var disabledIcons = map[fyne.Resource]fyne.Resource{}
+
+func disabledIcon(r fyne.Resource) fyne.Resource {
+	d, ok := disabledIcons[r]
+	if !ok {
+		d = theme.NewDisabledResource(r)
+		disabledIcons[r] = d
+	}
+	return d
 }
 
 // sizeTheme overrides some sizes for a subtree (container.NewThemeOverride),
@@ -713,7 +900,7 @@ func (r *deviceRow) Tapped(*fyne.PointEvent) {
 		return
 	}
 	lastTap.id = "" // a third tap starts over
-	if d, ok := shownByID[r.id]; ok {
+	if d, ok := shownDevice(r.id); ok {
 		openShell(d, 1)
 	}
 }
@@ -879,7 +1066,7 @@ func deviceName(d meshcentral.Device) string {
 }
 
 func selectedDevice() (meshcentral.Device, bool) {
-	d, ok := shownByID[selectedID]
+	d, ok := shownDevice(selectedID)
 	if !ok {
 		dialog.ShowInformation("No device", "Select a device first.", win)
 	}
@@ -1241,15 +1428,34 @@ func (w logWriter) Write(p []byte) (int, error) {
 	return len(p), nil
 }
 
+// Lines logged since the log view was last updated, a burst (devices going
+// on/offline) updates it once.
+var pendingLog struct {
+	sync.Mutex
+	lines []string
+}
+
 // logf is safe from any goroutine, the log view keeps the last 500 lines.
 func logf(format string, args ...any) {
 	line := time.Now().Format("15:04:05 ") + fmt.Sprintf(format, args...)
-	fyne.Do(func() {
-		logLines = append(logLines, line)
-		if len(logLines) > 500 {
-			logLines = logLines[len(logLines)-500:]
-		}
-		logLabel.SetText(strings.Join(logLines, "\n"))
-		logScroll.ScrollToBottom()
-	})
+	pendingLog.Lock()
+	pendingLog.lines = append(pendingLog.lines, line)
+	first := len(pendingLog.lines) == 1
+	pendingLog.Unlock()
+	if first {
+		fyne.Do(flushLog)
+	}
+}
+
+func flushLog() {
+	pendingLog.Lock()
+	lines := pendingLog.lines
+	pendingLog.lines = nil
+	pendingLog.Unlock()
+	logLines = append(logLines, lines...)
+	if len(logLines) > 500 {
+		logLines = slices.Clone(logLines[len(logLines)-500:])
+	}
+	logLabel.SetText(strings.Join(logLines, "\n"))
+	logScroll.ScrollToBottom()
 }

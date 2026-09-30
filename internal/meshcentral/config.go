@@ -81,11 +81,20 @@ var OnConnectionLost = func(err error) {
 	os.Exit(1)
 }
 
-// OnNodeEvent is called on the control socket reader for device events the
-// server pushes: "nodeconnect" carries the new conn/pwr state, the others
-// (devices or groups added, removed, changed) mean the device list is stale.
-// Nil in the CLI.
-var OnNodeEvent func(action, nodeID string, conn, pwr int)
+// NodeEvent is a device event the server pushed. "nodeconnect" carries the
+// new Conn/Pwr state. "addnode" and "changenode" usually carry the device in
+// Device, whose Conn/Pwr are then not the live state (nodeconnect tracks it).
+// The others, and those two without Device, mean the device list is stale.
+type NodeEvent struct {
+	Action    string
+	NodeID    string
+	Conn, Pwr int
+	Device    *Device
+}
+
+// OnNodeEvent is called on the control socket reader for device events. Nil
+// in the CLI.
+var OnNodeEvent func(NodeEvent)
 
 // send writes a text message on the control socket, serialized against the
 // reader goroutine, the cookie renew timer and concurrent callers.

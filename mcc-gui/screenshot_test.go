@@ -39,7 +39,7 @@ func TestScreenshot(t *testing.T) {
 		profileSel.SetOptions([]string{"default"})
 		profileSel.SetSelected("default")
 		// Fictional names, IPs from the RFC 5737 documentation ranges.
-		devices = []meshcentral.Device{
+		devs := []meshcentral.Device{
 			{Id: "1", MeshID: "mesh//lab", Group: "Lab", DisplayName: "Lab - Bench 1", Name: "lab-bench-1", IP: "192.0.2.10", OS: "Fedora Linux 44 (Server Edition)", Pwr: 1},
 			{Id: "2", MeshID: "mesh//custa", Group: "Customer A", DisplayName: "Site A - Office PC", Name: "DESKTOP-EXAMPLE1", IP: "198.51.100.20", OS: "Microsoft Windows 10 Pro - 22H2/19045", Pwr: 1},
 			{Id: "3", MeshID: "mesh//custa", Group: "Customer A", DisplayName: "Site B - Workstation 3", Name: "WS003", IP: "198.51.100.33", OS: "Microsoft Windows 11 Pro - 24H2/26100", Pwr: 1},
@@ -49,7 +49,7 @@ func TestScreenshot(t *testing.T) {
 			{Id: "6", MeshID: "mesh//office", Group: "Office", DisplayName: "Office Mac", Name: "office-mac", IP: "192.0.2.20", OS: "macOS 15.3", Pwr: 0},
 		}
 		offlineChk.SetChecked(true)
-		applyFilter()
+		setDevices(devs)
 		deviceTree.OpenAllBranches()
 		deviceTree.Select("1")
 		routes = []*activeRoute{
@@ -61,7 +61,8 @@ func TestScreenshot(t *testing.T) {
 		routeList.Refresh()
 		logf("Connected with profile default, 6 devices")
 		// The selected device drops off while it's selected, as a server event would report.
-		onNodeEvent("nodeconnect", "1", 0, 0)
+		onNodeEvent(meshcentral.NodeEvent{Action: "nodeconnect", NodeID: "1"})
+		flushNodeEvents()
 		logf("Site A - Office PC: Tunnel to remote port 3389 failed: device accepted the tunnel but closed it without sending data")
 
 		savePNG(t, filepath.Join(dir, name+".png"), win)
