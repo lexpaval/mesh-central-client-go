@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"cmp"
 	"embed"
 	"encoding/json"
@@ -1613,11 +1614,28 @@ func openCmd(r *meshcentral.Route) func() error {
 			return fyne.CurrentApp().OpenURL(u)
 		}
 	case 3389:
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == "windows" { // mstsc doesn't register rdp://
 			return func() error { return exec.Command("mstsc", "/v:"+localAddr(r)).Start() }
+		}
+		return func() error {
+			if runtime.GOOS == "linux" { // xdg-open fails silently without a handler
+				if out, err := exec.Command("xdg-mime", "query", "default", "x-scheme-handler/rdp").Output(); err == nil && len(bytes.TrimSpace(out)) == 0 {
+					return errors.New("no application opens rdp:// links, install an RDP client such as Remmina")
+				}
+			}
+			return fyne.CurrentApp().OpenURL(rdpURL(r, runtime.GOOS))
 		}
 	}
 	return nil
+}
+
+// rdpURL is the rdp:// link for a route: Microsoft's clients on macOS take
+// their own form, the Linux ones (Remmina, KRDC, GNOME Connections) host:port.
+func rdpURL(r *meshcentral.Route, goos string) *url.URL {
+	if goos == "darwin" { // url.Parse rejects the %20 in the key
+		return &url.URL{Scheme: "rdp", Opaque: "//full%20address=s:" + localAddr(r)}
+	}
+	return &url.URL{Scheme: "rdp", Host: localAddr(r)}
 }
 
 // logWriter tags a route's tunnel output with its device name.

@@ -281,3 +281,16 @@ func TestRoutesReopen(t *testing.T) {
 		t.Fatalf("routes %d, saved %q", len(routes), fyne.CurrentApp().Preferences().String(routesKey("p")))
 	}
 }
+
+func TestRDPURL(t *testing.T) {
+	r := &meshcentral.Route{LocalPort: 40123, RemotePort: 3389}
+	if got := rdpURL(r, "linux").String(); got != "rdp://127.0.0.1:40123" {
+		t.Errorf("linux: %s", got)
+	}
+	if got := rdpURL(r, "darwin").String(); got != "rdp://full%20address=s:127.0.0.1:40123" {
+		t.Errorf("darwin: %s", got)
+	}
+	if openCmd(r) == nil {
+		t.Error("RDP route has no Open action")
+	}
+}
