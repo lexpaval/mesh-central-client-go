@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -72,6 +73,16 @@ func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, 
 		}
 		return write(websocket.TextMessage, []byte(fmt.Sprintf(`{"protocol":%d,"cols":%d,"rows":%d,"xterm":true,"type":"options"}`, protocol, cols, rows)))
 	}
+	// The options only size the session as it starts, the agent resizes its
+	// terminal on termsize. Until it has started the options send the latest size.
+	var started atomic.Bool
+	sendSize := func() error {
+		cols, rows := size()
+		if !started.Load() || cols <= 0 || rows <= 0 {
+			return nil
+		}
+		return write(websocket.TextMessage, []byte(fmt.Sprintf(`{"ctrlChannel":"102938","type":"termsize","cols":%d,"rows":%d}`, cols, rows)))
+	}
 
 	quit := make(chan struct{})
 	var sessErr error
@@ -114,6 +125,8 @@ func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, 
 					sessErr = err
 					return
 				}
+				started.Store(true)
+				sendSize() // in case it changed since the options
 			}
 		}
 	})
@@ -125,7 +138,7 @@ loop:
 		case <-quit:
 			break loop
 		case <-resize:
-			sendOptions()
+			sendSize()
 		case b, ok := <-input:
 			if !ok {
 				write(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, `{"ctrlChannel":"102938","type":"close"}`))
