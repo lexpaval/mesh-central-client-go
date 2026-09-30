@@ -3,6 +3,9 @@ package main
 import (
 	"fmt"
 	"net"
+	"os"
+	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -292,5 +295,40 @@ func TestRDPURL(t *testing.T) {
 	}
 	if openCmd(r) == nil {
 		t.Error("RDP route has no Open action")
+	}
+}
+
+func TestSSHOpen(t *testing.T) {
+	test.NewTempApp(t)
+	win = test.NewTempWindow(t, buildUI())
+	setDevices([]meshcentral.Device{{Id: "node//1", MeshID: "m", Name: "Lab-Bench_1", Pwr: 1}})
+	r := &meshcentral.Route{NodeID: "node//1", LocalPort: 40123, RemotePort: 22}
+	want := "ssh -p 40123 -o HostKeyAlias=lab-bench-1 127.0.0.1"
+	if got := copyText(r); got != want {
+		t.Fatalf("copy %q, want %q", got, want)
+	}
+	if runtime.GOOS != "linux" {
+		return
+	}
+	// The first terminal found runs ssh with the same arguments.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "ptyxis"), []byte("#!/bin/sh\necho \"$@\" > \"$0.args\"\n"), 0o755)
+	t.Setenv("PATH", dir)
+	if err := openCmd(r)(); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	for range 50 {
+		if got, _ = os.ReadFile(filepath.Join(dir, "ptyxis.args")); len(got) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if string(got) != "-- "+want+"\n" {
+		t.Fatalf("terminal got %q", got)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if err := openCmd(r)(); err == nil {
+		t.Fatal("no error without a terminal")
 	}
 }

@@ -1362,12 +1362,7 @@ func showSSHConfig() {
 		return
 	}
 	host := widget.NewEntry()
-	host.SetText(strings.Map(func(r rune) rune {
-		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.' {
-			return r
-		}
-		return '-'
-	}, strings.ToLower(cmp.Or(d.Name, deviceName(d)))))
+	host.SetText(sshAlias(d))
 	// Same default as ssh itself: the local user. Windows reports DOMAIN\user.
 	user := widget.NewEntry()
 	user.SetText("root")
@@ -1587,12 +1582,56 @@ func localAddr(r *meshcentral.Route) string {
 	return fmt.Sprintf("%s:%d", host, r.LocalPort)
 }
 
+// sshAlias names a device for ssh, the SSH config snippet's Host alias.
+func sshAlias(d meshcentral.Device) string {
+	return strings.Map(func(r rune) rune {
+		if r >= 'a' && r <= 'z' || r >= '0' && r <= '9' || r == '-' || r == '.' {
+			return r
+		}
+		return '-'
+	}, strings.ToLower(cmp.Or(d.Name, deviceName(d))))
+}
+
+// sshArgs is the ssh command for an SSH route. The host key is stored under
+// the device, like with the SSH config snippet, not under 127.0.0.1:port,
+// which later routes to other devices reuse.
+func sshArgs(r *meshcentral.Route) []string {
+	host, port, _ := strings.Cut(localAddr(r), ":")
+	args := []string{"ssh", "-p", port}
+	if i, ok := deviceIdx[r.NodeID]; ok {
+		args = append(args, "-o", "HostKeyAlias="+sshAlias(devices[i]))
+	}
+	return append(args, host)
+}
+
+// terminals are tried in order on Linux, with the flag that runs a command.
+var terminals = [][]string{
+	{"xdg-terminal-exec"}, {"x-terminal-emulator", "-e"}, {"ptyxis", "--"}, {"gnome-terminal", "--"},
+	{"konsole", "-e"}, {"xfce4-terminal", "-x"}, {"alacritty", "-e"}, {"kitty"}, {"foot"}, {"xterm", "-e"},
+}
+
+// openTerminal runs args in a new terminal window.
+func openTerminal(args []string) error {
+	switch runtime.GOOS {
+	case "windows": // a console program started from a GUI gets its own window
+		return exec.Command(args[0], args[1:]...).Start()
+	case "darwin": // the args are plain words, no quoting needed
+		script := fmt.Sprintf(`tell application "Terminal" to do script "%s"`, strings.Join(args, " "))
+		return exec.Command("osascript", "-e", script, "-e", `tell application "Terminal" to activate`).Start()
+	}
+	for _, t := range terminals {
+		if _, err := exec.LookPath(t[0]); err == nil {
+			return exec.Command(t[0], append(t[1:], args...)...).Start()
+		}
+	}
+	return errors.New("no terminal emulator found, use Copy for the ssh command")
+}
+
 func copyText(r *meshcentral.Route) string {
 	addr := localAddr(r)
-	host, port, _ := strings.Cut(addr, ":")
 	switch r.RemotePort {
 	case 22:
-		return fmt.Sprintf("ssh -p %s %s", port, host)
+		return strings.Join(sshArgs(r), " ")
 	case 80, 8080:
 		return "http://" + addr
 	case 443, 8443, 9090: // Cockpit serves TLS on 9090
@@ -1605,6 +1644,8 @@ func copyText(r *meshcentral.Route) string {
 // has no known client on this platform.
 func openCmd(r *meshcentral.Route) func() error {
 	switch r.RemotePort {
+	case 22:
+		return func() error { return openTerminal(sshArgs(r)) }
 	case 80, 8080, 443, 8443, 9090:
 		return func() error {
 			u, err := url.Parse(copyText(r))
