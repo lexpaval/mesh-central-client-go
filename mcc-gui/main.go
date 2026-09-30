@@ -271,16 +271,15 @@ func buildUI() fyne.CanvasObject {
 			d, _ := shownDevice(id)
 			row := o.(*deviceRow)
 			row.id = id
-			img, text := rowParts(row.content)
+			text := row.text
 			text.Title = deviceName(d)
 			text.Sub = strings.Join(slices.DeleteFunc([]string{d.Name, d.IP, d.OS}, func(s string) bool { return s == "" }), " · ")
 			text.Muted = d.Pwr == 0
-			img.Resource = osIcon(d.OS)
+			text.Icon = osIcon(d.OS)
 			if d.Pwr == 0 {
-				img.Resource = disabledIcon(img.Resource)
+				text.Icon = disabledIcon(text.Icon)
 				text.Sub = "offline · " + text.Sub
 			}
-			img.Refresh()
 			text.Refresh()
 		})
 	deviceTree.OnSelected = func(id widget.TreeNodeID) {
@@ -339,7 +338,7 @@ func buildUI() fyne.CanvasObject {
 					widget.NewButtonWithIcon("Open", icons["arrow-up-right-from-square"], nil),
 					widget.NewButtonWithIcon("Copy", icons["copy"], nil),
 					widget.NewButtonWithIcon("Stop", icons["circle-stop"], nil)),
-				twoLineRow())
+				newRowText(false))
 		},
 		func(id widget.ListItemID, o fyne.CanvasObject) {
 			routeRows[o] = routes[id]
@@ -571,15 +570,14 @@ func bindRouteRow(o fyne.CanvasObject, ar *activeRoute) {
 	case 5900:
 		svc, res = "VNC", icons["display"]
 	}
-	img, text := rowParts(objs[0])
-	img.Resource = res
+	text := objs[0].(*rowText)
 	text.Title = ar.device + " · " + svc
 	text.Sub = fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active())
+	text.Icon = res
 	if i, ok := deviceIdx[r.NodeID]; ok && devices[i].Pwr == 0 {
-		img.Resource = disabledIcon(res)
+		text.Icon = disabledIcon(res)
 		text.Sub += " · device offline"
 	}
-	img.Refresh()
 	text.Refresh()
 	if openCmd(r) == nil {
 		open.Hide()
@@ -810,8 +808,8 @@ func disabledIcon(r fyne.Resource) fyne.Resource {
 // another row, which made quick selection unresponsive.
 type deviceRow struct {
 	widget.BaseWidget
-	content fyne.CanvasObject
-	id      string
+	text *rowText
+	id   string
 }
 
 var lastTap struct {
@@ -820,12 +818,12 @@ var lastTap struct {
 }
 
 func newDeviceRow() *deviceRow {
-	r := &deviceRow{content: twoLineRow()}
+	r := &deviceRow{text: newRowText(false)}
 	r.ExtendBaseWidget(r)
 	return r
 }
 
-func (r *deviceRow) CreateRenderer() fyne.WidgetRenderer { return widget.NewSimpleRenderer(r.content) }
+func (r *deviceRow) CreateRenderer() fyne.WidgetRenderer { return widget.NewSimpleRenderer(r.text) }
 func (r *deviceRow) Tapped(*fyne.PointEvent) {
 	deviceTree.Select(r.id)
 	now := time.Now()
@@ -958,32 +956,20 @@ func selectTab(sel *tab) {
 	}
 }
 
-// twoLineRow is the list item template shared by devices and routes: an
-// icon beside a rowText.
-func twoLineRow() fyne.CanvasObject {
-	img := canvas.NewImageFromResource(nil)
-	img.FillMode = canvas.ImageFillContain
-	img.SetMinSize(fyne.NewSquareSize(18))
-	return container.NewBorder(nil, nil, container.NewPadded(img), nil, newRowText(false))
-}
-
-func rowParts(o fyne.CanvasObject) (*canvas.Image, *rowText) {
-	objs := o.(*fyne.Container).Objects
-	return objs[1].(*fyne.Container).Objects[0].(*canvas.Image), objs[0].(*rowText)
-}
-
-// rowText is a bold title over a smaller muted line (after it when inline),
-// both ellipsized. RichText pads like a paragraph, making it compact took a
-// ThemeOverride, whose rows Fyne leaks on every list or tree Refresh.
+// rowText is the row shared by devices, groups and routes: an icon beside a
+// bold title over a smaller muted line (after it when inline), ellipsized.
+// RichText pads like a paragraph, making it compact took a ThemeOverride,
+// whose rows Fyne leaks on every list or tree Refresh.
 type rowText struct {
 	widget.BaseWidget
 	Title, Sub string
-	Muted      bool // title in the placeholder color, for offline devices
+	Icon       fyne.Resource // nil for none
+	Muted      bool          // title in the placeholder color, for offline devices
 	inline     bool
 }
 
 // Padding around and between the lines, RichText's is 6 and 3.
-const rowPad, rowLineGap = 3, 1
+const rowPad, rowLineGap, rowIconSize = 3, 1, 18
 
 func newRowText(inline bool) *rowText {
 	t := &rowText{inline: inline}
@@ -992,7 +978,8 @@ func newRowText(inline bool) *rowText {
 }
 
 func (t *rowText) CreateRenderer() fyne.WidgetRenderer {
-	r := &rowTextRenderer{t: t, title: canvas.NewText("", nil), sub: canvas.NewText("", nil)}
+	r := &rowTextRenderer{t: t, icon: canvas.NewImageFromResource(nil), title: canvas.NewText("", nil), sub: canvas.NewText("", nil)}
+	r.icon.FillMode = canvas.ImageFillContain
 	r.title.TextStyle.Bold = true
 	r.Refresh()
 	return r
@@ -1000,33 +987,56 @@ func (t *rowText) CreateRenderer() fyne.WidgetRenderer {
 
 type rowTextRenderer struct {
 	t          *rowText
+	icon       *canvas.Image
+	variant    fyne.ThemeVariant // the icon was drawn for
+	pad        float32           // around the icon
 	title, sub *canvas.Text
 }
 
-func (r *rowTextRenderer) Destroy()                     {}
-func (r *rowTextRenderer) Objects() []fyne.CanvasObject { return []fyne.CanvasObject{r.title, r.sub} }
+func (r *rowTextRenderer) Destroy() {}
+func (r *rowTextRenderer) Objects() []fyne.CanvasObject {
+	return []fyne.CanvasObject{r.icon, r.title, r.sub}
+}
 
 func (r *rowTextRenderer) MinSize() fyne.Size {
 	h := fyne.MeasureText("M", r.title.TextSize, r.title.TextStyle).Height
 	if !r.t.inline {
 		h += rowLineGap + fyne.MeasureText("M", r.sub.TextSize, r.sub.TextStyle).Height
 	}
-	return fyne.NewSize(0, h+2*rowPad)
+	h += 2 * rowPad
+	if r.t.Icon != nil {
+		h = max(h, rowIconSize+2*r.pad)
+	}
+	return fyne.NewSize(0, h)
 }
 
+// Refresh only touches lines that changed, rows are rebound on every update
+// and a Text.Refresh repaints the window even when nothing did.
 func (r *rowTextRenderer) Refresh() {
 	th, v := r.t.Theme(), fyne.CurrentApp().Settings().ThemeVariant()
-	r.title.TextSize, r.sub.TextSize = th.Size(theme.SizeNameText), th.Size(theme.SizeNameCaptionText)
-	r.title.Color, r.sub.Color = th.Color(theme.ColorNameForeground, v), th.Color(theme.ColorNamePlaceHolder, v)
+	fg, muted := th.Color(theme.ColorNameForeground, v), th.Color(theme.ColorNamePlaceHolder, v)
 	if r.t.Muted {
-		r.title.Color = r.sub.Color
+		fg = muted
 	}
+	setStyle(r.title, th.Size(theme.SizeNameText), fg)
+	setStyle(r.sub, th.Size(theme.SizeNameCaptionText), muted)
+	// The SVG is colored for the theme, a pooled row missed the theme change.
+	if r.icon.Resource != r.t.Icon || r.variant != v {
+		r.icon.Resource, r.variant = r.t.Icon, v
+		r.icon.Refresh()
+	}
+	r.pad = th.Size(theme.SizeNamePadding)
 	r.Layout(r.t.Size())
-	r.title.Refresh()
-	r.sub.Refresh()
 }
 
-// setText sets a line's text, redrawing it if a resize changed its ellipsis.
+func setStyle(t *canvas.Text, size float32, c color.Color) {
+	if t.TextSize != size || t.Color != c {
+		t.TextSize, t.Color = size, c
+		t.Refresh()
+	}
+}
+
+// setText sets a line's text, redrawing it only if that changed it.
 func setText(t *canvas.Text, s string) {
 	if t.Text != s {
 		t.Text = s
@@ -1035,19 +1045,25 @@ func setText(t *canvas.Text, s string) {
 }
 
 func (r *rowTextRenderer) Layout(s fyne.Size) {
-	w := s.Width - 2*rowPad
+	x := float32(rowPad)
+	if r.t.Icon != nil {
+		r.icon.Move(fyne.NewPos(r.pad, (s.Height-rowIconSize)/2))
+		r.icon.Resize(fyne.NewSquareSize(rowIconSize))
+		x += rowIconSize + 3*r.pad // padded icon, then a gap
+	}
+	w := s.Width - x - rowPad
 	setText(r.title, ellipsize(r.t.Title, w, r.title.TextSize, r.title.TextStyle))
 	ts := fyne.MeasureText(r.title.Text, r.title.TextSize, r.title.TextStyle)
-	r.title.Move(fyne.NewPos(rowPad, rowPad))
+	r.title.Move(fyne.NewPos(x, rowPad))
 	r.title.Resize(ts)
-	pos := fyne.NewPos(rowPad, rowPad+ts.Height+rowLineGap)
+	pos := fyne.NewPos(x, rowPad+ts.Height+rowLineGap)
 	if r.t.inline {
 		w -= ts.Width
 	}
 	setText(r.sub, ellipsize(r.t.Sub, w, r.sub.TextSize, r.sub.TextStyle))
 	ss := fyne.MeasureText(r.sub.Text, r.sub.TextSize, r.sub.TextStyle)
 	if r.t.inline { // bottoms aligned, close to a shared baseline
-		pos = fyne.NewPos(rowPad+ts.Width, rowPad+ts.Height-ss.Height)
+		pos = fyne.NewPos(x+ts.Width, rowPad+ts.Height-ss.Height)
 	}
 	r.sub.Move(pos)
 	r.sub.Resize(ss)
