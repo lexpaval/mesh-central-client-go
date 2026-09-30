@@ -1,4 +1,4 @@
-.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots clean version
+.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots qt qt-test qt-shots qt-linux qt-windows qt-macos qt-all qt-release clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -105,6 +105,68 @@ gui-test:
 gui-shots:
 	mkdir -p dist/shots
 	$(GUI_RUN) -e SHOT_DIR=/src/dist/shots $(call GUI_LINUX_CC,amd64,x86_64) $(GUI_LINUX_IMAGE) go test -run TestScreenshot -count=1 .
+
+# Qt GUI (mcc-qt, miqt bindings). qt builds for this machine against the
+# system Qt 6 (Fedora: qt6-qtbase-devel, Debian/Ubuntu: qt6-base-dev), the
+# first build compiles the bindings for a few minutes. qt-linux, qt-windows
+# and qt-macos cross-build in podman images from mcc-qt/package, built on
+# first use: Linux amd64/arm64 binaries against Qt 6.4 (Debian 12, Ubuntu
+# 24.04 and later), Windows amd64/arm64 as static exes (Qt 6.11), macOS 14+ arm64/x86_64
+# as zipped .app bundles with Qt inside, ad-hoc signed. qt-all builds all of
+# them, qt-release packages them instead: Linux .tar.xz (desktop entry and
+# icon, unpacks to /usr/local), Windows .zip, macOS .app.zip.
+# The build cache is per image: cgo caches by flags, not Qt's headers, so a
+# rebuilt image with another Qt starts over. Old ones: podman volume prune.
+QT_LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(DATE)"
+QT_RUN = podman run --rm --security-opt label=disable -v $(CURDIR):/src -w /src \
+	-v mcc-gomod:/root/go/pkg/mod -v mcc-qt-gocache-$(1)-$$(podman image inspect -f '{{.Id}}' mcc-qt-build:$(1) | cut -c1-12):/root/.cache/go-build \
+	-e GOTOOLCHAIN=auto -e GOFLAGS=-buildvcs=false \
+	-e VERSION=$(VERSION) -e COMMIT=$(COMMIT) -e DATE=$(DATE) -e APP_VERSION=$(APP_VERSION) -e APP_BUILD=$(APP_BUILD) \
+	mcc-qt-build:$(1) sh mcc-qt/package/build.sh
+QT_IMAGE = podman image exists mcc-qt-build:$(1) || podman build $(2) -t mcc-qt-build:$(1) -f mcc-qt/package/$(3).Dockerfile mcc-qt/package
+
+qt:
+	mkdir -p dist
+	go build $(QT_LDFLAGS) -o dist/mcc-qt ./mcc-qt
+
+qt-test:
+	go test -count=1 ./mcc-qt
+
+# Renders the Qt window (dark/light), dialogs and a shell with sample data
+# to dist/shots-qt, offscreen.
+qt-shots:
+	mkdir -p dist/shots-qt
+	SHOT_DIR=$(CURDIR)/dist/shots-qt go test -run TestScreenshot -count=1 ./mcc-qt
+
+qt-linux:
+	$(call QT_IMAGE,linux,,linux)
+	$(call QT_RUN,linux) linux amd64
+	$(call QT_RUN,linux) linux arm64
+
+qt-windows:
+	$(call QT_IMAGE,windows,,windows)
+	$(call QT_RUN,windows) windows amd64
+	$(call QT_RUN,windows) windows arm64
+
+qt-macos:
+	$(call QT_IMAGE,macos-arm64,--build-arg TARGET_ARCH=arm64,macos)
+	$(call QT_IMAGE,macos-x86_64,--build-arg TARGET_ARCH=x86_64,macos)
+	$(call QT_RUN,macos-arm64) macos arm64
+	$(call QT_RUN,macos-x86_64) macos x86_64
+
+qt-all: qt-linux qt-windows qt-macos
+
+qt-release:
+	$(call QT_IMAGE,linux,,linux)
+	$(call QT_IMAGE,windows,,windows)
+	$(call QT_IMAGE,macos-arm64,--build-arg TARGET_ARCH=arm64,macos)
+	$(call QT_IMAGE,macos-x86_64,--build-arg TARGET_ARCH=x86_64,macos)
+	$(call QT_RUN,linux) linux amd64 package
+	$(call QT_RUN,linux) linux arm64 package
+	$(call QT_RUN,windows) windows amd64 package
+	$(call QT_RUN,windows) windows arm64 package
+	$(call QT_RUN,macos-arm64) macos arm64
+	$(call QT_RUN,macos-x86_64) macos x86_64
 
 build-all:
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64-$(VERSION) .
