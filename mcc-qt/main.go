@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"net"
 	"net/url"
 	"os"
 	"os/exec"
@@ -1550,10 +1551,15 @@ func portValidator(optional bool) func(string) error {
 // bind is loopback.
 func localAddr(r *meshcentral.Route) string {
 	host := r.BindAddress
-	if host == "" || host == "0.0.0.0" {
+	if host == "" {
 		host = "127.0.0.1"
+	} else if ip := net.ParseIP(host); ip != nil && ip.IsUnspecified() {
+		host = "127.0.0.1"
+		if ip.To4() == nil {
+			host = "::1"
+		}
 	}
-	return fmt.Sprintf("%s:%d", host, r.LocalPort)
+	return net.JoinHostPort(host, strconv.Itoa(r.LocalPort))
 }
 
 // sshAlias names a device for ssh, the SSH config snippet's Host alias.
@@ -1570,7 +1576,7 @@ func sshAlias(d meshcentral.Device) string {
 // the device, like with the SSH config snippet, not under 127.0.0.1:port,
 // which later routes to other devices reuse.
 func sshArgs(r *meshcentral.Route) []string {
-	host, port, _ := strings.Cut(localAddr(r), ":")
+	host, port, _ := net.SplitHostPort(localAddr(r))
 	args := []string{"ssh", "-p", port}
 	if i, ok := deviceIdx[r.NodeID]; ok {
 		args = append(args, "-o", "HostKeyAlias="+sshAlias(devices[i]))
@@ -1616,9 +1622,9 @@ func copyText(r *meshcentral.Route) string {
 	case 22:
 		return strings.Join(sshArgs(r), " ")
 	case 80, 8080:
-		return "http://" + addr
+		return (&url.URL{Scheme: "http", Host: addr}).String()
 	case 443, 8443, 9090: // Cockpit serves TLS on 9090
-		return "https://" + addr
+		return (&url.URL{Scheme: "https", Host: addr}).String()
 	}
 	return addr
 }

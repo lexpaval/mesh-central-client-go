@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -416,6 +417,51 @@ func TestRDPURL(t *testing.T) {
 	}
 	if openCmd(r) == nil {
 		t.Error("RDP route has no Open action")
+	}
+}
+
+func TestRouteClientAddresses(t *testing.T) {
+	for _, tc := range []struct {
+		bind, host, addr string
+	}{
+		{"", "127.0.0.1", "127.0.0.1:40123"},
+		{"0.0.0.0", "127.0.0.1", "127.0.0.1:40123"},
+		{"127.0.0.2", "127.0.0.2", "127.0.0.2:40123"},
+		{"localhost", "localhost", "localhost:40123"},
+		{"::", "::1", "[::1]:40123"},
+		{"0:0:0:0:0:0:0:0", "::1", "[::1]:40123"},
+		{"::ffff:0.0.0.0", "127.0.0.1", "127.0.0.1:40123"},
+		{"::1", "::1", "[::1]:40123"},
+		{"2001:db8::1", "2001:db8::1", "[2001:db8::1]:40123"},
+		{"fe80::1%eth0", "fe80::1%eth0", "[fe80::1%eth0]:40123"},
+	} {
+		t.Run(tc.bind, func(t *testing.T) {
+			r := &meshcentral.Route{NodeID: "address-test", BindAddress: tc.bind, LocalPort: 40123, RemotePort: 22}
+			if got := localAddr(r); got != tc.addr {
+				t.Errorf("local address = %q, want %q", got, tc.addr)
+			}
+			wantSSH := "ssh -p 40123 " + tc.host
+			if got := copyText(r); got != wantSSH {
+				t.Errorf("SSH command = %q, want %q", got, wantSSH)
+			}
+			for _, port := range []int{80, 443, 3389} {
+				r.RemotePort = port
+				link := copyText(r)
+				scheme := "http"
+				if port == 443 {
+					scheme = "https"
+				} else if port == 3389 {
+					scheme = "rdp"
+					link = rdpURL(r, "linux").String()
+				}
+				u, err := url.Parse(link)
+				if err != nil {
+					t.Errorf("invalid %s URL %q: %v", scheme, link, err)
+				} else if u.Scheme != scheme || u.Hostname() != tc.host || u.Port() != "40123" {
+					t.Errorf("%s URL = %q, want host %q and port 40123", scheme, link, tc.host)
+				}
+			}
+		})
 	}
 }
 
