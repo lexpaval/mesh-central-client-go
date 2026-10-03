@@ -2,13 +2,93 @@ package meshcentral
 
 import (
 	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gorilla/websocket"
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 )
+
+func TestLoginTimeout(t *testing.T) {
+	settings = Settings{Insecure: true, Token: "cookie=test"}
+	defer func() { settings = Settings{} }()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		// Bound the test even if the client forgets its authentication deadline.
+		ws.SetReadDeadline(time.Now().Add(controlAuthTimeout + 5*time.Second))
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"serverinfo"}`))
+		for {
+			if _, _, err := ws.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}))
+	defer server.Close()
+	err := StartSocketAs(config.Profile{Name: "test", Server: strings.TrimPrefix(server.URL, "https://")})
+	var timeout net.Error
+	if !errors.As(err, &timeout) || !timeout.Timeout() {
+		t.Fatalf("login returned %v, want an authentication timeout", err)
+	}
+	if settings.WebSocket != nil {
+		t.Error("timed-out login left the control socket open")
+	}
+}
+
+func TestLoginClearsReadDeadline(t *testing.T) {
+	settings = Settings{WebChannel: make(chan struct{}), AuthErrChannel: make(chan error, 1)}
+	lostHook := OnConnectionLost
+	defer func() {
+		if settings.RenewCookieTimer != nil {
+			settings.RenewCookieTimer.Stop()
+		}
+		settings = Settings{}
+		OnConnectionLost = lostHook
+	}()
+	closeServer := make(chan struct{})
+	defer close(closeServer)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"authcookie","cookie":"a","rcookie":"r"}`))
+		// Keep the authenticated socket idle beyond its original login deadline.
+		select {
+		case <-time.After(2 * time.Second):
+			ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		case <-closeServer:
+		}
+	}))
+	defer server.Close()
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ws.Close()
+	ws.SetReadDeadline(time.Now().Add(time.Second))
+	var lost error
+	OnConnectionLost = func(err error) { lost = err }
+	onServerWebSocket(ws, func() (*websocket.Conn, error) {
+		t.Error("authenticated socket reached its login deadline")
+		settings.closing = true
+		return nil, errors.New("test stopped reconnecting")
+	})
+	if !settings.initialAuthDone || len(settings.AuthErrChannel) != 0 {
+		t.Fatal("login did not complete")
+	}
+	if !websocket.IsCloseError(errors.Unwrap(lost), websocket.CloseNormalClosure) {
+		t.Fatalf("connection ended with %v, want the server's normal close", lost)
+	}
+}
 
 func TestControlSocketCloseNotification(t *testing.T) {
 	for _, tc := range []struct {

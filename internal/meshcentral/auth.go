@@ -37,6 +37,8 @@ func (e authError) Error() string {
 // infinite silent retry loop.
 const maxControlReconnectAttempts = 8
 
+const controlAuthTimeout = 15 * time.Second
+
 // StartSocket logs in with the default profile, see StartSocketAs.
 func StartSocket() error { return StartSocketAs(config.GetDefaultProfile()) }
 
@@ -116,6 +118,7 @@ func StartSocketAs(p config.Profile) error {
 		if err != nil {
 			return fmt.Errorf("unable to connect to server: %w", err)
 		}
+		conn.SetReadDeadline(time.Now().Add(controlAuthTimeout))
 
 		if settings.debug {
 			fmt.Println("Connected to server.")
@@ -281,6 +284,8 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 		case "serverinfo":
 			send([]byte(`{"action":"authcookie"}`))
 		case "authcookie":
+			// Clear the login deadline before releasing StartSocketAs.
+			conn.SetReadDeadline(time.Time{})
 			handleAuthCookieCommand(command)
 		case "serverAuth":
 			handleServerAuthCommand(command)
