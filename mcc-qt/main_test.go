@@ -103,6 +103,31 @@ func TestNodeEventsNeedConnection(t *testing.T) {
 	})
 }
 
+func TestDisconnectDiscardsPendingNodeEvents(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "a", MeshID: "m", Group: "Old", Name: "old", Pwr: 1}})
+		onNodeEvent(meshcentral.NodeEvent{Action: "nodeconnect", NodeID: "a", Pwr: 0})
+		onNodeEvent(meshcentral.NodeEvent{Action: "meshchange"})
+		disconnect()
+
+		// The old batch can reach the UI after a different profile has connected.
+		setConnected(true)
+		defer disconnect()
+		setDevices([]meshcentral.Device{{Id: "a", MeshID: "m", Group: "New", Name: "new", Pwr: 1}})
+		flushNodeEvents()
+		if devices[0].Pwr != 1 || reloadTimer != nil {
+			t.Error("events from the old session changed the new session or scheduled a reload")
+		}
+
+		// Discarding the old batch must leave delivery working for the new session.
+		event("nodeconnect", "a", 0)
+		if devices[0].Pwr != 0 {
+			t.Error("new session's node event was discarded")
+		}
+	})
+}
+
 func TestNodeEventsUpdateInPlace(t *testing.T) {
 	ui(t, func() {
 		setConnected(true)

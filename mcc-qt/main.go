@@ -569,6 +569,9 @@ func disconnect() {
 	routes = nil
 	rebuildRoutes()
 	meshcentral.StopSocket()
+	pendingEvents.Lock()
+	pendingEvents.events = nil
+	pendingEvents.Unlock()
 	setDevices(nil)
 	setConnected(false)
 	statusLabel.SetText("Disconnected")
