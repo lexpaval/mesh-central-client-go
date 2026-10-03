@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"time"
 )
@@ -30,6 +31,8 @@ func handleNodesCommand(command map[string]interface{}) {
 		}
 	}
 
+	settings.deviceMu.Lock()
+	defer settings.deviceMu.Unlock()
 	settings.Devices = devices
 	settings.DeviceQueryState = 0
 	if settings.deviceChan != nil {
@@ -68,6 +71,8 @@ func handleMeshesCommand(command map[string]interface{}) {
 		groups[id] = name
 	}
 	settings.groups = groups
+	settings.deviceMu.Lock()
+	defer settings.deviceMu.Unlock()
 	if settings.groupChan != nil {
 		close(settings.groupChan)
 		settings.groupChan = nil
@@ -110,32 +115,47 @@ var devicesMu sync.Mutex
 func GetDevices() []Device {
 	devicesMu.Lock()
 	defer devicesMu.Unlock()
+	defer func() {
+		settings.deviceMu.Lock()
+		settings.groupChan, settings.deviceChan = nil, nil
+		settings.DeviceQueryState = 0
+		settings.deviceMu.Unlock()
+	}()
 
 	// Group names come from "meshes", fetched first so nodes can be labelled.
 	// A failure only leaves devices without group names.
-	settings.groupChan = make(chan struct{})
+	groupsReady := make(chan struct{})
+	settings.deviceMu.Lock()
+	settings.groupChan = groupsReady
+	settings.deviceMu.Unlock()
 	if err := send([]byte(`{"action":"meshes"}`)); err == nil {
 		select {
-		case <-settings.groupChan:
+		case <-groupsReady:
 		case <-time.After(deviceQueryTimeout):
 			fmt.Fprintln(os.Stderr, "Timed out waiting for device groups from server.")
 		}
 	}
 
+	devicesReady := make(chan struct{})
+	settings.deviceMu.Lock()
 	settings.DeviceQueryState = 1
-	settings.deviceChan = make(chan struct{})
+	settings.deviceChan = devicesReady
+	settings.deviceMu.Unlock()
 	if err := send([]byte(`{"action":"nodes"}`)); err != nil {
 		fmt.Fprintln(os.Stderr, "Unable to request device list:", err)
 		return nil
 	}
 
 	select {
-	case <-settings.deviceChan:
+	case <-devicesReady:
 	case <-time.After(deviceQueryTimeout):
 		fmt.Fprintln(os.Stderr, "Timed out waiting for device list from server.")
+		return nil
 	}
 
-	return settings.Devices
+	settings.deviceMu.Lock()
+	defer settings.deviceMu.Unlock()
+	return slices.Clone(settings.Devices)
 }
 
 // RunCommand dispatches a shell command to nodeID and returns as soon as the

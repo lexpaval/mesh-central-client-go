@@ -2,8 +2,123 @@ package meshcentral
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+
+	"github.com/gorilla/websocket"
 )
+
+func deviceQueryServer(t *testing.T) *atomic.Bool {
+	t.Helper()
+	answerNodes := new(atomic.Bool)
+	answerNodes.Store(true)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		for {
+			var request map[string]interface{}
+			if ws.ReadJSON(&request) != nil {
+				return
+			}
+			switch request["action"] {
+			case "meshes":
+				ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"meshes","meshes":[{"_id":"m","name":"Lab"}]}`))
+			case "nodes":
+				if answerNodes.Load() {
+					ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes","nodes":{"m":[{"_id":"n","name":"Original"}]}}`))
+				}
+			}
+		}
+	}))
+	t.Cleanup(server.Close)
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.wsMu.Lock()
+	settings.WebSocket = ws
+	settings.wsMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			var response map[string]interface{}
+			if ws.ReadJSON(&response) != nil {
+				return
+			}
+			switch response["action"] {
+			case "meshes":
+				handleMeshesCommand(response)
+			case "nodes":
+				handleNodesCommand(response)
+			}
+		}
+	}()
+	t.Cleanup(func() {
+		ws.Close()
+		<-done
+		settings.wsMu.Lock()
+		settings.WebSocket = nil
+		settings.wsMu.Unlock()
+		settings.deviceMu.Lock()
+		settings.Devices, settings.groups = nil, nil
+		settings.deviceMu.Unlock()
+	})
+	return answerNodes
+}
+
+func TestConcurrentDeviceQueries(t *testing.T) {
+	deviceQueryServer(t)
+	var callers sync.WaitGroup
+	for range 4 {
+		callers.Go(func() {
+			for range 20 {
+				devices := GetDevices()
+				if len(devices) != 1 || devices[0].Id != "n" || devices[0].Group != "Lab" {
+					t.Errorf("query returned %v", devices)
+					return
+				}
+			}
+		})
+	}
+	callers.Wait()
+}
+
+func TestDeviceQueryReturnsOwnedSnapshot(t *testing.T) {
+	deviceQueryServer(t)
+	devices := GetDevices()
+	if len(devices) != 1 {
+		t.Fatalf("query returned %v", devices)
+	}
+	devices[0].DisplayName = "Changed by caller"
+	settings.deviceMu.Lock()
+	defer settings.deviceMu.Unlock()
+	if settings.Devices[0].DisplayName != "Original" {
+		t.Error("caller changed the shared device snapshot")
+	}
+}
+
+func TestDeviceQueryTimeoutReturnsNoCachedDevices(t *testing.T) {
+	answerNodes := deviceQueryServer(t)
+	if devices := GetDevices(); len(devices) != 1 {
+		t.Fatalf("initial query returned %v", devices)
+	}
+	answerNodes.Store(false)
+	if devices := GetDevices(); devices != nil {
+		t.Fatalf("timed-out query returned cached devices: %v", devices)
+	}
+	answerNodes.Store(true)
+	if devices := GetDevices(); len(devices) != 1 {
+		t.Fatalf("query after timeout returned %v", devices)
+	}
+}
 
 func TestHandleEventCommand(t *testing.T) {
 	settings.groups = map[string]string{"mesh//1": "Lab"}

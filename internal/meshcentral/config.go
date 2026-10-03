@@ -43,6 +43,7 @@ type Settings struct {
 	ServerAuthClientNonce string
 	MeshServerTlsHash     string
 	ServerHttpsHash       string
+	deviceMu              sync.Mutex // protects query channels and the device snapshot
 	Devices               []Device
 	DeviceQueryState      int
 	deviceChan            chan struct{}
