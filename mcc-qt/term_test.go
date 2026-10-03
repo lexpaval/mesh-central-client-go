@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -167,5 +168,88 @@ func TestTermFontChangeAndClose(t *testing.T) {
 		font.SetPointSize(max(1, font.PointSize()) + 1)
 		tm.w.SetFont(font)
 		tm.w.Grab()
+	})
+}
+
+func TestTermHistoryStaysAnchored(t *testing.T) {
+	for _, capacity := range []int{20, 200} {
+		t.Run(fmt.Sprint(capacity), func(t *testing.T) {
+			tm := newTestTerm(t)
+			mainthread.Wait(func() {
+				tm.emu.SetScrollbackSize(capacity)
+				for i := range 60 {
+					tm.Write([]byte(fmt.Sprintf("line%03d\r\n", i)))
+				}
+				tm.w.Grab()
+				tm.scroll = 10
+				line := tm.emu.ScrollbackLen() - tm.scroll
+				tm.sel.on, tm.sel.a, tm.sel.b = true, cellPos{line, 0}, cellPos{line, 7}
+				want := tm.selectionText()
+				// Both writes arrive before Qt can run the queued repaint callback.
+				tm.Write([]byte("new output\r\n"))
+				tm.Write([]byte("new output\r\n"))
+				if got := tm.selectionText(); got != want {
+					t.Errorf("output changed selection from %q to %q", want, got)
+				}
+				if tm.scroll != 12 || tm.sel.a.line != tm.emu.ScrollbackLen()-tm.scroll {
+					t.Errorf("output moved the viewport: scroll=%d selection=%d", tm.scroll, tm.sel.a.line)
+				}
+				tm.w.Grab()
+				if tm.scroll != 12 {
+					t.Error("paint applied the scroll adjustment twice")
+				}
+			})
+		})
+	}
+}
+
+func TestTermHistoryInvalidatesDiscardedSelection(t *testing.T) {
+	for _, change := range []struct{ name, output string }{
+		{"eviction", "new\r\n"},
+		{"clear and refill", "\x1b[3J" + strings.Repeat("new\r\n", 60)},
+		{"alternate screen", "\x1b[?1049h"},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			tm := newTestTerm(t)
+			mainthread.Wait(func() {
+				tm.emu.SetScrollbackSize(20)
+				tm.Write([]byte(strings.Repeat("old\r\n", 60)))
+				tm.w.Grab()
+				tm.scroll = 20
+				tm.sel.on, tm.sel.a, tm.sel.b = true, cellPos{0, 0}, cellPos{0, 3}
+				if got := tm.selectionText(); got != "old" {
+					t.Errorf("initial selection %q", got)
+				}
+				tm.Write([]byte(change.output))
+				if got := tm.selectionText(); got != "" || tm.sel.on {
+					t.Errorf("discarded selection still copied %q", got)
+				}
+				if change.name == "alternate screen" && tm.scroll != 0 {
+					t.Error("alternate screen retained history offset")
+				}
+			})
+		})
+	}
+}
+
+func TestTermBlankHistoryDropsAmbiguousSelection(t *testing.T) {
+	tm := newTestTerm(t)
+	mainthread.Wait(func() {
+		tm.emu.SetScrollbackSize(20)
+		tm.Write([]byte(strings.Repeat("\r\n", 60) + "marked"))
+		tm.w.Grab()
+		tm.scroll = 10
+		line := tm.emu.ScrollbackLen() + tm.rows - 1
+		tm.sel.on, tm.sel.a, tm.sel.b = true, cellPos{line, 0}, cellPos{line, 6}
+		if got := tm.selectionText(); got != "marked" {
+			t.Errorf("initial selection %q", got)
+		}
+		tm.Write([]byte("\r\nnew\r\n"))
+		if got := tm.selectionText(); got != "" {
+			t.Errorf("ambiguous selection copied %q", got)
+		}
+		if tm.scroll != 20 {
+			t.Errorf("blank history jumped to recent output: scroll=%d", tm.scroll)
+		}
 	})
 }

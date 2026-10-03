@@ -32,12 +32,17 @@ type term struct {
 	in  *byteQueue // keystrokes and replies, read by the session
 
 	// Set by the emulator's callbacks, under mu.
-	cursorHidden bool
-	mouseModes   map[ansi.Mode]bool
-	altScreen    bool
-	ended        bool // closed, output is dropped
+	cursorHidden   bool
+	mouseModes     map[ansi.Mode]bool
+	altScreen      bool
+	ended          bool // closed, output is dropped
+	historyReset   bool
+	historyPending bool
 
 	// UI thread only.
+	historyLen, historyAnchorIndex int
+	historyAnchor                  *uv.Cell
+
 	cols, rows     int
 	size           atomic.Uint64 // cols<<32 | rows, for the session goroutine
 	onResize       func()
@@ -64,7 +69,7 @@ func newTerm() *term {
 	t.emu.SetScrollbackSize(5000)
 	t.emu.SetCallbacks(vt.Callbacks{
 		CursorVisibility: func(v bool) { t.cursorHidden = !v },
-		AltScreen:        func(on bool) { t.altScreen = on },
+		AltScreen:        func(on bool) { t.altScreen, t.historyReset = on, true },
 		EnableMode: func(m ansi.Mode) {
 			if isMouseMode(m) {
 				t.mouseModes[m] = true
@@ -151,14 +156,15 @@ func (t *term) Write(p []byte) (int, error) {
 		return 0, io.ErrClosedPipe
 	}
 	n, err := t.emu.Write(p)
+	t.historyPending = t.historyPending || n > 0
 	t.mu.Unlock()
 	if !t.pending.Swap(true) {
 		mainthread.Start(func() {
 			t.pending.Store(false)
 			if !t.closed {
-				if t.scroll > 0 { // stay on the same history lines as they scroll up
-					t.clampScroll()
-				}
+				t.mu.Lock()
+				t.syncHistory()
+				t.mu.Unlock()
 				t.w.Update()
 			}
 		})
@@ -242,11 +248,67 @@ func (t *term) relayout() {
 	}
 }
 
+// syncHistory adjusts UI positions while mu holds the same emulator snapshot.
+func (t *term) syncHistory() {
+	n := t.emu.ScrollbackLen()
+	if !t.historyPending && !t.historyReset && n == t.historyLen {
+		return
+	}
+	dropped := 0
+	// Retained lines keep their cells. Their position reveals evictions even
+	// when the history length stays at its limit; the emulator has no counter.
+	if t.historyAnchor != nil {
+		idx := n - 1
+		for idx >= 0 && t.emu.ScrollbackCellAt(0, idx) != t.historyAnchor {
+			idx--
+		}
+		if idx < 0 {
+			t.historyReset = true
+		} else {
+			dropped = t.historyAnchorIndex - idx
+		}
+	} else if n < t.historyLen {
+		t.historyReset = true
+	} else if t.historyPending && t.historyLen == t.emu.Scrollback().MaxLines() {
+		// A full buffer of blank lines has no identity to track. Keep its oldest
+		// retained lines in view and discard selections whose position is uncertain.
+		if t.scroll > 0 {
+			t.scroll = n
+		}
+		t.sel.on, t.sel.dragging = false, false
+	}
+	if t.historyReset {
+		t.scroll = 0
+		t.sel.on, t.sel.dragging = false, false
+	} else {
+		if t.scroll > 0 {
+			t.scroll += max(0, n-t.historyLen+dropped)
+		}
+		if t.sel.on || t.sel.dragging {
+			t.sel.a.line -= dropped
+			t.sel.b.line -= dropped
+			if t.sel.a.line < 0 || t.sel.b.line < 0 {
+				t.sel.on, t.sel.dragging = false, false
+			}
+		}
+	}
+	t.scroll = min(t.scroll, n)
+	t.historyLen, t.historyReset, t.historyPending = n, false, false
+	t.historyAnchor, t.historyAnchorIndex = nil, n-1
+	for t.historyAnchorIndex >= 0 {
+		t.historyAnchor = t.emu.ScrollbackCellAt(0, t.historyAnchorIndex)
+		if t.historyAnchor != nil {
+			break
+		}
+		t.historyAnchorIndex--
+	}
+}
+
 func (t *term) clampScroll() {
 	t.mu.Lock()
-	n := t.emu.ScrollbackLen()
-	t.mu.Unlock()
-	t.scroll = min(max(t.scroll, 0), n)
+	defer t.mu.Unlock()
+	t.syncHistory()
+	t.scroll = min(max(t.scroll, 0), t.emu.ScrollbackLen())
 }
 
 // cellAt returns the cell on a line of history+screen, locked by the caller.
@@ -337,6 +399,7 @@ func (t *term) paint() {
 
 	t.mu.Lock()
 	defer t.mu.Unlock()
+	t.syncHistory()
 	sb := t.emu.ScrollbackLen()
 	top := sb - t.scroll
 	selA, selB := t.sel.a, t.sel.b
@@ -467,6 +530,9 @@ var ctrlModifier = func() qt.KeyboardModifier {
 
 // key handles a key press, reporting whether it was used.
 func (t *term) key(e *qt.QKeyEvent) bool {
+	t.mu.Lock()
+	t.syncHistory()
+	t.mu.Unlock()
 	k, mods, text := e.Key(), e.Modifiers(), e.Text()
 	ctrl, shift, alt := mods&ctrlModifier != 0, mods&qt.ShiftModifier != 0, mods&qt.AltModifier != 0
 
@@ -591,6 +657,7 @@ func (t *term) mouse(e *qt.QMouseEvent, kind int) {
 	}
 
 	t.mu.Lock()
+	t.syncHistory()
 	at := cellPos{t.emu.ScrollbackLen() - t.scroll + row, col}
 	t.mu.Unlock()
 	switch {
@@ -615,6 +682,9 @@ func (t *term) mouse(e *qt.QMouseEvent, kind int) {
 }
 
 func (t *term) wheel(e *qt.QWheelEvent) {
+	t.mu.Lock()
+	t.syncHistory()
+	t.mu.Unlock()
 	d := e.AngleDelta().Y() / 40 // 3 lines a notch
 	if d == 0 {
 		return
@@ -655,6 +725,9 @@ func abs(n int) int {
 
 // selectionText returns the selected text, lines without trailing blanks.
 func (t *term) selectionText() string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.syncHistory()
 	if !t.sel.on {
 		return ""
 	}
@@ -662,8 +735,6 @@ func (t *term) selectionText() string {
 	if b.before(a) {
 		a, b = b, a
 	}
-	t.mu.Lock()
-	defer t.mu.Unlock()
 	var lines []string
 	for line := a.line; line <= b.line; line++ {
 		from, to := 0, t.cols
