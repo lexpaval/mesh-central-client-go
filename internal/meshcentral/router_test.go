@@ -3,8 +3,10 @@ package meshcentral
 import (
 	"bytes"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -12,6 +14,76 @@ import (
 
 	"github.com/gorilla/websocket"
 )
+
+func TestIPv6RouteForwarding(t *testing.T) {
+	listener, err := net.Listen("tcp6", "[::1]:0")
+	if err != nil {
+		t.Skipf("IPv6 loopback unavailable: %v", err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("tcpaddr") != "::1" || r.URL.Query().Get("tcpport") != "22" {
+			t.Errorf("incorrect relay target: %s", r.URL.RawQuery)
+		}
+		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		defer ws.Close()
+		ws.SetReadDeadline(time.Now().Add(5 * time.Second))
+		ws.WriteMessage(websocket.TextMessage, []byte("c"))
+		for {
+			kind, data, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			if kind == websocket.BinaryMessage {
+				if err := ws.WriteMessage(kind, data); err != nil {
+					return
+				}
+			}
+		}
+	}))
+	server.Listener.Close()
+	server.Listener = listener
+	server.StartTLS()
+	defer server.Close()
+
+	serverURL, insecure := settings.ServerURL, settings.Insecure
+	settings.ServerURL = "wss" + strings.TrimPrefix(server.URL, "https") + "/meshrelay.ashx"
+	settings.Insecure = true
+	defer func() { settings.ServerURL, settings.Insecure = serverURL, insecure }()
+	route := &Route{BindAddress: "::1", Target: "::1", RemotePort: 22, Out: io.Discard}
+	if err := route.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer route.Close()
+	client, err := net.DialTimeout("tcp6", net.JoinHostPort("::1", strconv.Itoa(route.LocalPort)), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	payload := []byte("IPv6 tunnel round trip")
+	if _, err := client.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(client, got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, payload) {
+		t.Fatalf("received %q, want %q", got, payload)
+	}
+	client.Close()
+	deadline := time.Now().Add(5 * time.Second)
+	for route.Active() != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if route.Active() != 0 {
+		t.Fatal("route did not release the closed connection")
+	}
+}
 
 // relay plays the relay's side of a tunnel: the join message, one chunk of
 // device data, then a normal close.

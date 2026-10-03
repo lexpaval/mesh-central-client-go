@@ -69,6 +69,7 @@ mcc route -L 8080:127.0.0.1:80 -i <nodeid>
 mcc route -L 8080:80              # Interactive search, omit target IP
 mcc route -L 80                   # Random local port
 mcc route -L 0.0.0.0:8080:127.0.0.1:80 -i <nodeid>  # Listen on all local interfaces
+mcc route -L '[::1]:8080:[::1]:80' -i <nodeid>      # IPv6 loopback on both ends
 
 # SSH (interactive mode)
 mcc ssh -i <nodeid>
@@ -103,7 +104,7 @@ target:remoteport
 remoteport
 ```
 
-- `bind_address` - Optional, local interface to listen on, defaults to `127.0.0.1`. Use `0.0.0.0` to accept connections from other machines. Only valid in the 4-part form
+- `bind_address` - Optional, local interface to listen on, defaults to `127.0.0.1`. Use `0.0.0.0` for all IPv4 interfaces or `[::]` for all IPv6 interfaces. Only valid in the 4-part form
 - `localport` - Optional, random if omitted
 - `target` - Optional, host reachable from the mesh node, defaults to the node itself (`127.0.0.1`)
 - `remoteport` - Required
@@ -116,7 +117,18 @@ Examples:
 - `192.168.1.1:80` - Random local port to 192.168.1.1:80 via the node
 - `80` - Random local port to port 80 on the node
 
-Note: IPv6 addresses aren't supported in the bind address.
+Enclose IPv6 bind addresses and targets in brackets, and quote the specification to keep the shell from interpreting them:
+
+```bash
+mcc route -L '[::1]:8080:127.0.0.1:80' -i <nodeid> # Local IPv6 listener, remote IPv4 target
+mcc route -L '8080:[2001:db8::10]:80' -i <nodeid>  # IPv6 target reachable from the node
+mcc route -L '[2001:db8::10]:80' -i <nodeid>       # IPv6 target, random local port
+mcc route -L '[::]:8080:[::1]:80' -i <nodeid>      # All local IPv6 interfaces
+```
+
+Scoped addresses such as `[fe80::1%eth0]` are accepted. A bind address's scope names a local interface; a target's scope names an interface on the mesh node. Explicit `::1` targets remain IPv6 loopback rather than falling back to the node's IPv4 default. The node must have IPv6 connectivity to the target.
+
+For a MeshCentral server specified by IPv6 address, use `[2001:db8::1]` or `[2001:db8::1]:8443` in the profile's server field. The SSH command accepts a bare IPv6 target after the username, for example `mcc ssh 'user@2001:db8::10' -i <nodeid>`.
 
 ## Flags
 
