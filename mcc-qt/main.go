@@ -533,12 +533,17 @@ func connect(insecure bool) {
 
 		// Large servers take a while to send the list, the session is already
 		// up (and reported) meanwhile.
-		devs := meshcentral.GetDevices()
+		devs, err := meshcentral.QueryDevices()
 		mainthread.Start(func() {
 			if id != session.id { // disconnected while loading
 				return
 			}
 			session.loading = false
+			if err != nil {
+				logf("Device list failed: %v", err)
+				showError(err)
+				return
+			}
 			clear(collapsed)
 			setDevices(devs)
 			logf("Loaded %d devices", len(devs))
@@ -598,13 +603,18 @@ func refreshDevices() {
 	reloading = true
 	id := session.id
 	go func() {
-		devs := meshcentral.GetDevices()
+		devs, err := meshcentral.QueryDevices()
 		mainthread.Start(func() {
 			if !connected || id != session.id {
 				return
 			}
 			reloading = false
-			setDevices(devs)
+			if err != nil {
+				logf("Device refresh failed: %v", err)
+				showError(err)
+			} else {
+				setDevices(devs)
+			}
 			if reloadAgain {
 				reloadAgain = false
 				refreshDevices()

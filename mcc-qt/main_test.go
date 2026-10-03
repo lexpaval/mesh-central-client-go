@@ -265,6 +265,58 @@ func TestPrefsPersist(t *testing.T) {
 	}
 }
 
+func TestRefreshFailureKeepsDevices(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		reloading, reloadAgain = false, false
+		setDevices([]meshcentral.Device{{Id: "a", MeshID: "m", Group: "G", Name: "a", Pwr: 1}})
+		selectDevice("a")
+		settle()
+		logLines = nil
+		// No control socket: the request fails instead of returning an empty list.
+		refreshDevices()
+	})
+	defer mainthread.Wait(func() {
+		for _, w := range qt.QApplication_TopLevelWidgets() {
+			if w.WindowTitle() == "Error" {
+				w.Close()
+			}
+		}
+		setConnected(false)
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		done := false
+		mainthread.Wait(func() {
+			if reloading {
+				return
+			}
+			done = true
+			flushLog()
+			if len(devices) != 1 || devices[0].Id != "a" || selectedID != "a" || treeItems["a"] == nil {
+				t.Errorf("failed refresh changed devices or selection: %v, %q", devices, selectedID)
+			}
+			if !strings.Contains(strings.Join(logLines, "\n"), "Device refresh failed:") {
+				t.Error("refresh failure was not logged")
+			}
+			shownError := false
+			for _, w := range qt.QApplication_TopLevelWidgets() {
+				if w.WindowTitle() == "Error" && w.IsVisible() {
+					shownError = true
+				}
+			}
+			if !shownError {
+				t.Error("refresh failure was not shown")
+			}
+		})
+		if done {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("device refresh did not finish")
+}
+
 func TestRoutesReopen(t *testing.T) {
 	ui(t, func() {
 		session.profile = "p"

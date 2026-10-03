@@ -12,7 +12,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func deviceQueryServer(t *testing.T) *atomic.Bool {
+func deviceQueryServer(t *testing.T, empty bool) *atomic.Bool {
 	t.Helper()
 	answerNodes := new(atomic.Bool)
 	answerNodes.Store(true)
@@ -32,7 +32,11 @@ func deviceQueryServer(t *testing.T) *atomic.Bool {
 				ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"meshes","meshes":[{"_id":"m","name":"Lab"}]}`))
 			case "nodes":
 				if answerNodes.Load() {
-					ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes","nodes":{"m":[{"_id":"n","name":"Original"}]}}`))
+					if empty {
+						ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes","nodes":{}}`))
+					} else {
+						ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"nodes","nodes":{"m":[{"_id":"n","name":"Original"}]}}`))
+					}
 				}
 			}
 		}
@@ -75,7 +79,7 @@ func deviceQueryServer(t *testing.T) *atomic.Bool {
 }
 
 func TestConcurrentDeviceQueries(t *testing.T) {
-	deviceQueryServer(t)
+	deviceQueryServer(t, false)
 	var callers sync.WaitGroup
 	for range 4 {
 		callers.Go(func() {
@@ -92,7 +96,7 @@ func TestConcurrentDeviceQueries(t *testing.T) {
 }
 
 func TestDeviceQueryReturnsOwnedSnapshot(t *testing.T) {
-	deviceQueryServer(t)
+	deviceQueryServer(t, false)
 	devices := GetDevices()
 	if len(devices) != 1 {
 		t.Fatalf("query returned %v", devices)
@@ -106,17 +110,35 @@ func TestDeviceQueryReturnsOwnedSnapshot(t *testing.T) {
 }
 
 func TestDeviceQueryTimeoutReturnsNoCachedDevices(t *testing.T) {
-	answerNodes := deviceQueryServer(t)
+	answerNodes := deviceQueryServer(t, false)
 	if devices := GetDevices(); len(devices) != 1 {
 		t.Fatalf("initial query returned %v", devices)
 	}
 	answerNodes.Store(false)
-	if devices := GetDevices(); devices != nil {
-		t.Fatalf("timed-out query returned cached devices: %v", devices)
+	if devices, err := QueryDevices(); devices != nil || err == nil {
+		t.Fatalf("timed-out query returned %v, %v; want no devices and an error", devices, err)
 	}
 	answerNodes.Store(true)
 	if devices := GetDevices(); len(devices) != 1 {
 		t.Fatalf("query after timeout returned %v", devices)
+	}
+}
+
+func TestDeviceQueryEmptyList(t *testing.T) {
+	deviceQueryServer(t, true)
+	if devices, err := QueryDevices(); len(devices) != 0 || err != nil {
+		t.Fatalf("empty list returned %v, %v; want no devices and no error", devices, err)
+	}
+}
+
+func TestDeviceQueryWriteFailure(t *testing.T) {
+	deviceQueryServer(t, false)
+	if devices := GetDevices(); len(devices) != 1 {
+		t.Fatalf("initial query returned %v", devices)
+	}
+	settings.WebSocket.Close()
+	if devices, err := QueryDevices(); devices != nil || err == nil {
+		t.Fatalf("failed query returned %v, %v; want no devices and an error", devices, err)
 	}
 }
 

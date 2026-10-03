@@ -2,6 +2,7 @@ package meshcentral
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"slices"
@@ -108,11 +109,21 @@ func handleEventCommand(command map[string]interface{}) {
 	OnNodeEvent(e)
 }
 
-// devicesMu serializes GetDevices, the replies carry no request ID so only
+// devicesMu serializes QueryDevices, the replies carry no request ID so only
 // one query can be waiting at a time.
 var devicesMu sync.Mutex
 
 func GetDevices() []Device {
+	devices, err := QueryDevices()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+	}
+	return devices
+}
+
+// QueryDevices distinguishes a failed request from a successful empty list.
+// Group names remain best effort, as in GetDevices.
+func QueryDevices() ([]Device, error) {
 	devicesMu.Lock()
 	defer devicesMu.Unlock()
 	defer func() {
@@ -142,20 +153,18 @@ func GetDevices() []Device {
 	settings.deviceChan = devicesReady
 	settings.deviceMu.Unlock()
 	if err := send([]byte(`{"action":"nodes"}`)); err != nil {
-		fmt.Fprintln(os.Stderr, "Unable to request device list:", err)
-		return nil
+		return nil, fmt.Errorf("unable to request device list: %w", err)
 	}
 
 	select {
 	case <-devicesReady:
 	case <-time.After(deviceQueryTimeout):
-		fmt.Fprintln(os.Stderr, "Timed out waiting for device list from server.")
-		return nil
+		return nil, errors.New("timed out waiting for device list from server")
 	}
 
 	settings.deviceMu.Lock()
 	defer settings.deviceMu.Unlock()
-	return slices.Clone(settings.Devices)
+	return slices.Clone(settings.Devices), nil
 }
 
 // RunCommand dispatches a shell command to nodeID and returns as soon as the
