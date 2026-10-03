@@ -74,7 +74,10 @@ var (
 	deviceTree    *qt.QTreeWidget
 	treeItems     = map[string]*qt.QTreeWidgetItem{} // group and device rows by ID
 	collapsed     = map[string]bool{}                // groups the user closed
-	treeBuilding  bool                               // selection signals from a rebuild are ignored
+	treeOrder     []string
+	treeChildren  = map[string][]string{}
+	treeDirty     bool
+	treeBuilding  bool // selection signals from a rebuild are ignored
 	routeBox      *qt.QVBoxLayout
 	routeHint     *qt.QLabel
 	routeRows     []*routeRow
@@ -118,6 +121,13 @@ func main() {
 			disconnect()
 		}
 		super(e)
+	})
+	win.OnShowEvent(func(super func(*qt.QShowEvent), e *qt.QShowEvent) {
+		super(e)
+		if treeDirty {
+			rebuildTree()
+		}
+		refreshRouteRows()
 	})
 	win.OnChangeEvent(func(super func(*qt.QEvent), e *qt.QEvent) {
 		super(e)
@@ -179,6 +189,9 @@ func hbox(margins bool, ws ...*qt.QWidget) *qt.QHBoxLayout {
 func buildUI() *qt.QWidget {
 	iconSetters = nil
 	clear(treeItems)
+	treeOrder = nil
+	clear(treeChildren)
+	treeDirty = false
 	clear(collapsed)
 	routeRows, shells = nil, nil
 	root := qt.NewQWidget2()
@@ -945,42 +958,94 @@ func filterDevices() (reshaped bool) {
 	return !slices.Equal(oldOrder, groupOrder) || !maps.EqualFunc(oldChildren, groupChildren, slices.Equal)
 }
 
-// rebuildTree recreates the tree's rows from groupOrder and groupChildren,
-// keeping the selection, the groups the user closed and the scroll position.
+// rebuildTree reconciles the visible rows, retaining unaffected Qt items.
+// The Go order avoids crossing into Qt for every unchanged device.
 func rebuildTree() {
+	if win != nil && !win.IsVisible() {
+		treeDirty = true
+		return
+	}
+	treeDirty = false
 	treeBuilding = true
 	defer func() { treeBuilding = false }()
 	sb := deviceTree.VerticalScrollBar()
 	pos := sb.Value()
 	deviceTree.SetUpdatesEnabled(false)
-	deviceTree.Clear()
-	clear(treeItems)
-	role := int(qt.UserRole)
-	var sel *qt.QTreeWidgetItem
-	for _, gid := range groupOrder {
-		g := qt.NewQTreeWidgetItem3(deviceTree)
-		v := qt.NewQVariant11(gid)
-		g.SetData(0, role, v)
-		v.Delete()
-		g.SetFlags(qt.ItemIsEnabled)
-		treeItems[gid] = g
-		for _, id := range groupChildren[gid] {
-			c := qt.NewQTreeWidgetItem6(g)
-			v := qt.NewQVariant11(id)
-			c.SetData(0, role, v)
-			v.Delete()
-			treeItems[id] = c
-			if id == selectedID {
-				sel = c
+
+	// Detach moved devices before removing their old groups.
+	for gid, ids := range treeChildren {
+		g := treeItems[gid]
+		for i := len(ids) - 1; i >= 0; i-- {
+			d, visible := shownDevice(ids[i])
+			if visible && d.MeshID == gid {
+				continue
 			}
+			item := g.TakeChild(i)
+			if !visible {
+				item.Delete()
+				delete(treeItems, ids[i])
+			}
+			ids = slices.Delete(ids, i, i+1)
 		}
+		treeChildren[gid] = ids
+	}
+	for i := len(treeOrder) - 1; i >= 0; i-- {
+		gid := treeOrder[i]
+		if _, keep := groupChildren[gid]; !keep {
+			deviceTree.TakeTopLevelItem(i).Delete()
+			delete(treeItems, gid)
+			delete(treeChildren, gid)
+			treeOrder = slices.Delete(treeOrder, i, i+1)
+		}
+	}
+	for i, gid := range groupOrder {
+		g := treeItems[gid]
+		if g == nil {
+			g = qt.NewQTreeWidgetItem()
+			v := qt.NewQVariant11(gid)
+			g.SetData(0, int(qt.UserRole), v)
+			v.Delete()
+			g.SetFlags(qt.ItemIsEnabled)
+			treeItems[gid] = g
+		}
+		if i >= len(treeOrder) || treeOrder[i] != gid {
+			if old := slices.Index(treeOrder, gid); old >= 0 {
+				deviceTree.TakeTopLevelItem(old)
+				treeOrder = slices.Delete(treeOrder, old, old+1)
+			}
+			deviceTree.InsertTopLevelItem(i, g)
+			treeOrder = slices.Insert(treeOrder, i, gid)
+		}
+		ids := treeChildren[gid]
+		for j, id := range groupChildren[gid] {
+			if j < len(ids) && ids[j] == id {
+				continue
+			}
+			item := treeItems[id]
+			if item == nil {
+				item = qt.NewQTreeWidgetItem()
+				v := qt.NewQVariant11(id)
+				item.SetData(0, int(qt.UserRole), v)
+				v.Delete()
+				treeItems[id] = item
+			} else if old := slices.Index(ids, id); old >= 0 {
+				g.TakeChild(old)
+				ids = slices.Delete(ids, old, old+1)
+			}
+			g.InsertChild(j, item)
+			ids = slices.Insert(ids, j, id)
+		}
+		treeChildren[gid] = ids
 		g.SetExpanded(!collapsed[gid])
 	}
-	if sel != nil {
+	if sel := treeItems[selectedID]; sel != nil {
 		deviceTree.SetCurrentItem(sel)
+	} else {
+		deviceTree.ClearSelection()
 	}
 	deviceTree.SetUpdatesEnabled(true)
 	sb.SetValue(pos)
+	deviceTree.Viewport().Update()
 }
 
 // selectDevice selects a device row, as a click would.

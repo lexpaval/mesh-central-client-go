@@ -379,3 +379,56 @@ func TestShellTabs(t *testing.T) {
 		}
 	})
 }
+
+func TestTreeRetainsItemsAcrossMoves(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		offlineChk.SetChecked(true)
+		setDevices([]meshcentral.Device{
+			{Id: "a", MeshID: "one", Group: "One", Name: "a", Pwr: 1},
+			{Id: "b", MeshID: "two", Group: "Two", Name: "b", Pwr: 1},
+			{Id: "c", MeshID: "two", Group: "Two", Name: "c", Pwr: 1},
+		})
+		a, b, c, group := treeItems["a"], treeItems["b"], treeItems["c"], treeItems["two"]
+		selectDevice("a")
+		// Remove the old group, insert into an existing group, and reorder siblings.
+		setDevices([]meshcentral.Device{
+			{Id: "a", MeshID: "two", Group: "Two", Name: "z", Pwr: 1},
+			{Id: "b", MeshID: "two", Group: "Two", Name: "b", Pwr: 1},
+			{Id: "c", MeshID: "two", Group: "Two", Name: "a", Pwr: 1},
+		})
+		if treeItems["a"] != a || treeItems["b"] != b || treeItems["c"] != c || treeItems["two"] != group {
+			t.Error("moving devices replaced native items")
+		}
+		if deviceTree.TopLevelItemCount() != 1 || group.ChildCount() != 3 {
+			t.Error("incorrect group or child count")
+		}
+		for i, id := range []string{"c", "b", "a"} {
+			if got := group.Child(i).Data(0, int(qt.UserRole)).ToString(); got != id {
+				t.Errorf("child %d = %q, want %q", i, got, id)
+			}
+		}
+		if selectedID != "a" || !a.IsSelected() {
+			t.Error("group move lost selection")
+		}
+	})
+}
+
+func TestHiddenTreeDefersChanges(t *testing.T) {
+	ui(t, func() {
+		win = qt.NewQMainWindow2()
+		defer func() { win.DeleteLater(); win = nil }()
+		win.Hide()
+		setDevices([]meshcentral.Device{{Id: "a", MeshID: "m", Name: "a", Pwr: 1}})
+		setDevices([]meshcentral.Device{{Id: "b", MeshID: "m", Name: "b", Pwr: 1}})
+		if !treeDirty || treeItems["b"] != nil {
+			t.Error("hidden tree was updated eagerly")
+		}
+		win.Show()
+		rebuildTree() // the main window show handler flushes deferred changes
+		if treeDirty || treeItems["a"] != nil || treeItems["b"] == nil {
+			t.Error("show did not reconcile the latest device list")
+		}
+		win.Hide()
+	})
+}
