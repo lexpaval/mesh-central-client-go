@@ -2,9 +2,6 @@
 test.json
 mcc
 dist
-fyne-cross
 .cache
 .config
-mcc-gui/fyne_metadata_init.go
-mcc-gui/FyneApp.toml
-mcc-qt/rsrc_windows_*.syso
+mcc-gui/rsrc_windows_*.syso

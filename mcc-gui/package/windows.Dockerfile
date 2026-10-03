@@ -1,4 +1,4 @@
-# Cross-builds mcc-qt for Windows amd64 and arm64, each one static .exe,
+# Cross-builds mcc-gui for Windows amd64 and arm64, each one static .exe,
 # with llvm-mingw and MSYS2's static Qt 6 (clang64 and clangarm64, the
 # newest Qt MSYS2 has). Arch's pacman installs the MSYS2 packages and their
 # dependencies into /msys. Qt is LGPLv3: static linking is fine for this open

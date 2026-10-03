@@ -11,7 +11,7 @@
 // as if minimized, which gets no frame callbacks on Wayland).
 //
 // The GUIs connect and open shells on their own when MCC_GUI_BENCH is set to
-// the number of shells, see bench.go in mcc-gui and mcc-qt.
+// the number of shells, see bench.go in mcc-gui.
 package main
 
 import (

@@ -1,4 +1,4 @@
-# Cross-builds mcc-qt for macOS 14+ (the oldest MacPorts builds its newest
+# Cross-builds mcc-gui for macOS 14+ (the oldest MacPorts builds its newest
 # Qt 6 for) with osxcross and MacPorts' qt6-qtbase port,
 # TARGET_ARCH x86_64 or arm64. Taken from miqt's
 # docker/ffmpeg-macos-cross-*-sdk14.5-go1.25-qt6.7-dynamic.Dockerfile (MIT),

@@ -1,4 +1,4 @@
-# Builds mcc-qt for Linux amd64 and arm64 against Debian 12's Qt 6.4, the
+# Builds mcc-gui for Linux amd64 and arm64 against Debian 12's Qt 6.4, the
 # oldest Qt 6 in current distributions (Ubuntu 24.04 has 6.4 too), so the
 # binaries run with any Qt 6.4+ and glibc 2.36+. arm64 cross-compiles with
 # Debian's multiarch Qt. Based on miqt's docker/linux64-go1.26-qt6.4-dynamic.

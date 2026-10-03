@@ -1,10 +1,10 @@
 #!/bin/sh
-# Builds mcc-qt inside the images next to this script, the Makefile's
+# Builds mcc-gui inside the images next to this script, the Makefile's
 # qt-linux, qt-windows, qt-macos and qt-release run it:
 #
-#   build.sh linux amd64|arm64    dist/mcc-qt-linux-<arch>-<version>
-#   build.sh windows amd64|arm64  dist/mcc-qt-windows-<arch>-<version>.exe
-#   build.sh macos arm64|x86_64   dist/mcc-qt-darwin-<arch>-<version>.app.zip
+#   build.sh linux amd64|arm64    dist/mcc-gui-linux-<arch>-<version>
+#   build.sh windows amd64|arm64  dist/mcc-gui-windows-<arch>-<version>.exe
+#   build.sh macos arm64|x86_64   dist/mcc-gui-darwin-amd64|arm64-<version>.app.zip
 #
 # With "package" after the arch, Linux builds a .tar.xz installing the binary,
 # a desktop entry and the icon to /usr/local, and Windows a .zip of the exe.
@@ -27,25 +27,25 @@ linux)
 		export GOARCH=arm64 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
 		export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
 	fi
-	bin="dist/mcc-qt-linux-$arch-$VERSION"
-	go build -trimpath -ldflags "$ldflags" -o "$bin" ./mcc-qt
+	bin="dist/mcc-gui-linux-$arch-$VERSION"
+	go build -trimpath -ldflags "$ldflags" -o "$bin" ./mcc-gui
 	[ "$package" = package ] || exit 0
 	root=$work/usr/local
-	install -Dm755 "$bin" "$root/bin/mcc-qt"
+	install -Dm755 "$bin" "$root/bin/mcc-gui"
 	rm "$bin"
-	install -Dm644 mcc-qt/Icon.png "$root/share/icons/hicolor/512x512/apps/$id.png"
+	install -Dm644 mcc-gui/Icon.png "$root/share/icons/hicolor/512x512/apps/$id.png"
 	install -d "$root/share/applications"
 	cat > "$root/share/applications/$id.desktop" <<-EOF
 		[Desktop Entry]
 		Type=Application
 		Name=$name
 		Comment=Devices, port routes and shells on a MeshCentral server
-		Exec=mcc-qt
+		Exec=mcc-gui
 		Icon=$id
 		Categories=Network;RemoteAccess;
 	EOF
 	# Unpacks to /usr/local: sudo tar -xJf <file> -C /
-	tar -C "$work" -cJf "dist/mcc-qt-linux-$arch-$VERSION.tar.xz" usr
+	tar -C "$work" -cJf "dist/mcc-gui-linux-$arch-$VERSION.tar.xz" usr
 	;;
 
 windows)
@@ -59,16 +59,16 @@ windows)
 	# brings in <new> on the way.
 	export CGO_LDFLAGS CGO_CXXFLAGS="-include new"
 	# Exe icon, version info and manifest (DPI awareness, visual styles).
-	GOOS= GOARCH= CGO_ENABLED=0 go tool -modfile=tools.mod go-winres simply --arch "$arch" --icon mcc-qt/Icon.png --manifest gui \
-		--product-name "$name" --file-description "$name" --original-filename mcc-qt.exe \
-		--product-version "$APP_VERSION.$APP_BUILD" --file-version "$APP_VERSION.$APP_BUILD" --out mcc-qt/rsrc
-	trap 'rm -f mcc-qt/rsrc_windows_*.syso' EXIT
-	exe="dist/mcc-qt-windows-$arch-$VERSION.exe"
-	go build -trimpath -tags windowsqtstatic -ldflags "$ldflags -H windowsgui" -o "$exe" ./mcc-qt
+	GOOS= GOARCH= CGO_ENABLED=0 go tool -modfile=tools.mod go-winres simply --arch "$arch" --icon mcc-gui/Icon.png --manifest gui \
+		--product-name "$name" --file-description "$name" --original-filename mcc-gui.exe \
+		--product-version "$APP_VERSION.$APP_BUILD" --file-version "$APP_VERSION.$APP_BUILD" --out mcc-gui/rsrc
+	trap 'rm -f mcc-gui/rsrc_windows_*.syso' EXIT
+	exe="dist/mcc-gui-windows-$arch-$VERSION.exe"
+	go build -trimpath -tags windowsqtstatic -ldflags "$ldflags -H windowsgui" -o "$exe" ./mcc-gui
 	if [ "$package" = package ]; then
-		cp "$exe" "$work/mcc-qt.exe"
+		cp "$exe" "$work/mcc-gui.exe"
 		rm -f "${exe%.exe}.zip"
-		(cd "$work" && zip -q "/src/${exe%.exe}.zip" mcc-qt.exe)
+		(cd "$work" && zip -q "/src/${exe%.exe}.zip" mcc-gui.exe)
 		rm "$exe"
 	fi
 	;;
@@ -81,7 +81,7 @@ macos)
 	app="$work/bundle.app"
 	c="$app/Contents"
 	mkdir -p "$c/MacOS" "$c/Frameworks" "$c/PlugIns/platforms" "$c/PlugIns/styles" "$c/Resources"
-	GOARCH=$goarch go build -trimpath -ldflags "$ldflags" -o "$c/MacOS/mcc-qt" ./mcc-qt
+	GOARCH=$goarch go build -trimpath -ldflags "$ldflags" -o "$c/MacOS/mcc-gui" ./mcc-gui
 	cp "$qt/plugins/platforms/libqcocoa.dylib" "$c/PlugIns/platforms/"
 	cp "$qt/plugins/styles/libqmacstyle.dylib" "$c/PlugIns/styles/" 2>/dev/null || true
 	printf '[Paths]\nPlugins = PlugIns\n' > "$c/Resources/qt.conf"
@@ -89,7 +89,7 @@ macos)
 	# What macdeployqt does: copy every MacPorts library the app loads,
 	# transitively, into Frameworks and point the references there.
 	fw='@executable_path/../Frameworks'
-	queue="$c/MacOS/mcc-qt $(find "$c/PlugIns" -name '*.dylib')"
+	queue="$c/MacOS/mcc-gui $(find "$c/PlugIns" -name '*.dylib')"
 	while [ -n "$queue" ]; do
 		set -- $queue
 		f=$1
@@ -123,7 +123,7 @@ macos)
 	done
 
 	# An .icns holding the PNG as is, its size picks the entry type.
-	python3 - mcc-qt/Icon.png "$c/Resources/icon.icns" <<-'EOF'
+	python3 - mcc-gui/Icon.png "$c/Resources/icon.icns" <<-'EOF'
 		import struct, sys
 		png = open(sys.argv[1], 'rb').read()
 		w = struct.unpack('>I', png[16:20])[0]
@@ -136,7 +136,7 @@ macos)
 		<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 		<plist version="1.0">
 		<dict>
-			<key>CFBundleExecutable</key><string>mcc-qt</string>
+			<key>CFBundleExecutable</key><string>mcc-gui</string>
 			<key>CFBundleIdentifier</key><string>$id</string>
 			<key>CFBundleName</key><string>$name</string>
 			<key>CFBundleDisplayName</key><string>$name</string>
@@ -153,8 +153,8 @@ macos)
 	# install_name_tool voids the signatures, Apple silicon runs nothing unsigned.
 	mv "$app" "$work/$name.app"
 	rcodesign sign "$work/$name.app" > /dev/null
-	rm -f "dist/mcc-qt-darwin-$arch-$VERSION.app.zip"
-	(cd "$work" && zip -qry "/src/dist/mcc-qt-darwin-$arch-$VERSION.app.zip" "$name.app")
+	rm -f "dist/mcc-gui-darwin-$goarch-$VERSION.app.zip"
+	(cd "$work" && zip -qry "/src/dist/mcc-gui-darwin-$goarch-$VERSION.app.zip" "$name.app")
 	;;
 
 *)

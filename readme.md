@@ -30,31 +30,32 @@ go build -o mcc
 
 `mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices. A route's **Open** starts the matching client: the browser for web ports, `ssh` in a terminal window for SSH, and for RDP `mstsc` on Windows or the app registered for `rdp://` links on macOS (Microsoft's Windows App) and Linux (Remmina, KRDC, GNOME Connections). **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH. Shell tabs and routes are marked when the server records the session. The GUI opens with the profile last connected to, leaving the CLI's default profile as it is, and routes still running at a disconnect or quit reopen on the next connect with that profile, on the same local ports.
 
-The GUI needs cgo, so it's built in podman with the [fyne-cross](https://github.com/fyne-io/fyne-cross) images, no host packages needed. The builds embed the app icon and version:
+The GUI uses Qt 6 through miqt and needs cgo and a C++ compiler. For a native build, install the Qt 6 development packages (`qt6-qtbase-devel` on Fedora or `qt6-base-dev` on Debian/Ubuntu):
 
 ```bash
-make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>        portable binaries
-make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe  portable .exe with icon
-make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.zip   zipped .app
-make gui-all      # Linux and Windows
-make release      # CLI for all platforms + GUI packages via fyne-cross + sha256sums.txt
+make gui          # dist/mcc-gui, linked against the system Qt
+make gui-test     # GUI tests using Qt's offscreen platform
+make gui-shots    # Sample-data screenshots in dist/shots (no server needed)
 ```
 
-`make release` packages the GUI with fyne-cross (pinned in `tools.mod`, run through `go tool`): Linux `.tar.xz` with binary, `.desktop` entry and icon (`sudo make install` inside), Windows `.zip`, and macOS `.app.zip` when the SDK is available.
-
-The Linux builds support both X11 and Wayland (picked at runtime) and target glibc 2.38+ (Debian 13, Ubuntu 24.04, Fedora 39 or newer).
-
-macOS builds need the macOS SDK from Apple's *Command Line Tools for Xcode* (developer.apple.com/download/all, Apple ID required, read the Xcode license first). Extract it once, it lands in `SDKs/` next to the `.dmg`, which the macOS targets pick up from `~/Downloads` (or set `MACOS_SDK`):
+Cross-platform builds use Podman images in `mcc-gui/package`. Images are built on first use; Windows resource generation uses `go-winres`, pinned in `tools.mod`.
 
 ```bash
-make gui-macos-sdk XCODE_DMG=~/Downloads/Command_Line_Tools_for_Xcode_<ver>.dmg
+make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>
+make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe
+make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.app.zip
+make gui-all      # All three platforms
+make gui-release  # GUI packages for all three platforms
+make release      # CLI binaries + GUI packages + sha256sums.txt
 ```
 
-`make gui-shots` renders the window, dialogs and icons in dark and light mode with sample data to `dist/shots`.
+Linux packages are `.tar.xz` archives containing the binary, desktop entry, and icon under `usr/local` (`sudo tar -xJf <package> -C /`). They require glibc 2.36+, Qt 6.4+ runtime libraries, and the appropriate Qt platform plugin on the target system. Windows packages contain a static executable in a `.zip`. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
+
+On Linux, `make gui-bench` measures CPU and memory against the dummy MeshCentral server. `make gui-soak` runs a 30-minute test with 16,000 devices and two active shells in headless Mutter. Pass `BENCH_FLAGS` for benchmark options, `SOAK` for duration, and `HIDE=` to render the window during a soak.
 
 GUI icons are from [Font Awesome Free](https://fontawesome.com) by Fonticons, Inc., licensed under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
 
-The CLI build doesn't link Fyne and stays cgo-free.
+The CLI build does not link Qt and stays cgo-free.
 
 ## Usage
 ```bash
