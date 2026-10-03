@@ -1570,17 +1570,26 @@ var terminals = [][]string{
 func openTerminal(args []string) error {
 	switch runtime.GOOS {
 	case "windows": // a console program started from a GUI gets its own window
-		return exec.Command(args[0], args[1:]...).Start()
+		return startCommand(exec.Command(args[0], args[1:]...))
 	case "darwin": // the args are plain words, no quoting needed
 		script := fmt.Sprintf(`tell application "Terminal" to do script "%s"`, strings.Join(args, " "))
-		return exec.Command("osascript", "-e", script, "-e", `tell application "Terminal" to activate`).Start()
+		return startCommand(exec.Command("osascript", "-e", script, "-e", `tell application "Terminal" to activate`))
 	}
 	for _, t := range terminals {
 		if _, err := exec.LookPath(t[0]); err == nil {
-			return exec.Command(t[0], append(t[1:], args...)...).Start()
+			return startCommand(exec.Command(t[0], append(t[1:], args...)...))
 		}
 	}
 	return errors.New("no terminal emulator found, use Copy for the ssh command")
+}
+
+func startCommand(cmd *exec.Cmd) error {
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	// Reap external clients without blocking the UI while their windows are open.
+	go func() { _ = cmd.Wait() }()
+	return nil
 }
 
 func copyText(r *meshcentral.Route) string {
@@ -1612,7 +1621,7 @@ func openCmd(r *meshcentral.Route) func() error {
 		}
 	case 3389:
 		if runtime.GOOS == "windows" { // mstsc doesn't register rdp://
-			return func() error { return exec.Command("mstsc", "/v:"+localAddr(r)).Start() }
+			return func() error { return startCommand(exec.Command("mstsc", "/v:"+localAddr(r))) }
 		}
 		return func() error {
 			if runtime.GOOS == "linux" { // xdg-open fails silently without a handler
@@ -1630,7 +1639,7 @@ func openCmd(r *meshcentral.Route) func() error {
 // open, QUrl would reencode Microsoft's rdp:// form.
 func openURL(u *url.URL) error {
 	if runtime.GOOS == "darwin" {
-		return exec.Command("open", u.String()).Start()
+		return startCommand(exec.Command("open", u.String()))
 	}
 	q := qt.NewQUrl3(u.String())
 	defer q.Delete()
