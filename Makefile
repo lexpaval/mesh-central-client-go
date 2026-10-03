@@ -1,4 +1,4 @@
-.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots qt qt-test qt-shots qt-linux qt-windows qt-macos qt-all qt-release gui-bench clean version
+.PHONY: build build-all release gui-linux gui-windows gui-macos gui-macos-sdk gui-all gui-release gui-test gui-shots qt qt-test qt-shots qt-linux qt-windows qt-macos qt-all qt-release gui-bench gui-soak clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -175,6 +175,17 @@ qt-release:
 gui-bench: qt
 	test -x dist/mcc-gui-linux-amd64-$(VERSION) || $(MAKE) gui-linux
 	go run ./tools/guibench $(BENCH_FLAGS) dist/mcc-gui-linux-amd64-$(VERSION) dist/mcc-qt
+
+# Soaks both GUIs side by side for SOAK (30m) against a server the size of a
+# large one (16000 devices, 50 events/s, 2 shells), each in a headless mutter
+# with its window hidden as if minimized, and reports how their memory grew.
+# Nothing shows on the desktop. HIDE= keeps the windows shown.
+SOAK ?= 30m
+HIDE ?= -hide
+gui-soak: qt
+	test -x dist/mcc-gui-linux-amd64-$(VERSION) || $(MAKE) gui-linux
+	go run ./tools/guibench -headless $(HIDE) -soak $(SOAK) -warmup 30s -devices 16000 -events 50 -shells 2 $(BENCH_FLAGS) \
+		dist/mcc-gui-linux-amd64-$(VERSION) dist/mcc-qt
 
 build-all:
 	GOOS=linux   GOARCH=amd64 go build $(LDFLAGS) -o dist/mcc-linux-amd64-$(VERSION) .

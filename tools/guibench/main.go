@@ -5,6 +5,11 @@
 //
 //	go run ./tools/guibench [flags] <gui binary>...
 //
+// With -soak it runs the GUIs side by side for that long instead, sampling
+// their memory to show growth, typically with -headless (each in its own
+// headless mutter, nothing shows on the desktop) and -hide (the window hidden
+// as if minimized, which gets no frame callbacks on Wayland).
+//
 // The GUIs connect and open shells on their own when MCC_GUI_BENCH is set to
 // the number of shells, see bench.go in mcc-gui and mcc-qt.
 package main
@@ -16,6 +21,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"flag"
 	"fmt"
@@ -45,7 +51,11 @@ var (
 	fps      = flag.Float64("fps", 10, "screen redraws per second in each shell")
 	warmup   = flag.Duration("warmup", 15*time.Second, "time to connect and settle before measuring")
 	measure  = flag.Duration("measure", 30*time.Second, "measuring time per run")
-	shellSet = flag.String("shells", "0,2", "shell counts to run each GUI with")
+	shellSet = flag.String("shells", "0,2", "shell counts to run each GUI with (-soak: the first)")
+	soak     = flag.Duration("soak", 0, "run the GUIs side by side this long, sampling memory growth")
+	interval = flag.Duration("sample", 10*time.Second, "sampling interval with -soak")
+	headless = flag.Bool("headless", false, "run each GUI in its own headless mutter (Wayland, Xwayland for X11 GUIs)")
+	hide     = flag.Bool("hide", false, "have the GUIs hide their window once connected, as minimized")
 )
 
 func main() {
@@ -60,15 +70,23 @@ func main() {
 	}
 	addr := serve()
 	log.Printf("fake server on %s: %d devices in %d groups, %.0f events/s, shells at %.0f fps", addr, *nDevices, *nGroups, *evRate, *fps)
-
-	var results []result
+	var shellCounts []int
 	for _, s := range strings.Split(*shellSet, ",") {
-		shells, err := strconv.Atoi(strings.TrimSpace(s))
+		n, err := strconv.Atoi(strings.TrimSpace(s))
 		if err != nil {
 			log.Fatalf("bad -shells %q", s)
 		}
-		for _, bin := range flag.Args() {
-			r, err := run(bin, addr, shells)
+		shellCounts = append(shellCounts, n)
+	}
+	if *soak > 0 {
+		soakAll(addr, shellCounts[0])
+		return
+	}
+
+	var results []result
+	for _, shells := range shellCounts {
+		for i, bin := range flag.Args() {
+			r, err := bench(bin, addr, shells, fmt.Sprintf("run%d-%d-%d", os.Getpid(), shells, i))
 			if err != nil {
 				log.Fatalf("%s: %v", bin, err)
 			}
@@ -93,76 +111,287 @@ type result struct {
 	pss                         float64
 }
 
-// run starts a GUI connected to the fake server and samples it.
-func run(bin, addr string, shells int) (result, error) {
+// proc is a running GUI, pid is the GUI itself (not mutter's) once found.
+type proc struct {
+	name, id string
+	cmd      *exec.Cmd
+	pid      int
+	out      bytes.Buffer
+	cfg      string
+}
+
+// start launches a GUI connected to the fake server as user id, which the
+// server counts its device lists and shells under.
+func start(bin, addr string, shells int, id string) (*proc, error) {
+	p := &proc{name: filepath.Base(bin), id: id}
+	abs, err := filepath.Abs(bin)
+	if err != nil {
+		return nil, err
+	}
+	if p.cfg, err = os.MkdirTemp("", "guibench"); err != nil {
+		return nil, err
+	}
+	conf := map[string]any{
+		"default_profile": "guibench",
+		"profiles":        []map[string]string{{"name": "guibench", "server": addr, "username": id}},
+	}
+	b, _ := json.Marshal(conf)
+	os.MkdirAll(filepath.Join(p.cfg, "mcc"), 0o700)
+	if err := os.WriteFile(filepath.Join(p.cfg, "mcc", "meshcentral-client.json"), b, 0o600); err != nil {
+		return nil, err
+	}
+
+	env := append(os.Environ(), "XDG_CONFIG_HOME="+p.cfg, "MCC_GUI_BENCH="+strconv.Itoa(shells), "GUIBENCH_RUN="+id)
+	if *hide {
+		env = append(env, "MCC_GUI_BENCH_HIDE=1")
+	}
+	if *headless {
+		// A session bus of its own that starts no services: the keyring would
+		// wait for an unlock prompt nobody sees, without one the password
+		// lookup fails at once (the fake server takes any).
+		busConf := filepath.Join(p.cfg, "bus.conf")
+		os.WriteFile(busConf, []byte(`<busconfig><type>session</type><listen>unix:tmpdir=/tmp</listen><auth>EXTERNAL</auth>`+
+			`<policy context="default"><allow send_destination="*" eavesdrop="true"/><allow eavesdrop="true"/><allow own="*"/></policy></busconfig>`), 0o600)
+		p.cmd = exec.Command("dbus-run-session", "--config-file="+busConf, "--", "mutter", "--headless", "--wayland",
+			"--wayland-display", "guibench-"+id, "--virtual-monitor", "1280x800", "--", abs)
+		env = slicesDelete(env, "DISPLAY=", "WAYLAND_DISPLAY=")
+	} else {
+		p.cmd = exec.Command(abs)
+	}
+	p.cmd.Env = env
+	p.cmd.Stdout, p.cmd.Stderr = &p.out, &p.out
+	p.cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	if err := p.cmd.Start(); err != nil {
+		return nil, err
+	}
+	// The GUI is a child of mutter when headless, found by its binary and run ID.
+	for range 100 {
+		if p.pid = findPID(abs, id); p.pid != 0 {
+			return p, nil
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	p.stop()
+	return nil, fmt.Errorf("didn't start:\n%s", p.out.String())
+}
+
+func slicesDelete(env []string, prefixes ...string) []string {
+	var out []string
+	for _, e := range env {
+		keep := true
+		for _, p := range prefixes {
+			keep = keep && !strings.HasPrefix(e, p)
+		}
+		if keep {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+func findPID(exe, id string) int {
+	dirs, _ := os.ReadDir("/proc")
+	for _, d := range dirs {
+		pid, err := strconv.Atoi(d.Name())
+		if err != nil {
+			continue
+		}
+		if e, _ := os.Readlink(fmt.Sprintf("/proc/%d/exe", pid)); e != exe {
+			continue
+		}
+		env, _ := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid))
+		if bytes.Contains(env, []byte("\x00GUIBENCH_RUN="+id+"\x00")) {
+			return pid
+		}
+	}
+	return 0
+}
+
+func (p *proc) alive() bool { return p.pid != 0 && syscall.Kill(p.pid, 0) == nil }
+
+// stop ends the GUI and whatever runs it (mutter, dbus).
+func (p *proc) stop() {
+	pgid := p.cmd.Process.Pid
+	syscall.Kill(-pgid, syscall.SIGTERM)
+	done := make(chan struct{})
+	go func() { p.cmd.Wait(); close(done) }()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		syscall.Kill(-pgid, syscall.SIGKILL)
+		<-done
+	}
+	os.RemoveAll(p.cfg)
+}
+
+// warm waits out the warmup and checks the GUI got the full load.
+func (p *proc) warm(shells int) (lists, up int64, err error) {
+	time.Sleep(*warmup)
+	c := counters(p.id)
+	lists, up = c.lists.Load(), c.shells.Load()
+	if !p.alive() {
+		return lists, up, fmt.Errorf("exited during warmup:\n%s", p.out.String())
+	}
+	if lists == 0 || up < int64(shells) {
+		log.Printf("%s: only %d device lists and %d of %d shells served, the numbers don't show the full load", p.name, lists, up, shells)
+	}
+	return lists, up, nil
+}
+
+// bench starts a GUI and samples its CPU and memory for -measure.
+func bench(bin, addr string, shells int, id string) (result, error) {
 	r := result{name: filepath.Base(bin), shells: shells}
-	cfg, err := os.MkdirTemp("", "guibench")
+	p, err := start(bin, addr, shells, id)
 	if err != nil {
 		return r, err
 	}
-	defer os.RemoveAll(cfg)
-	conf := map[string]any{
-		"default_profile": "guibench",
-		"profiles":        []map[string]string{{"name": "guibench", "server": addr, "username": "bench"}},
-	}
-	b, _ := json.Marshal(conf)
-	os.MkdirAll(filepath.Join(cfg, "mcc"), 0o700)
-	if err := os.WriteFile(filepath.Join(cfg, "mcc", "meshcentral-client.json"), b, 0o600); err != nil {
-		return r, err
-	}
-
-	cmd := exec.Command(bin)
-	cmd.Env = append(os.Environ(), "XDG_CONFIG_HOME="+cfg, "MCC_GUI_BENCH="+strconv.Itoa(shells))
-	var out bytes.Buffer
-	cmd.Stdout, cmd.Stderr = &out, &out
-	if err := cmd.Start(); err != nil {
-		return r, err
-	}
-	defer func() {
-		cmd.Process.Signal(syscall.SIGTERM)
-		done := make(chan struct{})
-		go func() { cmd.Wait(); close(done) }()
-		select {
-		case <-done:
-		case <-time.After(5 * time.Second):
-			cmd.Process.Kill()
-			<-done
-		}
-	}()
+	defer p.stop()
 	log.Printf("%s with %d shells: warming up", r.name, shells)
-	lists, up := served.lists.Load(), served.shells.Load()
-	time.Sleep(*warmup)
-	r.lists, r.shellsUp = served.lists.Load()-lists, served.shells.Load()-up
-	if r.lists == 0 || r.shellsUp < int64(shells) {
-		log.Printf("%s: only %d device lists and %d of %d shells served, the numbers don't show the full load", r.name, r.lists, r.shellsUp, shells)
-	}
-	if cmd.ProcessState != nil || syscall.Kill(cmd.Process.Pid, 0) != nil {
-		return r, fmt.Errorf("exited during warmup:\n%s", out.String())
+	if r.lists, r.shellsUp, err = p.warm(shells); err != nil {
+		return r, err
 	}
 
-	pid := cmd.Process.Pid
-	prev, _ := cpuTicks(pid)
+	prev, _ := cpuTicks(p.pid)
 	start := prev
 	var rssSum float64
 	n := int(*measure / time.Second)
 	for i := 0; i < n; i++ {
 		time.Sleep(time.Second)
-		t, err := cpuTicks(pid)
+		t, err := cpuTicks(p.pid)
 		if err != nil {
-			return r, fmt.Errorf("exited while measuring:\n%s", out.String())
+			return r, fmt.Errorf("exited while measuring:\n%s", p.out.String())
 		}
 		r.cpuMax = max(r.cpuMax, float64(t-prev)) // 100 ticks a second, so ticks are %
 		prev = t
-		rss := statusMB(pid, "VmRSS:")
+		rss := statusMB(p.pid, "VmRSS:")
 		rssSum += rss
 		r.rssMax = max(r.rssMax, rss)
 	}
 	r.cpuAvg = float64(prev-start) / float64(n)
 	r.rss = rssSum / float64(n)
-	r.pss = rollupMB(pid, "Pss:")
-	r.threads = int(statusMB(pid, "Threads:") * 1024)
+	r.pss = rollupMB(p.pid, "Pss:")
+	r.threads = int(statusMB(p.pid, "Threads:") * 1024)
 	log.Printf("%s with %d shells: CPU %.1f%%, RSS %.0f MB", r.name, shells, r.cpuAvg, r.rss)
 	return r, nil
+}
+
+// soakAll runs every GUI at once for -soak, sampling RSS every -sample, and
+// reports how it grew: a least squares fit over all samples, and a series.
+func soakAll(addr string, shells int) {
+	type series struct {
+		p       *proc
+		t, rss  []float64 // minutes since measuring started, MB
+		ticks   int64
+		up      int64
+		err     error
+		elapsed float64
+	}
+	runs := make([]*series, flag.NArg())
+	var wg sync.WaitGroup
+	for i, bin := range flag.Args() {
+		s := &series{}
+		runs[i] = s
+		wg.Go(func() {
+			p, err := start(bin, addr, shells, fmt.Sprintf("soak%d-%d", os.Getpid(), i))
+			if err != nil {
+				s.err = err
+				return
+			}
+			s.p = p
+			defer p.stop()
+			if _, s.up, s.err = p.warm(shells); s.err != nil {
+				return
+			}
+			log.Printf("%s: soaking for %s", p.name, *soak)
+			t0, c0 := time.Now(), must(cpuTicks(p.pid))
+			for time.Since(t0) < *soak {
+				time.Sleep(*interval)
+				if !p.alive() {
+					s.err = fmt.Errorf("exited after %s:\n%s", time.Since(t0).Round(time.Second), p.out.String())
+					return
+				}
+				s.t = append(s.t, time.Since(t0).Minutes())
+				s.rss = append(s.rss, statusMB(p.pid, "VmRSS:"))
+			}
+			s.elapsed = time.Since(t0).Seconds()
+			s.ticks = must(cpuTicks(p.pid)) - c0
+		})
+	}
+	wg.Wait()
+
+	tw := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', tabwriter.AlignRight)
+	fmt.Fprintln(tw, "GUI\tshells (up)\tCPU avg %\tRSS start MB\tRSS end MB\tRSS max MB\tgrowth MB/h\t2nd half MB/h\t")
+	for _, s := range runs {
+		if s.err != nil || len(s.rss) < 2 {
+			name := "?"
+			if s.p != nil {
+				name = s.p.name
+			}
+			fmt.Fprintf(tw, "%s\tfailed: %v\t\t\t\t\t\t\t\n", name, s.err)
+			continue
+		}
+		n := len(s.rss)
+		end := mean(s.rss[max(0, n-6):])
+		fmt.Fprintf(tw, "%s\t%d (%d)\t%.1f\t%.0f\t%.0f\t%.0f\t%+.1f\t%+.1f\t\n", s.p.name, shells, s.up, float64(s.ticks)/s.elapsed,
+			s.rss[0], end, maxOf(s.rss), slope(s.t, s.rss)*60, slope(s.t[n/2:], s.rss[n/2:])*60)
+	}
+	tw.Flush()
+	fmt.Printf("\nRSS every %s over %s after %s warmup, growth is a least squares fit over all samples, 2nd half over\nthe second half only (past start-up), end the mean of the last minute.", *interval, *soak, *warmup)
+	if *hide {
+		fmt.Print(" Windows hidden once connected.")
+	}
+	fmt.Println("\n\nRSS by minute (MB):")
+	for _, s := range runs {
+		if s.err != nil || len(s.rss) == 0 {
+			continue
+		}
+		var b strings.Builder
+		next := 0.0
+		for i, t := range s.t {
+			if t >= next {
+				fmt.Fprintf(&b, " %.0f", s.rss[i])
+				next = float64(int(t)) + 1
+			}
+		}
+		fmt.Printf("  %s:%s\n", s.p.name, b.String())
+	}
+}
+
+func must[T any](v T, err error) T {
+	if err != nil {
+		log.Fatal(err)
+	}
+	return v
+}
+
+func mean(v []float64) float64 {
+	var s float64
+	for _, x := range v {
+		s += x
+	}
+	return s / float64(len(v))
+}
+
+func maxOf(v []float64) float64 {
+	m := v[0]
+	for _, x := range v {
+		m = max(m, x)
+	}
+	return m
+}
+
+// slope is the least squares slope of y over x.
+func slope(x, y []float64) float64 {
+	mx, my := mean(x), mean(y)
+	var num, den float64
+	for i := range x {
+		num += (x[i] - mx) * (y[i] - my)
+		den += (x[i] - mx) * (x[i] - mx)
+	}
+	if den == 0 {
+		return 0
+	}
+	return num / den
 }
 
 // cpuTicks is the process's user+system time in clock ticks (1/100 s).
@@ -220,8 +449,25 @@ func selfSigned() tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-// What the server did, to check each GUI loaded the devices and got its shells.
-var served struct{ lists, shells atomic.Int64 }
+// What the server did per user (run), to check each GUI loaded the devices
+// and got its shells.
+type served struct{ lists, shells atomic.Int64 }
+
+var (
+	servedMu sync.Mutex
+	servedBy = map[string]*served{}
+)
+
+func counters(user string) *served {
+	servedMu.Lock()
+	defer servedMu.Unlock()
+	c := servedBy[user]
+	if c == nil {
+		c = &served{}
+		servedBy[user] = c
+	}
+	return c
+}
 
 var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return true }}
 
@@ -232,6 +478,11 @@ func deviceID(i int) string { return fmt.Sprintf("node//bench%05d", i) }
 
 // control is the session's control socket: login, device list, events.
 func control(w http.ResponseWriter, r *http.Request) {
+	// The user names the run, and the auth cookie the relay sees.
+	user, _, _ := strings.Cut(r.Header.Get("X-Meshauth"), ",")
+	if b, err := base64.StdEncoding.DecodeString(user); err == nil {
+		user = string(b)
+	}
 	c, err := upgrader.Upgrade(w, r, nil)
 	if err != nil {
 		return
@@ -289,7 +540,7 @@ func control(w http.ResponseWriter, r *http.Request) {
 		json.Unmarshal(msg, &cmd)
 		switch cmd.Action {
 		case "authcookie":
-			send(map[string]string{"action": "authcookie", "cookie": "bench", "rcookie": "bench"})
+			send(map[string]string{"action": "authcookie", "cookie": user, "rcookie": user})
 		case "meshes":
 			var meshes []map[string]string
 			for g := range *nGroups {
@@ -306,7 +557,7 @@ func control(w http.ResponseWriter, r *http.Request) {
 				})
 			}
 			send(map[string]any{"action": "nodes", "nodes": nodes})
-			served.lists.Add(1)
+			counters(user).lists.Add(1)
 			once.Do(func() { close(listed) })
 		}
 	}
@@ -368,7 +619,7 @@ func relay(w http.ResponseWriter, r *http.Request) {
 	case <-time.After(10 * time.Second):
 		return
 	}
-	served.shells.Add(1)
+	counters(r.URL.Query().Get("auth")).shells.Add(1)
 	write(websocket.BinaryMessage, []byte("\x1b[?1049h\x1b[?25l"))
 	tick := time.NewTicker(time.Duration(float64(time.Second) / *fps))
 	defer tick.Stop()

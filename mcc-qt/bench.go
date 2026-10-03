@@ -7,7 +7,8 @@ import (
 
 // benchShells is set from MCC_GUI_BENCH for tools/guibench, -1 without it:
 // the GUI then connects with the selected profile at start, skipping TLS
-// verification, and opens that many shells once the devices are in.
+// verification, and opens that many shells once the devices are in. With
+// MCC_GUI_BENCH_HIDE set it then hides its window, as minimized.
 var benchShells = func() int {
 	if n, err := strconv.Atoi(os.Getenv("MCC_GUI_BENCH")); err == nil {
 		return n
@@ -26,13 +27,13 @@ func benchLoaded() {
 	n := benchShells
 	for _, g := range groupOrder {
 		for _, id := range groupChildren[g] {
-			if n <= 0 {
-				return
-			}
-			if d, ok := shownDevice(id); ok {
+			if d, ok := shownDevice(id); ok && n > 0 {
 				openShell(d, 1)
 				n--
 			}
 		}
+	}
+	if os.Getenv("MCC_GUI_BENCH_HIDE") != "" {
+		win.Hide()
 	}
 }
