@@ -89,7 +89,9 @@ func newTerm() *term {
 	t.w.SetFocusPolicy(qt.StrongFocus)
 	t.w.SetAttribute(qt.WA_InputMethodEnabled)
 	t.w.SetAttribute(qt.WA_OpaquePaintEvent)
-	t.w.SetCursor(qt.NewQCursor2(qt.IBeamCursor))
+	cursor := qt.NewQCursor2(qt.IBeamCursor)
+	t.w.SetCursor(cursor)
+	cursor.Delete()
 	t.w.SetMinimumSize2(80, 40)
 	t.setFont()
 	t.w.OnPaintEvent(func(_ func(*qt.QPaintEvent), _ *qt.QPaintEvent) { t.paint() })
@@ -125,7 +127,7 @@ func newTerm() *term {
 	})
 	t.w.OnChangeEvent(func(super func(*qt.QEvent), e *qt.QEvent) {
 		super(e)
-		if e.Type() == qt.QEvent__FontChange {
+		if e.Type() == qt.QEvent__FontChange && !t.closed {
 			t.setFont()
 			t.relayout()
 		}
@@ -173,6 +175,9 @@ func (t *term) Size() (cols, rows int) {
 // close ends the input, which ends the session, and stops painting. The
 // widget is deleted by its tab.
 func (t *term) close() {
+	if t.closed {
+		return
+	}
 	t.closed = true
 	t.in.Close()
 	t.mu.Lock()
@@ -181,6 +186,7 @@ func (t *term) close() {
 	// unlocked.
 	t.emu.InputPipe().(io.Closer).Close()
 	t.mu.Unlock()
+	t.bold.Delete()
 	for _, c := range t.colors {
 		c.Delete()
 	}
@@ -206,6 +212,9 @@ func (t *term) setFont() {
 	f := qt.QFontDatabase_SystemFont(qt.QFontDatabase__FixedFont)
 	f.SetStyleHint2(qt.QFont__Monospace, qt.QFont__PreferDefault)
 	t.font = f
+	if t.bold != nil {
+		t.bold.Delete()
+	}
 	t.bold = qt.NewQFont5(f)
 	t.bold.SetBold(true)
 	fm := qt.NewQFontMetricsF(f)
@@ -309,8 +318,17 @@ func colorRGB(c *qt.QColor) uint32 {
 }
 
 func (t *term) paint() {
+	if t.closed {
+		return
+	}
 	p := qt.NewQPainter2(t.w.QPaintDevice)
 	defer p.Delete()
+	r := qt.NewQRectF()
+	defer r.Delete()
+	fill := func(x, y, w, h float64, c uint32) {
+		r.SetRect(x, y, w, h)
+		p.FillRect4(r, t.qcolor(c))
+	}
 	pal := t.w.Palette()
 	defBg, defFg := colorRGB(pal.ColorWithCr(qt.QPalette__Base)), colorRGB(pal.ColorWithCr(qt.QPalette__Text))
 	selBg, selFg := colorRGB(pal.ColorWithCr(qt.QPalette__Highlight)), colorRGB(pal.ColorWithCr(qt.QPalette__HighlightedText))
@@ -372,13 +390,13 @@ func (t *term) paint() {
 			}
 			x, w := float64(col)*t.cw, float64(width)*t.cw
 			if bg != defBg {
-				p.FillRect4(rectF(x, y, w, t.ch), t.qcolor(bg))
+				fill(x, y, w, t.ch, bg)
 			}
 			if st.Underline != ansi.UnderlineNone {
-				p.FillRect4(rectF(x, y+t.ascent+1, w, 1), t.qcolor(fg))
+				fill(x, y+t.ascent+1, w, 1, fg)
 			}
 			if st.Attrs&uv.AttrStrikethrough != 0 {
-				p.FillRect4(rectF(x, y+t.ascent*0.65, w, 1), t.qcolor(fg))
+				fill(x, y+t.ascent*0.65, w, 1, fg)
 			}
 			bold := st.Attrs&uv.AttrBold != 0
 			ascii := len(content) == 1 && content[0] >= 0x20 && content[0] < 0x7f
@@ -404,7 +422,7 @@ func (t *term) paint() {
 	// The cursor, a block while focused and an outline otherwise.
 	cur := t.emu.CursorPosition()
 	if !t.cursorHidden && t.scroll == 0 && cur.Y < t.rows && cur.X < t.cols {
-		r := rectF(float64(cur.X)*t.cw, float64(cur.Y)*t.ch, t.cw, t.ch)
+		r.SetRect(float64(cur.X)*t.cw, float64(cur.Y)*t.ch, t.cw, t.ch)
 		if t.w.HasFocus() {
 			p.FillRect4(r, t.qcolor(defFg))
 			if c := t.emu.CellAt(cur.X, cur.Y); c != nil && c.Content != "" && c.Content != " " {
@@ -416,16 +434,10 @@ func (t *term) paint() {
 			}
 		} else {
 			p.SetPen(t.qcolor(defFg))
-			p.DrawRect(qt.NewQRectF4(r.X()+0.5, r.Y()+0.5, t.cw-1, t.ch-1))
+			r.SetRect(r.X()+0.5, r.Y()+0.5, t.cw-1, t.ch-1)
+			p.DrawRect(r)
 		}
 	}
-}
-
-// rectF returns a rect collected by the GC, painting makes many.
-func rectF(x, y, w, h float64) *qt.QRectF {
-	r := qt.NewQRectF4(x, y, w, h)
-	r.GoGC()
-	return r
 }
 
 func blend(a, b uint32) uint32 {

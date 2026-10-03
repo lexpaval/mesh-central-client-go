@@ -149,3 +149,23 @@ func TestTermHistory(t *testing.T) {
 		}
 	})
 }
+
+func TestTermFontChangeAndClose(t *testing.T) {
+	tm := newTestTerm(t)
+	tm.Write([]byte("\x1b[1;4;9;31;44mstyled output\x1b[0m"))
+	mainthread.Wait(func() {
+		font := qt.NewQFont5(tm.font)
+		defer font.Delete()
+		for range 3 {
+			font.SetPointSize(max(1, font.PointSize()) + 1)
+			tm.w.SetFont(font)
+			tm.w.Grab()
+		}
+		tm.close()
+		tm.close()
+		// Deferred widget events must not recreate or use resources after close.
+		font.SetPointSize(max(1, font.PointSize()) + 1)
+		tm.w.SetFont(font)
+		tm.w.Grab()
+	})
+}
