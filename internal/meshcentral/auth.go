@@ -244,10 +244,20 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 	for {
 		_, message, err := conn.ReadMessage()
 		if err != nil {
-			if settings.closing || websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
+			conn.Close()
+			if settings.closing {
+				return
+			}
+			if !settings.initialAuthDone {
+				sendAuthError(fmt.Errorf("authentication failed: %w", err))
+				return
+			}
+			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 				if settings.debug {
 					fmt.Println("Server closed connection")
 				}
+				settings.closing = true
+				OnConnectionLost(fmt.Errorf("server closed the control connection: %w", err))
 				return
 			}
 
