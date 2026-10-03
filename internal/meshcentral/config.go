@@ -1,6 +1,10 @@
 package meshcentral
 
 import (
+	"errors"
+	"fmt"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -15,6 +19,8 @@ type Device struct {
 	Icon        int
 	Conn        int
 	Pwr         int
+	MeshID      string // device group
+	Group       string // device group name
 }
 
 type Settings struct {
@@ -27,12 +33,8 @@ type Settings struct {
 	AuthCookie            string
 	ServerID              string
 	LoginKey              string
-	LocalBindAddress      string
-	LocalPort             int
-	RemotePort            int
-	RemoteTarget          string
-	RemoteNodeID          string
 	WebSocket             *websocket.Conn
+	wsMu                  sync.Mutex // gorilla allows one concurrent writer per conn
 	WebChannel            chan struct{}
 	AuthErrChannel        chan error
 	ACookie               string
@@ -41,10 +43,15 @@ type Settings struct {
 	ServerAuthClientNonce string
 	MeshServerTlsHash     string
 	ServerHttpsHash       string
+	deviceMu              sync.Mutex // protects query channels and the device snapshot
 	Devices               []Device
 	DeviceQueryState      int
 	deviceChan            chan struct{}
+	groups                map[string]string // mesh ID -> device group name
+	groupChan             chan struct{}
 	Insecure              bool
+	profileName           string // profile StartSocket logged in with, for the 2FA cookie
+	cookieChan            chan struct{}
 	debug                 bool
 	closing               bool
 	initialAuthDone       bool
@@ -52,22 +59,51 @@ type Settings struct {
 
 var settings Settings
 
-func ApplySettings(remoteNodeId string, remotePort int, localPort int, remoteTarget string, insecure bool, debug bool) {
-	settings.RemoteNodeID = remoteNodeId
-	settings.RemotePort = remotePort
-	settings.LocalPort = localPort
-	settings.RemoteTarget = remoteTarget
+func ApplySettings(insecure bool, debug bool) {
 	settings.Insecure = insecure
 	settings.debug = debug
-}
-
-// SetLocalBindAddress sets the local interface the router listens on, empty means 127.0.0.1
-func SetLocalBindAddress(addr string) {
-	settings.LocalBindAddress = addr
 }
 
 func ApplyAuth(token string, emailToken bool, smsToken bool) {
 	settings.Token = token
 	settings.EmailToken = emailToken
 	settings.SMSToken = smsToken
+}
+
+// TokenPrompt is asked for a 2FA token when the server requires one. It
+// returns the token, or "email"/"sms" to have one sent; ok=false aborts the
+// login. Defaults to prompting on the controlling terminal.
+var TokenPrompt func(email2fa, sms2fa, emailSent bool) (token string, ok bool) = promptForToken
+
+// OnConnectionLost is called when an authenticated session can't be kept
+// alive (reconnects exhausted, auth revoked). Defaults to exiting the process.
+var OnConnectionLost = func(err error) {
+	fmt.Fprintf(os.Stderr, "\n%v\n", err)
+	os.Exit(1)
+}
+
+// NodeEvent is a device event the server pushed. "nodeconnect" carries the
+// new Conn/Pwr state. "addnode" and "changenode" usually carry the device in
+// Device, whose Conn/Pwr are then not the live state (nodeconnect tracks it).
+// The others, and those two without Device, mean the device list is stale.
+type NodeEvent struct {
+	Action    string
+	NodeID    string
+	Conn, Pwr int
+	Device    *Device
+}
+
+// OnNodeEvent is called on the control socket reader for device events. Nil
+// in the CLI.
+var OnNodeEvent func(NodeEvent)
+
+// send writes a text message on the control socket, serialized against the
+// reader goroutine, the cookie renew timer and concurrent callers.
+func send(msg []byte) error {
+	settings.wsMu.Lock()
+	defer settings.wsMu.Unlock()
+	if settings.WebSocket == nil {
+		return errors.New("not connected to server")
+	}
+	return settings.WebSocket.WriteMessage(websocket.TextMessage, msg)
 }

@@ -1,7 +1,11 @@
 package cmd
 
 import (
+	"cmp"
 	"fmt"
+	"net"
+	"net/netip"
+	"os"
 	"strconv"
 	"strings"
 
@@ -27,12 +31,20 @@ var routeCmd = &cobra.Command{
 			fmt.Println("Error parsing bind address:", err)
 			return
 		}
-		meshcentral.SetLocalBindAddress(bindaddr)
-
-		nodeID = resolveNodeID(nodeID, remoteport, localport, target, insecure, debug)
-
-		ready := make(chan struct{})
-		meshcentral.StartRouter(ready)
+		route := meshcentral.Route{
+			NodeID:      resolveNodeID(nodeID, insecure, debug),
+			BindAddress: bindaddr,
+			LocalPort:   localport,
+			Target:      target,
+			RemotePort:  remoteport,
+		}
+		if err := route.Start(); err != nil {
+			fmt.Println(err)
+			os.Exit(1)
+		}
+		fmt.Printf("Redirecting %s to remote port %d.\n", net.JoinHostPort(cmp.Or(bindaddr, "127.0.0.1"), strconv.Itoa(route.LocalPort)), remoteport)
+		fmt.Println("Press ctrl-c to exit.")
+		select {}
 	},
 }
 
@@ -40,7 +52,7 @@ func init() {
 	rootCmd.AddCommand(routeCmd)
 
 	routeCmd.Flags().StringP("nodeid", "i", "", "Mesh Central Node ID")
-	routeCmd.Flags().StringP("bind-address", "L", "", "[bind_address:]localport:target:remoteport, localport:remoteport or remoteport")
+	routeCmd.Flags().StringP("bind-address", "L", "", "[bind_address:]localport:target:remoteport, localport:remoteport or remoteport; enclose IPv6 addresses in brackets")
 	routeCmd.Flags().BoolP("insecure", "k", false, "Skip TLS certificate verification (insecure, for testing only)")
 	routeCmd.Flags().BoolP("debug", "", false, "Enable debug logging")
 }
@@ -49,9 +61,44 @@ func init() {
 // "bindaddress:localport:target:remoteport", "localport:target:remoteport",
 // "localport:remoteport", "target:remoteport" or just "remoteport"
 func parseBindAddress(s string) (bindAddress string, localPort int, target string, remotePort int, err error) {
-	errFormat := fmt.Errorf("invalid bind address %q, expected [bind_address:]localport:target:remoteport, localport:remoteport or remoteport", s)
+	errFormat := fmt.Errorf("invalid bind address %q, expected [bind_address:]localport:target:remoteport, localport:remoteport or remoteport; enclose IPv6 addresses in brackets", s)
 
-	parts := strings.Split(s, ":")
+	var parts []string
+	for rest := s; ; {
+		var part string
+		if strings.HasPrefix(rest, "[") {
+			end := strings.IndexByte(rest, ']')
+			if end < 0 {
+				return "", 0, "", 0, errFormat
+			}
+			part = rest[1:end]
+			ip, parseErr := netip.ParseAddr(part)
+			if parseErr != nil || !ip.Is6() {
+				return "", 0, "", 0, errFormat
+			}
+			rest = rest[end+1:]
+			if rest != "" && rest[0] != ':' {
+				return "", 0, "", 0, errFormat
+			}
+		} else {
+			end := strings.IndexByte(rest, ':')
+			if end < 0 {
+				end = len(rest)
+			}
+			part, rest = rest[:end], rest[end:]
+			if strings.ContainsAny(part, "[]") {
+				return "", 0, "", 0, errFormat
+			}
+		}
+		parts = append(parts, part)
+		if len(parts) > 4 {
+			return "", 0, "", 0, errFormat
+		}
+		if rest == "" {
+			break
+		}
+		rest = rest[1:]
+	}
 	if len(parts) == 4 {
 		bindAddress, parts = parts[0], parts[1:]
 		if bindAddress == "" {

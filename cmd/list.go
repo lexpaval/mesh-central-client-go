@@ -20,16 +20,7 @@ var listCmd = &cobra.Command{
 	Long:    ``,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		meshcentral.ApplySettings(
-			"",
-			0,
-			0,
-			"",
-			false,
-			false,
-		)
-
-		meshcentral.StartSocket()
+		connect(false, false)
 
 		d := meshcentral.GetDevices()
 		meshcentral.StopSocket()
@@ -47,16 +38,7 @@ var searchCmd = &cobra.Command{
 	Long:    ``,
 	Run: func(cmd *cobra.Command, args []string) {
 
-		meshcentral.ApplySettings(
-			"",
-			0,
-			0,
-			"",
-			false,
-			false,
-		)
-
-		meshcentral.StartSocket()
+		connect(false, false)
 
 		d := meshcentral.GetDevices()
 		meshcentral.StopSocket()
@@ -74,22 +56,30 @@ func init() {
 	rootCmd.AddCommand(searchCmd)
 }
 
+// connect logs in with the active profile, exiting on failure. Errors go to
+// stderr since stdout is the SSH stream in proxy mode.
+func connect(insecure, debug bool) {
+	meshcentral.ApplySettings(insecure, debug)
+	if err := meshcentral.StartSocket(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
 // resolveNodeID connects to the server and, if nodeID is empty, prompts the
 // user to pick a device interactively. A given nodeID gets its "node//"
 // prefix added if missing and is checked against the server's device list.
 // Returns the resolved nodeID.
-func resolveNodeID(nodeID string, remotePort, localPort int, target string, insecure, debug bool) string {
+func resolveNodeID(nodeID string, insecure, debug bool) string {
 	if nodeID != "" {
 		nodeID = normalizeNodeID(nodeID)
 	}
-	meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
-	meshcentral.StartSocket()
+	connect(insecure, debug)
 
 	devices := meshcentral.GetDevices()
 	if nodeID == "" {
 		filterAndSortDevices(&devices)
 		nodeID = searchDevices(&devices)
-		meshcentral.ApplySettings(nodeID, remotePort, localPort, target, insecure, debug)
 	} else {
 		checkNodeID(nodeID, devices)
 	}

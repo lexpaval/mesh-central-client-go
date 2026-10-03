@@ -1,6 +1,8 @@
 package config
 
 import (
+	"slices"
+
 	"github.com/spf13/viper"
 	"github.com/zalando/go-keyring"
 )
@@ -28,6 +30,20 @@ func (p *Profile) DeletePassword() error {
 	return keyring.Delete(keyringService, p.Name)
 }
 
+// The 2FA cookie is MeshCentral's "remember this device" cookie, kept in the
+// keyring next to the password so later logins skip the token prompt.
+func (p *Profile) GetTwoFactorCookie() (string, error) {
+	return keyring.Get(keyringService, p.Name+"/2fa")
+}
+
+func (p *Profile) SetTwoFactorCookie(cookie string) error {
+	return keyring.Set(keyringService, p.Name+"/2fa", cookie)
+}
+
+func (p *Profile) DeleteTwoFactorCookie() error {
+	return keyring.Delete(keyringService, p.Name+"/2fa")
+}
+
 func GetProfiles() []Profile {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
@@ -43,22 +59,26 @@ func GetProfiles() []Profile {
 }
 
 func GetDefaultProfile() Profile {
+	p, _ := GetProfile(viper.GetString("default_profile"))
+	return p
+}
+
+// GetProfile returns the profile called name, with its password.
+func GetProfile(name string) (Profile, bool) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
-	defaultProfile := viper.GetString("default_profile")
-
 	for _, p := range profiles {
-		if p.Name == defaultProfile {
+		if p.Name == name {
 			// Load password from keyring
 			if pwd, err := p.GetPassword(); err == nil {
 				p.Password = pwd
 			}
-			return p
+			return p, true
 		}
 	}
 
-	return Profile{}
+	return Profile{}, false
 }
 
 func GetDefaultProfileName() string {
@@ -83,7 +103,7 @@ func SetDefaultProfile(name string, commit bool) error {
 	return &ProfileNotFoundError{name}
 }
 
-func AddProfile(name string, isDefault bool, server string, username string, password string) *Profile {
+func AddProfile(name string, isDefault bool, server string, username string, password string) (*Profile, error) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
@@ -93,10 +113,8 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 		Username: username,
 	}
 
-	// Store password in keyring
 	if err := newProfile.SetPassword(password); err != nil {
-		// Handle error - could log or return error instead
-		panic(err)
+		return nil, err
 	}
 
 	profiles = append(profiles, newProfile)
@@ -106,10 +124,52 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 	}
 
 	viper.Set("profiles", profiles)
-	viper.WriteConfig()
+	if err := viper.WriteConfig(); err != nil {
+		return nil, err
+	}
 
 	newProfile.Password = password // Set for return value
-	return &newProfile
+	return &newProfile, nil
+}
+
+// UpdateProfile replaces profile oldName with p. An empty password keeps the
+// stored one. On a rename the password and 2FA cookie move with the profile,
+// and the cookie is dropped when the server or username change, since it
+// belongs to that account. The default profile follows a rename.
+func UpdateProfile(oldName string, p Profile, password string, isDefault bool) error {
+	var profiles []Profile
+	viper.UnmarshalKey("profiles", &profiles)
+	i := slices.IndexFunc(profiles, func(x Profile) bool { return x.Name == oldName })
+	if i < 0 {
+		return &ProfileNotFoundError{oldName}
+	}
+	old := profiles[i]
+	renamed := p.Name != oldName
+
+	if password == "" && renamed {
+		password, _ = old.GetPassword()
+	}
+	if password != "" {
+		if err := p.SetPassword(password); err != nil {
+			return err
+		}
+	}
+	if p.Server != old.Server || p.Username != old.Username {
+		old.DeleteTwoFactorCookie()
+	} else if c, err := old.GetTwoFactorCookie(); renamed && err == nil {
+		p.SetTwoFactorCookie(c)
+	}
+	if renamed {
+		old.DeletePassword()
+		old.DeleteTwoFactorCookie()
+	}
+
+	if isDefault || viper.GetString("default_profile") == oldName {
+		viper.Set("default_profile", p.Name)
+	}
+	profiles[i] = Profile{Name: p.Name, Server: p.Server, Username: p.Username}
+	viper.Set("profiles", profiles)
+	return viper.WriteConfig()
 }
 
 func RemoveProfile(name string) {
@@ -118,8 +178,9 @@ func RemoveProfile(name string) {
 
 	for i, p := range profiles {
 		if p.Name == name {
-			// Delete password from keyring
+			// Delete password and 2FA cookie from keyring
 			p.DeletePassword()
+			p.DeleteTwoFactorCookie()
 			profiles = append(profiles[:i], profiles[i+1:]...)
 			break
 		}

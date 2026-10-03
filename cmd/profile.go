@@ -64,7 +64,8 @@ var profileAddCmd = &cobra.Command{
 		password, _ := cmd.Flags().GetString("password")
 		isDefault, _ := cmd.Flags().GetBool("default")
 
-		p := config.AddProfile(name, isDefault, server, username, password)
+		p, err := config.AddProfile(name, isDefault, server, username, password)
+		pExit("Failed to add profile:", err)
 
 		printProfileTable([]config.Profile{*p})
 	},

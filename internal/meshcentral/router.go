@@ -11,44 +11,135 @@ import (
 	"os"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
-func GetLocalPort() int {
-	return settings.LocalPort
+// Route forwards a local TCP port to a port on a node, or on a host reachable
+// from it. Each accepted connection gets its own relay tunnel.
+type Route struct {
+	NodeID      string
+	BindAddress string // empty means 127.0.0.1
+	LocalPort   int    // 0 picks a free port, Start writes back the bound one
+	Target      string // empty means the node itself
+	RemotePort  int
+	Out         io.Writer // tunnel errors and debug output, os.Stdout if nil
+
+	listener net.Listener
+	mu       sync.Mutex
+	conns    map[net.Conn]struct{}
+	closed   bool
+	recorded atomic.Bool
 }
 
-func StartRouter(ready chan struct{}) {
-	bindAddress := settings.LocalBindAddress
+// Start binds the local listener and accepts in the background until Close.
+// The control socket must already be authenticated (StartSocket returned).
+func (r *Route) Start() error {
+	if r.Out == nil {
+		r.Out = os.Stdout
+	}
+	bindAddress := r.BindAddress
 	if bindAddress == "" {
 		bindAddress = "127.0.0.1"
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort(bindAddress, strconv.Itoa(settings.LocalPort)))
+	listener, err := net.Listen("tcp", net.JoinHostPort(bindAddress, strconv.Itoa(r.LocalPort)))
 	if err != nil {
-		fmt.Printf("Unable to bind to local TCP port %s:%d: %v\n", bindAddress, settings.LocalPort, err)
-		os.Exit(1)
+		return fmt.Errorf("unable to bind to local TCP port %s:%d: %w", bindAddress, r.LocalPort, err)
+	}
+	r.listener = listener
+	r.LocalPort = listener.Addr().(*net.TCPAddr).Port
+	r.conns = map[net.Conn]struct{}{}
+
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if errors.Is(err, net.ErrClosed) {
+				return
+			}
+			if err != nil {
+				fmt.Fprintln(r.Out, "Error accepting connection:", err)
+				continue
+			}
+			go r.handleConn(conn)
+		}
+	}()
+	return nil
+}
+
+// Close stops listening and drops the route's open tunnels.
+func (r *Route) Close() {
+	if r.listener != nil {
+		r.listener.Close()
+	}
+	r.mu.Lock()
+	r.closed = true
+	for c := range r.conns {
+		c.Close()
+	}
+	r.mu.Unlock()
+}
+
+// Recorded reports whether the server has recorded a connection on this route.
+func (r *Route) Recorded() bool { return r.recorded.Load() }
+
+// Active returns the number of connections currently tunnelled.
+func (r *Route) Active() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.conns)
+}
+
+func (r *Route) handleConn(conn net.Conn) {
+	r.mu.Lock()
+	if r.closed {
+		r.mu.Unlock()
+		conn.Close()
 		return
 	}
-	settings.LocalPort = listener.Addr().(*net.TCPAddr).Port
-	defer listener.Close()
+	r.conns[conn] = struct{}{}
+	r.mu.Unlock()
+	defer func() {
+		r.mu.Lock()
+		delete(r.conns, conn)
+		r.mu.Unlock()
+		conn.Close()
+	}()
 
-	<-settings.WebChannel
-
-	close(ready)
-	fmt.Printf("Redirecting %s to remote port %d.\n", listener.Addr(), settings.RemotePort)
-	fmt.Println("Press ctrl-c to exit.")
-
-	for {
-		conn, err := listener.Accept()
-		if err != nil {
-			fmt.Println("Error accepting connection:", err)
-			continue
-		}
-
-		go onTcpClientConnected(conn)
+	if settings.debug {
+		fmt.Fprintln(r.Out, "Client connected")
 	}
+	conn.(*net.TCPConn).SetKeepAlive(true)
+	conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
+
+	wsConn, err := dialWithRetry(r.tunnelURL(), r.Out)
+	if err != nil {
+		fmt.Fprintf(r.Out, "Unable to connect to server: %v\n", err)
+		return
+	}
+	if settings.debug {
+		fmt.Fprintln(r.Out, "Websocket connected")
+	}
+	cause := pumpBidirectional(wsConn, conn, conn, r.Out, func() {
+		if r.recorded.CompareAndSwap(false, true) {
+			fmt.Fprintln(r.Out, "The server records the connections on this route")
+		}
+	})
+	if errors.Is(cause, errTunnelNotEstablished) || errors.Is(cause, errTunnelNoData) {
+		fmt.Fprintf(r.Out, "Tunnel to remote port %d failed: %v\n", r.RemotePort, cause)
+	}
+}
+
+func (r *Route) tunnelURL() string {
+	query := url.Values{}
+	query.Add("auth", settings.ACookie)
+	query.Add("nodeid", r.NodeID)
+	query.Add("tcpport", strconv.Itoa(r.RemotePort))
+	if r.Target != "" {
+		query.Add("tcpaddr", r.Target)
+	}
+	return settings.ServerURL + "?" + query.Encode()
 }
 
 // dialWithRetry dials a websocket URL with a few retries on transient
@@ -81,34 +172,6 @@ func dialWithRetry(urlStr string, out io.Writer) (*websocket.Conn, error) {
 	return nil, lastErr
 }
 
-func onTcpClientConnected(conn net.Conn) {
-	if settings.debug {
-		fmt.Println("Client connected")
-	}
-	defer conn.Close()
-
-	conn.(*net.TCPConn).SetKeepAlive(true)
-	conn.(*net.TCPConn).SetKeepAlivePeriod(30 * time.Second)
-
-	options, err := url.Parse(fmt.Sprintf("%s?auth=%s&nodeid=%s&tcpport=%d",
-		settings.ServerURL, settings.ACookie, settings.RemoteNodeID, settings.RemotePort))
-	if err != nil {
-		fmt.Printf("Unable to build tunnel URL: %v\n", err)
-		return
-	}
-	if settings.RemoteTarget != "" {
-		options.RawQuery += fmt.Sprintf("&tcpaddr=%s", settings.RemoteTarget)
-	}
-
-	wsConn, err := dialWithRetry(options.String(), os.Stdout)
-	if err != nil {
-		fmt.Printf("Unable to connect to server: %v\n", err)
-		return
-	}
-
-	onWebSocket(wsConn, conn)
-}
-
 // Tunnel failures the relay reports only by closing the WebSocket, turned
 // into errors so callers can tell the user what went wrong.
 var (
@@ -122,8 +185,9 @@ var (
 // (nil for a graceful WebSocket close or a clean EOF on src, or one of the
 // errTunnel* errors if the relay closes before any data flowed). It only closes
 // wsConn itself; closing src/dst is the caller's responsibility, since some
-// callers (stdin/stdout) must not be closed.
-func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, debugOut io.Writer) error {
+// callers (stdin/stdout) must not be closed. recorded (may be nil) is called
+// if the relay says it records the tunnel.
+func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, debugOut io.Writer, recorded func()) error {
 	done := make(chan struct{})
 	var once sync.Once
 	var cause error
@@ -159,6 +223,9 @@ func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, deb
 			}
 			if messageType == websocket.TextMessage && (string(message) == "c" || string(message) == "cr") {
 				established = true
+				if string(message) == "cr" && recorded != nil {
+					recorded()
+				}
 			}
 			if messageType == websocket.BinaryMessage && len(message) > 0 {
 				established, gotData = true, true
@@ -205,16 +272,6 @@ func pumpBidirectional(wsConn *websocket.Conn, src io.Reader, dst io.Writer, deb
 	return cause
 }
 
-func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
-	if settings.debug {
-		fmt.Println("Websocket connected")
-	}
-	cause := pumpBidirectional(wsConn, tcpConn, tcpConn, os.Stdout)
-	if errors.Is(cause, errTunnelNotEstablished) || errors.Is(cause, errTunnelNoData) {
-		fmt.Printf("Tunnel to remote port %d failed: %v\n", settings.RemotePort, cause)
-	}
-}
-
 // StartProxyRouter runs the SSH ProxyCommand tunnel: stdin/stdout of this
 // process ARE the raw SSH byte stream, so unlike the control socket and
 // shell session, a lost tunnel here can never be transparently reconnected
@@ -222,41 +279,22 @@ func onWebSocket(wsConn *websocket.Conn, tcpConn net.Conn) {
 // any tunnel loss terminates the process with a clear stderr message so the
 // ssh client (and VSCode Remote-SSH) sees the ProxyCommand exit and reports
 // the failure instead of hanging forever.
-func StartProxyRouter(ready chan struct{}) {
-	options, err := url.Parse(settings.ServerURL)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Unable to parse server URL: %v\n", err)
-		close(ready)
-		os.Exit(1)
-	}
-
-	query := url.Values{}
-	query.Add("auth", settings.ACookie)
-	query.Add("nodeid", settings.RemoteNodeID)
-	query.Add("tcpport", fmt.Sprintf("%d", settings.RemotePort))
-	if settings.RemoteTarget != "" {
-		query.Add("tcpaddr", settings.RemoteTarget)
-	}
-	options.RawQuery = query.Encode()
-
+func StartProxyRouter(r *Route) {
 	if settings.debug {
-		fmt.Fprintf(os.Stderr, "Proxy connecting to: %s\n", options.String())
+		fmt.Fprintf(os.Stderr, "Proxy connecting to: %s\n", r.tunnelURL())
 	}
 
-	wsConn, err := dialWithRetry(options.String(), os.Stderr)
+	wsConn, err := dialWithRetry(r.tunnelURL(), os.Stderr)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Unable to connect to server: %v\n", err)
-		close(ready)
 		os.Exit(1)
 	}
-
-	close(ready) // signal ready AFTER successful connect
 
 	if settings.debug {
 		fmt.Fprintf(os.Stderr, "Proxy WebSocket connected\n")
 	}
 
-	cause := pumpBidirectional(wsConn, os.Stdin, os.Stdout, os.Stderr)
+	cause := pumpBidirectional(wsConn, os.Stdin, os.Stdout, os.Stderr, nil)
 
 	if cause != nil {
 		fmt.Fprintf(os.Stderr, "\nProxy tunnel to MeshCentral lost: %v\n", cause)
