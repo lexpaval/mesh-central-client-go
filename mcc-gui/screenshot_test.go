@@ -3,92 +3,102 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 
 	qt "github.com/mappu/miqt/qt6"
 	"github.com/mappu/miqt/qt6/mainthread"
+	"github.com/spf13/viper"
+	"github.com/zalando/go-keyring"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/config"
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
-// TestScreenshot renders the main window with sample data in a dark and a
-// light palette to SHOT_DIR, plus dialogs and a shell, for checking layout
-// and contrast without a server.
+// TestScreenshot is run by tools/guibench with a local dummy server, one
+// palette per process so captures start with a fresh session and preferences.
 func TestScreenshot(t *testing.T) {
 	dir := os.Getenv("SHOT_DIR")
 	if dir == "" {
 		t.Skip("SHOT_DIR not set")
 	}
-	for _, variant := range []string{"dark", "light"} {
-		ui(t, func() {
-			setPalette(variant == "dark")
-			win = qt.NewQMainWindow2()
-			win.SetCentralWidget(buildUI())
-			win.Resize(1100, 700)
-			win.Show()
-			setDevices(nil)
-
-			setConnected(true)
-			statusLabel.SetText("Connected to mesh.example.com as alice (profile default)")
-			// Fictional names, IPs from the RFC 5737 documentation ranges.
-			devs := []meshcentral.Device{
-				{Id: "1", MeshID: "mesh//lab", Group: "Lab", DisplayName: "Lab - Bench 1", Name: "lab-bench-1", IP: "192.0.2.10", OS: "Fedora Linux 44 (Server Edition)", Pwr: 1},
-				{Id: "2", MeshID: "mesh//custa", Group: "Customer A", DisplayName: "Site A - Office PC", Name: "DESKTOP-EXAMPLE1", IP: "198.51.100.20", OS: "Microsoft Windows 10 Pro - 22H2/19045", Pwr: 1},
-				{Id: "3", MeshID: "mesh//custa", Group: "Customer A", DisplayName: "Site B - Workstation 3", Name: "WS003", IP: "198.51.100.33", OS: "Microsoft Windows 11 Pro - 24H2/26100", Pwr: 1},
-				{Id: "4", MeshID: "mesh//gw", Group: "Gateways", DisplayName: "Site C - Gateway", Name: "gateway-n100-1", IP: "203.0.113.40", OS: "Fedora Linux 43 (Server Edition)", Pwr: 1},
-				{Id: "5", MeshID: "mesh//lab", Group: "Lab", Name: "raspberrypi", IP: "192.0.2.12", OS: "Raspbian GNU/Linux 12 (bookworm)", Pwr: 1},
-				{Id: "7", MeshID: "mesh//lab", Group: "Lab", DisplayName: "Build Server", Name: "build-01", IP: "203.0.113.70", OS: "openSUSE Tumbleweed", Pwr: 1},
-				{Id: "6", MeshID: "mesh//office", Group: "Office", DisplayName: "Office Mac", Name: "office-mac", IP: "192.0.2.20", OS: "macOS 15.3", Pwr: 0},
-			}
-			offlineChk.SetChecked(true)
-			setDevices(devs)
-			selectDevice("1")
-			routes = []*activeRoute{
-				{device: "Lab - Bench 1", route: &meshcentral.Route{NodeID: "1", LocalPort: 40123, RemotePort: 22}},
-				{device: "Site A - Office PC", route: &meshcentral.Route{NodeID: "2", LocalPort: 40124, RemotePort: 3389}},
-				{device: "Site C - Gateway", route: &meshcentral.Route{NodeID: "4", LocalPort: 8080, Target: "192.0.2.50", RemotePort: 443}},
-				{device: "Office Mac", route: &meshcentral.Route{NodeID: "6", LocalPort: 40125, RemotePort: 5900}},
-			}
-			rebuildRoutes()
-			logf("Connected with profile default, 7 devices")
-			logf("Site A - Office PC: Tunnel to remote port 3389 failed: device accepted the tunnel but closed it without sending data")
-			settle()
-			save(t, win.QWidget, filepath.Join(dir, variant+".png"))
-
-			session.profile = "default"
-			selectDevice("7")
-			showSSHConfig()
-			saveDialog(t, filepath.Join(dir, variant+"-ssh-config.png"))
-			profileSel.AddItems([]string{"default", "work"})
-			showProfileDialog(false, &config.Profile{Name: "work", Server: "mesh.example.com", Username: "alice"})
-			saveDialog(t, filepath.Join(dir, variant+"-profile.png"))
-			showAbout()
-			saveDialog(t, filepath.Join(dir, variant+"-about.png"))
-
-			// A shell with sample output in place of a session.
-			tm := newTerm()
-			tabs.SetCurrentIndex(tabs.AddTab2(tm.w, icon("terminal"), "Lab - Bench 1"))
-			settle()
-			tm.Write([]byte(sampleShell))
-			settle()
-			save(t, win.QWidget, filepath.Join(dir, variant+"-shell.png"))
-			tm.close()
-			routes = nil
-			win.Close()
-		})
+	server, variant := os.Getenv("SHOT_SERVER"), os.Getenv("SHOT_THEME")
+	if server == "" || (variant != "light" && variant != "dark") {
+		t.Fatal("use make gui-shots to start the dummy server and capture both themes")
 	}
-	mainthread.Wait(func() { setPalette(false) })
-}
+	keyring.MockInit()
+	viper.Set("profiles", []map[string]string{{"name": "Demo", "server": server, "username": "alice"}})
+	viper.Set("default_profile", "Demo")
+	defer viper.Reset()
+	loadPrefs(filepath.Join(t.TempDir(), "prefs.json"))
+	mainthread.Wait(func() {
+		setPalette(variant == "dark")
+		win = qt.NewQMainWindow2()
+		win.SetCentralWidget(buildUI())
+		win.Resize(1200, 760)
+		win.Show()
+		offlineChk.SetChecked(true)
+		refreshProfiles()
+		connect(true)
+	})
+	waitFor := func(label string, ready func() bool) {
+		t.Helper()
+		deadline := time.Now().Add(15 * time.Second)
+		for time.Now().Before(deadline) {
+			done := false
+			mainthread.Wait(func() { done = ready() })
+			if done {
+				return
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+		t.Fatalf("timed out waiting for %s from the dummy server", label)
+	}
+	waitFor("device list", func() bool { return connected && !session.loading && len(devices) == 7 })
+	mainthread.Wait(func() {
+		selectDevice("1")
+		for _, r := range []*meshcentral.Route{
+			{NodeID: "1", RemotePort: 22},
+			{NodeID: "2", RemotePort: 3389},
+			{NodeID: "4", Target: "192.0.2.50", RemotePort: 443},
+		} {
+			if err := startRoute(deviceName(devices[deviceIdx[r.NodeID]]), r); err != nil {
+				t.Error(err)
+			}
+		}
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+".png"))
 
-const sampleShell = "\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ ls --color\r\n" +
-	"\x1b[1;34mbin\x1b[0m  \x1b[1;34mprojects\x1b[0m  notes.txt  \x1b[1;32mrun.sh\x1b[0m  \x1b[1;31marchive.tar.gz\x1b[0m\r\n" +
-	"\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ systemctl status sshd --no-pager\r\n" +
-	"\x1b[1;32m●\x1b[0m sshd.service - OpenSSH server daemon\r\n" +
-	"     Loaded: loaded (/usr/lib/systemd/system/sshd.service; \x1b[1;32menabled\x1b[0m)\r\n" +
-	"     Active: \x1b[1;32mactive (running)\x1b[0m since Tue 2026-09-29 08:12:03 CEST\r\n" +
-	"\x1b[7m reverse \x1b[0m \x1b[4munderline\x1b[0m \x1b[2mfaint\x1b[0m \x1b[38;5;208m256-color\x1b[0m \x1b[38;2;120;180;255mtruecolor\x1b[0m 世界 ─┼─\r\n" +
-	"\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ "
+		selectDevice("7")
+		showSSHConfig()
+		saveDialog(t, filepath.Join(dir, variant+"-ssh-config.png"))
+		showProfileDialog(false, &config.Profile{Name: "Demo", Server: server, Username: "alice"})
+		saveDialog(t, filepath.Join(dir, variant+"-profile.png"))
+		showAbout()
+		saveDialog(t, filepath.Join(dir, variant+"-about.png"))
+		selectDevice("1")
+		openShell(devices[deviceIdx["1"]], 1)
+	})
+	waitFor("shell output", func() bool {
+		if len(shells) != 1 {
+			return false
+		}
+		tm := shells[0].t
+		tm.mu.Lock()
+		defer tm.mu.Unlock()
+		return strings.Contains(tm.emu.String(), "Demo session ready")
+	})
+	mainthread.Wait(func() {
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+"-shell.png"))
+		for _, ar := range routes {
+			ar.route.Close()
+		}
+		closeShell(shells[0])
+		win.Close()
+	})
+}
 
 // setPalette switches Fusion between a dark palette and its default light one.
 func setPalette(dark bool) {

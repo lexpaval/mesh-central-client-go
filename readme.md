@@ -30,13 +30,30 @@ go build -o mcc
 
 `mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices. A route's **Open** starts the matching client: the browser for web ports, `ssh` in a terminal window for SSH, and for RDP `mstsc` on Windows or the app registered for `rdp://` links on macOS (Microsoft's Windows App) and Linux (Remmina, KRDC, GNOME Connections). **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH. Shell tabs and routes are marked when the server records the session. The GUI opens with the profile last connected to, leaving the CLI's default profile as it is, and routes still running at a disconnect or quit reopen on the next connect with that profile, on the same local ports.
 
+Devices and port routes, connected to the local dummy server with fictional data:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark.png">
+  <img alt="MeshCentral Client showing grouped devices and SSH, RDP, and HTTPS routes" src="docs/screenshots/light.png" width="1200">
+</picture>
+
+An integrated terminal receiving sample output through the dummy server's shell relay:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark-shell.png">
+  <img alt="MeshCentral Client terminal showing a sample Linux shell session" src="docs/screenshots/light-shell.png" width="1200">
+</picture>
+
 The GUI uses Qt 6 through miqt and needs cgo and a C++ compiler. For a native build, install the Qt 6 development packages (`qt6-qtbase-devel` on Fedora or `qt6-base-dev` on Debian/Ubuntu):
 
 ```bash
 make gui          # dist/mcc-gui, linked against the system Qt
 make gui-test     # GUI tests using Qt's offscreen platform
-make gui-shots    # Sample-data screenshots in dist/shots (no server needed)
+make gui-shots    # Start a dummy server and capture both themes in dist/shots
+make gui-readme-shots # Regenerate the four README images in docs/screenshots
 ```
+
+Screenshot generation runs offscreen on Linux using the GUI test binary and `tools/guibench`'s local dummy server. It uses temporary preferences and a mock keyring, exercises login, device queries, and a shell relay, and waits for the device list and terminal output before saving PNGs. No real MeshCentral account, credentials, or desktop session is needed. The images show fictional devices and documentation IP addresses; local server and route ports are assigned automatically.
 
 Cross-platform builds use Podman images in `mcc-gui/package`. Images are built on first use; Windows resource generation uses `go-winres`, pinned in `tools.mod`.
 

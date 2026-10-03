@@ -1,4 +1,4 @@
-.PHONY: build build-all release gui gui-linux gui-windows gui-macos gui-all gui-release gui-test gui-shots gui-bench gui-soak clean version
+.PHONY: build build-all release gui gui-linux gui-windows gui-macos gui-all gui-release gui-test gui-shots gui-readme-shots gui-bench gui-soak clean version
 
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
 COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
@@ -41,11 +41,15 @@ gui:
 gui-test:
 	go test -count=1 ./mcc-gui
 
-# Renders the Qt window (dark/light), dialogs and a shell with sample data
-# to dist/shots, offscreen.
+# Connect an offscreen test GUI to the dummy server and capture both themes.
 gui-shots:
 	mkdir -p dist/shots
-	SHOT_DIR=$(CURDIR)/dist/shots go test -run TestScreenshot -count=1 ./mcc-gui
+	go test -c -o dist/gui-shots ./mcc-gui
+	go run ./tools/guibench -screenshots dist/shots ./dist/gui-shots
+
+gui-readme-shots: gui-shots
+	mkdir -p docs/screenshots
+	cp dist/shots/light.png dist/shots/dark.png dist/shots/light-shell.png dist/shots/dark-shell.png docs/screenshots/
 
 gui-linux:
 	$(call GUI_IMAGE,linux,,linux)

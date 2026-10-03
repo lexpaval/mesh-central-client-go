@@ -16,6 +16,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -56,6 +57,7 @@ var (
 	interval = flag.Duration("sample", 10*time.Second, "sampling interval with -soak")
 	headless = flag.Bool("headless", false, "run each GUI in its own headless mutter (Wayland, Xwayland for X11 GUIs)")
 	hide     = flag.Bool("hide", false, "have the GUIs hide their window once connected, as minimized")
+	shots    = flag.String("screenshots", "", "capture demo screenshots into this directory; pass a GUI test binary")
 )
 
 func main() {
@@ -69,6 +71,31 @@ func main() {
 		os.Exit(2)
 	}
 	addr := serve()
+	if *shots != "" {
+		if flag.NArg() != 1 {
+			log.Fatal("-screenshots requires one GUI test binary")
+		}
+		dir, err := filepath.Abs(*shots)
+		if err != nil {
+			log.Fatal(err)
+		}
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatal(err)
+		}
+		for _, theme := range []string{"light", "dark"} {
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			cmd := exec.CommandContext(ctx, flag.Arg(0), "-test.run=^TestScreenshot$", "-test.count=1")
+			cmd.Env = append(os.Environ(), "SHOT_DIR="+dir, "SHOT_SERVER="+addr, "SHOT_THEME="+theme, "MCC_GUI_BENCH=-1")
+			cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
+			err := cmd.Run()
+			cancel()
+			if err != nil {
+				log.Fatalf("%s screenshots: %v", theme, err)
+			}
+		}
+		log.Printf("screenshots saved to %s", dir)
+		return
+	}
 	log.Printf("fake server on %s: %d devices in %d groups, %.0f events/s, shells at %.0f fps", addr, *nDevices, *nGroups, *evRate, *fps)
 	var shellCounts []int
 	for _, s := range strings.Split(*shellSet, ",") {
@@ -474,6 +501,29 @@ var upgrader = websocket.Upgrader{CheckOrigin: func(*http.Request) bool { return
 var oses = []string{"Fedora Linux 44 (Server Edition)", "Microsoft Windows 11 Pro - 24H2/26100", "Ubuntu 24.04.1 LTS",
 	"Debian GNU/Linux 12 (bookworm)", "Raspbian GNU/Linux 12 (bookworm)", "macOS 15.3", "openSUSE Tumbleweed"}
 
+// Screenshot fixtures contain only fictional devices and documentation IPs.
+var demoDevices = []struct {
+	id, group, name, hostname, ip, os string
+	power                             int
+}{
+	{"1", "Lab", "Lab - Bench 1", "lab-bench-1", "192.0.2.10", oses[0], 1},
+	{"2", "Customer A", "Site A - Office PC", "DESKTOP-EXAMPLE1", "198.51.100.20", oses[1], 1},
+	{"3", "Customer A", "Site B - Workstation 3", "WS003", "198.51.100.33", oses[1], 1},
+	{"4", "Gateways", "Site C - Gateway", "gateway-n100-1", "203.0.113.40", oses[2], 1},
+	{"5", "Lab", "Raspberry Pi", "raspberrypi", "192.0.2.12", oses[4], 1},
+	{"6", "Office", "Office Mac", "office-mac", "192.0.2.20", oses[5], 0},
+	{"7", "Lab", "Build Server", "build-01", "203.0.113.70", oses[6], 1},
+}
+
+const demoShell = "\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ uname -sr\r\n" +
+	"Linux 6.12.0\r\n\r\n" +
+	"\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ systemctl status sshd --no-pager\r\n" +
+	"\x1b[1;32m●\x1b[0m sshd.service - OpenSSH server daemon\r\n" +
+	"     Loaded: loaded (/usr/lib/systemd/system/sshd.service; \x1b[1;32menabled\x1b[0m)\r\n" +
+	"     Active: \x1b[1;32mactive (running)\x1b[0m\r\n\r\n" +
+	"\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ printf 'Demo session ready\\n'\r\n" +
+	"Demo session ready\r\n\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ "
+
 func deviceID(i int) string { return fmt.Sprintf("node//bench%05d", i) }
 
 // control is the session's control socket: login, device list, events.
@@ -502,6 +552,9 @@ func control(w http.ResponseWriter, r *http.Request) {
 	defer close(done)
 	listed := make(chan struct{})
 	go func() {
+		if *shots != "" || *evRate <= 0 {
+			return
+		}
 		select {
 		case <-listed:
 		case <-done:
@@ -543,18 +596,31 @@ func control(w http.ResponseWriter, r *http.Request) {
 			send(map[string]string{"action": "authcookie", "cookie": user, "rcookie": user})
 		case "meshes":
 			var meshes []map[string]string
-			for g := range *nGroups {
-				meshes = append(meshes, map[string]string{"_id": fmt.Sprintf("mesh//bench%03d", g), "name": fmt.Sprintf("Group %03d", g)})
+			if *shots != "" {
+				for _, group := range []string{"Lab", "Customer A", "Gateways", "Office"} {
+					meshes = append(meshes, map[string]string{"_id": group, "name": group})
+				}
+			} else {
+				for g := range *nGroups {
+					meshes = append(meshes, map[string]string{"_id": fmt.Sprintf("mesh//bench%03d", g), "name": fmt.Sprintf("Group %03d", g)})
+				}
 			}
 			send(map[string]any{"action": "meshes", "meshes": meshes})
 		case "nodes":
 			nodes := map[string][]map[string]any{}
-			for i := range *nDevices {
-				mesh := fmt.Sprintf("mesh//bench%03d", i%*nGroups)
-				nodes[mesh] = append(nodes[mesh], map[string]any{
-					"_id": deviceID(i), "rname": fmt.Sprintf("host-%05d", i), "name": fmt.Sprintf("Device %05d", i),
-					"osdesc": oses[i%len(oses)], "ip": fmt.Sprintf("198.51.%d.%d", i/250%256, i%250+1), "conn": 1, "pwr": 1,
-				})
+			if *shots != "" {
+				for _, d := range demoDevices {
+					nodes[d.group] = append(nodes[d.group], map[string]any{"_id": d.id, "rname": d.hostname, "name": d.name,
+						"osdesc": d.os, "ip": d.ip, "conn": d.power, "pwr": d.power})
+				}
+			} else {
+				for i := range *nDevices {
+					mesh := fmt.Sprintf("mesh//bench%03d", i%*nGroups)
+					nodes[mesh] = append(nodes[mesh], map[string]any{
+						"_id": deviceID(i), "rname": fmt.Sprintf("host-%05d", i), "name": fmt.Sprintf("Device %05d", i),
+						"osdesc": oses[i%len(oses)], "ip": fmt.Sprintf("198.51.%d.%d", i/250%256, i%250+1), "conn": 1, "pwr": 1,
+					})
+				}
 			}
 			send(map[string]any{"action": "nodes", "nodes": nodes})
 			counters(user).lists.Add(1)
@@ -587,8 +653,8 @@ func relay(w http.ResponseWriter, r *http.Request) {
 	cols, rows := 80, 24
 	started := make(chan struct{})
 	done := make(chan struct{})
-	defer close(done)
 	go func() {
+		defer close(done)
 		var once sync.Once
 		for {
 			t, msg, err := c.ReadMessage()
@@ -616,10 +682,17 @@ func relay(w http.ResponseWriter, r *http.Request) {
 	}()
 	select {
 	case <-started:
+	case <-done:
+		return
 	case <-time.After(10 * time.Second):
 		return
 	}
 	counters(r.URL.Query().Get("auth")).shells.Add(1)
+	if *shots != "" {
+		write(websocket.BinaryMessage, []byte(demoShell))
+		<-done
+		return
+	}
 	write(websocket.BinaryMessage, []byte("\x1b[?1049h\x1b[?25l"))
 	tick := time.NewTicker(time.Duration(float64(time.Second) / *fps))
 	defer tick.Stop()
