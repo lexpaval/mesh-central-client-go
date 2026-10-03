@@ -121,7 +121,7 @@ func StartSocketAs(p config.Profile) error {
 		conn.SetReadDeadline(time.Now().Add(controlAuthTimeout))
 
 		if settings.debug {
-			fmt.Println("Connected to server.")
+			fmt.Fprintln(os.Stderr, "Connected to server.")
 		}
 
 		settings.WebChannel = make(chan struct{})
@@ -257,7 +257,7 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			}
 			if websocket.IsCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway, websocket.CloseNoStatusReceived) {
 				if settings.debug {
-					fmt.Println("Server closed connection")
+					fmt.Fprintln(os.Stderr, "Server closed connection")
 				}
 				settings.closing = true
 				OnConnectionLost(fmt.Errorf("server closed the control connection: %w", err))
@@ -274,7 +274,7 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 
 		var command map[string]interface{}
 		if err := json.Unmarshal(message, &command); err != nil {
-			fmt.Println("Error parsing command:", err)
+			fmt.Fprintln(os.Stderr, "Error parsing command:", err)
 			continue
 		}
 
@@ -294,7 +294,7 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 				ApplyAuth("cookie="+c, false, false)
 				p := config.Profile{Name: settings.profileName}
 				if err := p.SetTwoFactorCookie(c); err != nil && settings.debug {
-					fmt.Println("Unable to store 2FA cookie:", err)
+					fmt.Fprintln(os.Stderr, "Unable to store 2FA cookie:", err)
 				}
 			}
 			if settings.cookieChan != nil {
@@ -345,7 +345,7 @@ func handleCloseCommand(command map[string]interface{}) {
 		OnConnectionLost(fmt.Errorf("lost authentication with MeshCentral server: %s", ae.message))
 	} else {
 		if settings.debug {
-			fmt.Println("Server disconnected:", command["msg"])
+			fmt.Fprintln(os.Stderr, "Server disconnected:", command["msg"])
 		}
 	}
 }

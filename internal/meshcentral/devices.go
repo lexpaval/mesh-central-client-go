@@ -17,7 +17,7 @@ const deviceQueryTimeout = 15 * time.Second
 
 func handleNodesCommand(command map[string]interface{}) {
 	if settings.debug {
-		fmt.Println("Received nodes command")
+		fmt.Fprintln(os.Stderr, "Received nodes command")
 	}
 	var devices []Device
 	nodeGroups, _ := command["nodes"].(map[string]interface{})
