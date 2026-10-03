@@ -1132,6 +1132,16 @@ func openShell(d meshcentral.Device, protocol int) {
 			msg = fmt.Sprintf("\r\n[%v]\r\n", err)
 		}
 		t.Write([]byte(msg))
+		t.finish()
+		mainthread.Start(func() {
+			if !t.closed {
+				closedTitle := title
+				if st.recorded {
+					closedTitle += " · recorded"
+				}
+				tabs.SetTabText(tabs.IndexOf(t.w), closedTitle+" · closed")
+			}
+		})
 		logf("%s: shell closed", name)
 	}()
 

@@ -1,7 +1,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"strings"
 	"testing"
 	"time"
@@ -10,6 +12,51 @@ import (
 	qt "github.com/mappu/miqt/qt6"
 	"github.com/mappu/miqt/qt6/mainthread"
 )
+
+func TestTermFinishPreservesOutput(t *testing.T) {
+	tm := newTestTerm(t)
+	tm.Write([]byte("last output"))
+	read := make(chan error, 1)
+	go func() {
+		_, err := tm.in.Read(make([]byte, 1))
+		read <- err
+	}()
+	// The shell worker finishes the terminal before updating its tab on Qt.
+	tm.finish()
+	tm.finish()
+	select {
+	case err := <-read:
+		if !errors.Is(err, io.EOF) {
+			t.Errorf("finished input: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("finished terminal left its input reader blocked")
+	}
+	if _, err := tm.Write([]byte("late output")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("output after finish: %v", err)
+	}
+	mainthread.Wait(func() {
+		tm.input(func() { t.Error("finished terminal accepted input") })
+		tm.sel.on, tm.sel.a, tm.sel.b = true, cellPos{0, 0}, cellPos{0, 11}
+		if got := tm.selectionText(); got != "last output" {
+			t.Errorf("finished terminal lost its output: %q", got)
+		}
+		tm.w.Grab()
+	})
+}
+
+func TestInputQueueCloseDiscardsPendingInput(t *testing.T) {
+	q := newByteQueue()
+	q.Write([]byte("unsent command"))
+	q.Close()
+	q.Close()
+	if n, err := q.Read(make([]byte, 32)); n != 0 || !errors.Is(err, io.EOF) {
+		t.Errorf("closed queue retained input: %d, %v", n, err)
+	}
+	if _, err := q.Write([]byte("late input")); !errors.Is(err, io.ErrClosedPipe) {
+		t.Errorf("closed queue accepted input: %v", err)
+	}
+}
 
 // newTestTerm makes an 80x24 terminal, closed when the test ends.
 func newTestTerm(t *testing.T) *term {

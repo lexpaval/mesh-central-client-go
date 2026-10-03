@@ -380,6 +380,28 @@ func TestShellTabs(t *testing.T) {
 	})
 }
 
+func TestFailedShellMarksTabClosed(t *testing.T) {
+	var st *shellTab
+	ui(t, func() {
+		// No control socket is connected, so the shell fails immediately.
+		openShell(meshcentral.Device{Id: "n", Name: "unavailable"}, 1)
+		st = shells[len(shells)-1]
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { closeShell(st) }) })
+	deadline := time.Now().Add(time.Second)
+	for {
+		var title string
+		mainthread.Wait(func() { title = tabs.TabText(tabs.IndexOf(st.t.w)) })
+		if title == "unavailable · closed" {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("failed shell still looks active: %q", title)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+}
+
 func TestTreeRetainsItemsAcrossMoves(t *testing.T) {
 	ui(t, func() {
 		setConnected(true)

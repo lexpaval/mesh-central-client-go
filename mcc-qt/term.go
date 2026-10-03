@@ -35,7 +35,7 @@ type term struct {
 	cursorHidden   bool
 	mouseModes     map[ansi.Mode]bool
 	altScreen      bool
-	ended          bool // closed, output is dropped
+	ended          bool // session finished, input and output are dropped
 	historyReset   bool
 	historyPending bool
 
@@ -178,20 +178,27 @@ func (t *term) Size() (cols, rows int) {
 	return int(s >> 32), int(uint32(s))
 }
 
-// close ends the input, which ends the session, and stops painting. The
-// widget is deleted by its tab.
+// finish stops the session's pipes but keeps the screen available to copy.
+func (t *term) finish() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.ended {
+		return
+	}
+	t.ended = true
+	t.in.Close()
+	// Ends the reply reader. Not emu.Close, which sets a flag Read checks
+	// unlocked.
+	t.emu.InputPipe().(io.Closer).Close()
+}
+
+// The tab deletes the widget after close has stopped painting.
 func (t *term) close() {
 	if t.closed {
 		return
 	}
 	t.closed = true
-	t.in.Close()
-	t.mu.Lock()
-	t.ended = true
-	// Ends the reply reader. Not emu.Close, which sets a flag Read checks
-	// unlocked.
-	t.emu.InputPipe().(io.Closer).Close()
-	t.mu.Unlock()
+	t.finish()
 	t.bold.Delete()
 	for _, c := range t.colors {
 		c.Delete()
@@ -206,6 +213,10 @@ func (t *term) input(f func()) {
 		return
 	}
 	t.mu.Lock()
+	if t.ended {
+		t.mu.Unlock()
+		return
+	}
 	f()
 	t.mu.Unlock()
 	if t.scroll != 0 {
@@ -772,8 +783,8 @@ func (t *term) paste(mode qt.QClipboard__Mode) {
 	t.input(func() { t.emu.Paste(s) })
 }
 
-// byteQueue is an unbounded pipe: writes never block, reads wait for data
-// and return EOF once it's closed and drained.
+// byteQueue is an unbounded pipe: writes never block, reads wait for data.
+// Closing discards unsent input and wakes the reader.
 type byteQueue struct {
 	mu     sync.Mutex
 	cond   *sync.Cond
@@ -814,7 +825,7 @@ func (q *byteQueue) Read(p []byte) (int, error) {
 
 func (q *byteQueue) Close() {
 	q.mu.Lock()
-	q.closed = true
+	q.closed, q.buf = true, nil
 	q.cond.Broadcast()
 	q.mu.Unlock()
 }
