@@ -631,8 +631,13 @@ func scheduleReload() {
 	if reloadTimer != nil {
 		return
 	}
+	id := session.id
 	reloadTimer = time.AfterFunc(2*time.Second, func() {
 		mainthread.Start(func() {
+			// Stop cannot retract a callback already queued on the UI thread.
+			if id != session.id {
+				return
+			}
 			reloadTimer = nil
 			if connected {
 				refreshDevices()

@@ -128,6 +128,30 @@ func TestDisconnectDiscardsPendingNodeEvents(t *testing.T) {
 	})
 }
 
+func TestQueuedReloadDoesNotAffectNewSession(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		defer disconnect()
+		scheduleReload()
+		reloadTimer.Reset(0)
+		// Keep Qt busy while the Go timer queues its callback.
+		time.Sleep(100 * time.Millisecond)
+		if reloadTimer.Stop() {
+			t.Error("reload timer did not fire")
+			return
+		}
+		disconnect()
+		setConnected(true)
+		reloading = true // an extra refresh would set reloadAgain
+		scheduleReload()
+		current := reloadTimer
+		settle()
+		if reloadTimer != current || reloadAgain {
+			t.Error("old callback changed the new session's timer or requested a refresh")
+		}
+	})
+}
+
 func TestNodeEventsUpdateInPlace(t *testing.T) {
 	ui(t, func() {
 		setConnected(true)
