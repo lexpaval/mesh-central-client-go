@@ -58,7 +58,7 @@ Screenshot generation runs offscreen on Linux using the GUI test binary and `too
 Cross-platform builds use Podman images in `mcc-gui/package`. Images are built on first use; Windows resource generation uses `go-winres`, pinned in `tools.mod`.
 
 ```bash
-make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>
+make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>.AppImage
 make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe
 make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.app.zip
 make gui-all      # All three platforms
@@ -66,7 +66,18 @@ make gui-release  # GUI packages for all three platforms
 make release      # CLI binaries + GUI packages + sha256sums.txt
 ```
 
-Linux packages are `.tar.xz` archives containing the binary, desktop entry, and icon under `usr/local` (`sudo tar -xJf <package> -C /`). They require glibc 2.36+, Qt 6.4+ runtime libraries, and the appropriate Qt platform plugin on the target system. Windows packages contain a static executable in a `.zip`. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
+Linux releases are Type 2 AppImages containing Qt 6.11.3, X11 and Wayland plugins, supporting libraries, and fallback fonts. GNOME integration includes Adwaita window decorations and the GTK/GSettings backend for desktop theme preferences. Download the matching architecture, make the file executable, and run it; no Qt installation or root access is needed:
+
+```bash
+chmod +x mcc-gui-linux-amd64-<version>.AppImage
+./mcc-gui-linux-amd64-<version>.AppImage
+```
+
+The supported baseline is glibc 2.39+ (for example, Ubuntu 24.04 or Debian 13) with an X11 or Wayland desktop and the host's graphics drivers. Use the amd64 build on Steam Deck in Desktop Mode; device validation is still pending. Headless servers should use the CLI. Password storage uses the desktop's Secret Service keyring; external SSH, RDP, and browser clients remain system applications.
+
+The [current Type 2 runtime](https://github.com/AppImage/type2-runtime) embeds libfuse, so installing `libfuse2` is unnecessary. If FUSE mounting is unavailable, run `./mcc-gui-linux-amd64-<version>.AppImage --appimage-extract-and-run`. This extracts to a temporary directory and cleans it up on exit. Build tools and both architecture runtimes are checksum-pinned in `mcc-gui/package/linux.Dockerfile`; update the checksums when adopting newer upstream continuous releases.
+
+Windows packages contain a static executable in a `.zip`. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
 
 On Linux, `make gui-bench` measures CPU and memory against the dummy MeshCentral server. `make gui-soak` runs a 30-minute test with 16,000 devices and two active shells in headless Mutter. Pass `BENCH_FLAGS` for benchmark options, `SOAK` for duration, and `HIDE=` to render the window during a soak.
 

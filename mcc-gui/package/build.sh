@@ -1,13 +1,13 @@
 #!/bin/sh
 # Builds mcc-gui inside the images next to this script, the Makefile's
-# qt-linux, qt-windows, qt-macos and qt-release run it:
+# gui-linux, gui-windows, gui-macos and gui-release run it:
 #
 #   build.sh linux amd64|arm64    dist/mcc-gui-linux-<arch>-<version>
 #   build.sh windows amd64|arm64  dist/mcc-gui-windows-<arch>-<version>.exe
 #   build.sh macos arm64|x86_64   dist/mcc-gui-darwin-amd64|arm64-<version>.app.zip
 #
-# With "package" after the arch, Linux builds a .tar.xz installing the binary,
-# a desktop entry and the icon to /usr/local, and Windows a .zip of the exe.
+# With "package" after the arch, Linux builds an AppImage with Qt bundled,
+# and Windows a .zip of the exe.
 # macOS always builds the .app, the binary doesn't run without its Qt.
 #
 # The repository is at /src, VERSION, COMMIT, DATE, APP_VERSION and
@@ -20,9 +20,11 @@ id=com.github.lexpaval.mcc-gui
 ldflags="-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.buildDate=$DATE"
 mkdir -p dist
 work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
 case $target in
 linux)
+	export PKG_CONFIG_PATH=/opt/qt/$arch/lib/pkgconfig
 	if [ "$arch" = arm64 ]; then
 		export GOARCH=arm64 CC=aarch64-linux-gnu-gcc CXX=aarch64-linux-gnu-g++
 		export PKG_CONFIG_LIBDIR=/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig
@@ -30,22 +32,8 @@ linux)
 	bin="dist/mcc-gui-linux-$arch-$VERSION"
 	go build -trimpath -ldflags "$ldflags" -o "$bin" ./mcc-gui
 	[ "$package" = package ] || exit 0
-	root=$work/usr/local
-	install -Dm755 "$bin" "$root/bin/mcc-gui"
+	sh mcc-gui/package/appimage.sh "$bin" "$arch" "$work/AppDir"
 	rm "$bin"
-	install -Dm644 mcc-gui/Icon.png "$root/share/icons/hicolor/512x512/apps/$id.png"
-	install -d "$root/share/applications"
-	cat > "$root/share/applications/$id.desktop" <<-EOF
-		[Desktop Entry]
-		Type=Application
-		Name=$name
-		Comment=Devices, port routes and shells on a MeshCentral server
-		Exec=mcc-gui
-		Icon=$id
-		Categories=Network;RemoteAccess;
-	EOF
-	# Unpacks to /usr/local: sudo tar -xJf <file> -C /
-	tar -C "$work" -cJf "dist/mcc-gui-linux-$arch-$VERSION.tar.xz" usr
 	;;
 
 windows)
@@ -62,7 +50,7 @@ windows)
 	GOOS= GOARCH= CGO_ENABLED=0 go tool -modfile=tools.mod go-winres simply --arch "$arch" --icon mcc-gui/Icon.png --manifest gui \
 		--product-name "$name" --file-description "$name" --original-filename mcc-gui.exe \
 		--product-version "$APP_VERSION.$APP_BUILD" --file-version "$APP_VERSION.$APP_BUILD" --out mcc-gui/rsrc
-	trap 'rm -f mcc-gui/rsrc_windows_*.syso' EXIT
+	trap 'rm -rf "$work"; rm -f mcc-gui/rsrc_windows_*.syso' EXIT
 	exe="dist/mcc-gui-windows-$arch-$VERSION.exe"
 	go build -trimpath -tags windowsqtstatic -ldflags "$ldflags -H windowsgui" -o "$exe" ./mcc-gui
 	if [ "$package" = package ]; then

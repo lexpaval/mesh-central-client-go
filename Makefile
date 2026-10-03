@@ -19,11 +19,11 @@ APP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 # system Qt 6 (Fedora: qt6-qtbase-devel, Debian/Ubuntu: qt6-base-dev), the
 # first build compiles the bindings for a few minutes. gui-linux, gui-windows
 # and gui-macos cross-build in podman images from mcc-gui/package, built on
-# first use: Linux amd64/arm64 binaries against Qt 6.4 (Debian 12, Ubuntu
-# 24.04 and later), Windows amd64/arm64 as static exes (Qt 6.11), macOS 14+ arm64/x86_64
+# first use: Linux amd64/arm64 AppImages with Qt 6.11 (glibc 2.39+),
+# Windows amd64/arm64 as static exes (Qt 6.11), macOS 14+ arm64/x86_64
 # as zipped .app bundles with Qt inside, ad-hoc signed. gui-all builds all of
-# them, gui-release packages them instead: Linux .tar.xz (desktop entry and
-# icon, unpacks to /usr/local), Windows .zip, macOS .app.zip.
+# them, gui-release packages Windows as .zip, keeping Linux .AppImage and
+# macOS .app.zip.
 # The build cache is per image: cgo caches by flags, not Qt's headers, so a
 # rebuilt image with another Qt starts over. Old ones: podman volume prune.
 GUI_LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(DATE)"
@@ -52,9 +52,9 @@ gui-readme-shots: gui-shots
 	cp dist/shots/light.png dist/shots/dark.png dist/shots/light-shell.png dist/shots/dark-shell.png docs/screenshots/
 
 gui-linux:
-	$(call GUI_IMAGE,linux,,linux)
-	$(call GUI_RUN,linux) linux amd64
-	$(call GUI_RUN,linux) linux arm64
+	$(call GUI_IMAGE,linux-appimage-qt6.11,,linux)
+	$(call GUI_RUN,linux-appimage-qt6.11) linux amd64 package
+	$(call GUI_RUN,linux-appimage-qt6.11) linux arm64 package
 
 gui-windows:
 	$(call GUI_IMAGE,windows,,windows)
@@ -70,12 +70,12 @@ gui-macos:
 gui-all: gui-linux gui-windows gui-macos
 
 gui-release:
-	$(call GUI_IMAGE,linux,,linux)
+	$(call GUI_IMAGE,linux-appimage-qt6.11,,linux)
 	$(call GUI_IMAGE,windows,,windows)
 	$(call GUI_IMAGE,macos-arm64,--build-arg TARGET_ARCH=arm64,macos)
 	$(call GUI_IMAGE,macos-x86_64,--build-arg TARGET_ARCH=x86_64,macos)
-	$(call GUI_RUN,linux) linux amd64 package
-	$(call GUI_RUN,linux) linux arm64 package
+	$(call GUI_RUN,linux-appimage-qt6.11) linux amd64 package
+	$(call GUI_RUN,linux-appimage-qt6.11) linux arm64 package
 	$(call GUI_RUN,windows) windows amd64 package
 	$(call GUI_RUN,windows) windows arm64 package
 	$(call GUI_RUN,macos-arm64) macos arm64
@@ -103,7 +103,7 @@ build-all:
 
 release: build-all gui-release
 	cd dist && sha256sum $(foreach os,linux darwin windows,$(foreach arch,amd64 arm64,mcc-$(os)-$(arch)-$(VERSION)$(if $(filter windows,$(os)),.exe))) \
-		$(foreach arch,amd64 arm64,mcc-gui-linux-$(arch)-$(VERSION).tar.xz mcc-gui-windows-$(arch)-$(VERSION).zip mcc-gui-darwin-$(arch)-$(VERSION).app.zip) > sha256sums.txt
+		$(foreach arch,amd64 arm64,mcc-gui-linux-$(arch)-$(VERSION).AppImage mcc-gui-windows-$(arch)-$(VERSION).zip mcc-gui-darwin-$(arch)-$(VERSION).app.zip) > sha256sums.txt
 
 version:
 	@echo "Version:    $(VERSION)"
