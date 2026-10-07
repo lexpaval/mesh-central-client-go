@@ -1,6 +1,7 @@
 package meshcentral
 
 import (
+	"context"
 	"crypto/sha512"
 	"encoding/hex"
 	"encoding/json"
@@ -42,6 +43,7 @@ type FileSession struct {
 	conn   *websocket.Conn
 	notice func(string)
 	reqid  int
+	broken bool
 }
 
 // fileReplyTimeout bounds the wait for any message from the agent, including
@@ -84,7 +86,7 @@ func OpenFiles(nodeID string, notice func(string)) (*FileSession, error) {
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to server: %w", err)
 	}
-	s, err := newFileSession(conn, notice)
+	s, err := NewFileSession(conn, notice)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -92,7 +94,9 @@ func OpenFiles(nodeID string, notice func(string)) (*FileSession, error) {
 	return s, nil
 }
 
-func newFileSession(conn *websocket.Conn, notice func(string)) (*FileSession, error) {
+// NewFileSession starts a files channel on a relay tunnel conn that was
+// just dialed, waiting for the device to join it.
+func NewFileSession(conn *websocket.Conn, notice func(string)) (*FileSession, error) {
 	if notice == nil {
 		notice = func(string) {}
 	}
@@ -116,6 +120,10 @@ func newFileSession(conn *websocket.Conn, notice func(string)) (*FileSession, er
 	return s, nil
 }
 
+// Broken reports that the channel failed, every call fails from then on
+// and a new session is needed. Other errors leave it usable.
+func (s *FileSession) Broken() bool { return s.broken }
+
 func (s *FileSession) Close() error {
 	s.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	return s.conn.Close()
@@ -131,7 +139,15 @@ func (s *FileSession) send(v any) error {
 	if err != nil {
 		return err
 	}
-	return s.conn.WriteMessage(websocket.TextMessage, b)
+	return s.write(websocket.TextMessage, b)
+}
+
+func (s *FileSession) write(msgType int, b []byte) error {
+	if err := s.conn.WriteMessage(msgType, b); err != nil {
+		s.broken = true
+		return fmt.Errorf("files channel closed: %w", err)
+	}
+	return nil
 }
 
 // read returns the next JSON message, or a data block. The agent sends JSON
@@ -141,6 +157,7 @@ func (s *FileSession) read() (*fileMsg, []byte, error) {
 		s.conn.SetReadDeadline(time.Now().Add(fileReplyTimeout))
 		_, b, err := s.conn.ReadMessage()
 		if err != nil {
+			s.broken = true
 			return nil, nil, fmt.Errorf("files channel closed: %w", err)
 		}
 		if len(b) == 0 || b[0] != '{' {
@@ -153,6 +170,7 @@ func (s *FileSession) read() (*fileMsg, []byte, error) {
 		if m.CtrlChannel != nil {
 			if m.Type == "console" && m.Msg != nil {
 				if m.MsgID == 2 {
+					s.broken = true
 					return nil, nil, fmt.Errorf("file access refused on the device: %s", *m.Msg)
 				}
 				s.notice(*m.Msg)
@@ -258,7 +276,8 @@ func (s *FileSession) exists(path string) (bool, error) {
 // Download writes the file at path to w and checks it against the agent's
 // hash of the file. progress (may be nil) gets the bytes written so far.
 // The protocol has no offset, a broken download has to start over.
-func (s *FileSession) Download(path string, w io.Writer, progress func(int64)) error {
+// Canceling ctx stops it after the block in hand.
+func (s *FileSession) Download(ctx context.Context, path string, w io.Writer, progress func(int64)) error {
 	id := s.nextID()
 	if err := s.send(map[string]any{"action": "download", "sub": "start", "id": id, "path": path}); err != nil {
 		return err
@@ -283,6 +302,12 @@ func (s *FileSession) Download(path string, w io.Writer, progress func(int64)) e
 	h := sha512.New384()
 	var n int64
 	for {
+		// Blocks still in flight after a stop are skipped by the next
+		// call, they come before any reply to it.
+		if err := ctx.Err(); err != nil {
+			s.send(map[string]any{"action": "download", "sub": "stop", "id": id})
+			return err
+		}
 		m, b, err := s.read()
 		if err != nil {
 			return err
@@ -317,8 +342,9 @@ func (s *FileSession) Download(path string, w io.Writer, progress func(int64)) e
 
 // Upload writes r to path on the device, replacing any file there, and
 // checks the result against the agent's hash of it. progress (may be nil)
-// gets the bytes sent so far.
-func (s *FileSession) Upload(path string, r io.Reader, progress func(int64)) error {
+// gets the bytes sent so far. Canceling ctx stops it and has the agent
+// delete the partial file.
+func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, progress func(int64)) error {
 	id := s.nextID()
 	if err := s.send(map[string]any{"action": "upload", "reqid": id, "path": path}); err != nil {
 		return err
@@ -345,6 +371,10 @@ func (s *FileSession) Upload(path string, r io.Reader, progress func(int64)) err
 		default:
 			continue
 		}
+		if err := ctx.Err(); err != nil {
+			s.send(map[string]any{"action": "uploadcancel", "reqid": id})
+			return err
+		}
 		inFlight--
 		frames := 1
 		if m.Action == "uploadstart" {
@@ -360,7 +390,7 @@ func (s *FileSession) Upload(path string, r io.Reader, progress func(int64)) err
 					buf[0] = 0
 					frame = buf[:1+k]
 				}
-				if err := s.conn.WriteMessage(websocket.BinaryMessage, frame); err != nil {
+				if err := s.write(websocket.BinaryMessage, frame); err != nil {
 					return err
 				}
 				h.Write(buf[1 : 1+k])

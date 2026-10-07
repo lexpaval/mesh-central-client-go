@@ -13,13 +13,13 @@ import (
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
-// The Recent tab lists the shells, routes and commands used before, per
+// The Recent tab lists the shells, files, routes and commands used before, per
 // profile, most used and most recent first, to do again in one click. On a
 // large server most devices are someone else's, this keeps one's own close.
 
-// recentAction is a shell, route or command used on a device.
+// recentAction is a shell, files tab, route or command used on a device.
 type recentAction struct {
-	Kind        string // "shell", "route" or "command"
+	Kind        string // "shell", "files", "route" or "command"
 	NodeID      string
 	Device      string // its name when last used, for devices not loaded
 	Protocol    int    `json:",omitempty"` // shell: 1 default, 6 PowerShell
@@ -173,9 +173,9 @@ func rebuildRecent() {
 		rr.text.set(recentRowData(a))
 	}
 	if connected {
-		recentHint.SetText("Nothing yet. Shells, routes and commands you use show up here, most used first.")
+		recentHint.SetText("Nothing yet. Shells, files, routes and commands you use show up here, most used first.")
 	} else {
-		recentHint.SetText("Connect to see the shells, routes and commands you use most.")
+		recentHint.SetText("Connect to see the shells, files, routes and commands you use most.")
 	}
 	recentHint.SetVisible(len(recent) == 0)
 }
@@ -216,6 +216,8 @@ func recentRowData(a *recentAction) rowData {
 		if a.Protocol == 6 {
 			what = "PowerShell"
 		}
+	case "files":
+		what, ic = "Files", "folder"
 	case "route":
 		what, ic = service(a.RemotePort)
 		detail = fmt.Sprintf("port %d", a.RemotePort)
@@ -266,6 +268,8 @@ func replayRecent(a *recentAction) {
 	switch a.Kind {
 	case "shell":
 		openShell(d, a.Protocol)
+	case "files":
+		openFilesTab(d)
 	case "route":
 		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, BindAddress: a.BindAddress, LocalPort: a.LocalPort, Target: a.Target, RemotePort: a.RemotePort}, true)
 	case "command":

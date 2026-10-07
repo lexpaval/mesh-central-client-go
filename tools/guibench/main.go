@@ -43,6 +43,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral/fakeagent"
 )
 
 var (
@@ -460,6 +462,7 @@ func serve() string {
 	if err != nil {
 		log.Fatal(err)
 	}
+	demoFiles = makeDemoFiles()
 	mux := http.NewServeMux()
 	mux.HandleFunc("/control.ashx", control)
 	mux.HandleFunc("/meshrelay.ashx", relay)
@@ -629,9 +632,60 @@ func control(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// demoFiles is the folder files channels browse, made up like the devices.
+var demoFiles string
+
+func makeDemoFiles() string {
+	root, err := os.MkdirTemp("", "guibench-files")
+	if err != nil {
+		log.Fatal(err)
+	}
+	home := filepath.Join(root, "home", "alice")
+	for _, d := range []string{"etc", "var/log", "home/alice/Documents", "home/alice/Downloads", "home/alice/projects"} {
+		os.MkdirAll(filepath.Join(root, d), 0o755)
+	}
+	files := []struct {
+		path, text string
+		size       int64
+		day        int
+	}{
+		{"etc/hostname", "lab-bench-1\n", 0, 2},
+		{"home/alice/notes.md", demoNotes, 0, 6},
+		{"home/alice/config.yaml", "listen: 0.0.0.0:8080\nlog_level: info\nretention_days: 30\n", 0, 4},
+		{"home/alice/site-report.pdf", "", 1_372_160, 3},
+		{"home/alice/backup-2026-09.tar.gz", "", 50_331_648, 1},
+	}
+	for _, f := range files {
+		p := filepath.Join(root, f.path)
+		os.WriteFile(p, []byte(f.text), 0o644)
+		if f.size > 0 {
+			os.Truncate(p, f.size)
+		}
+		mod := time.Date(2026, 10, f.day, 9+f.day, 12, 0, 0, time.Local)
+		os.Chtimes(p, mod, mod)
+	}
+	for i, d := range []string{"Documents", "Downloads", "projects"} {
+		mod := time.Date(2026, 9, 20+i, 14, 30, 0, 0, time.Local)
+		os.Chtimes(filepath.Join(home, d), mod, mod)
+	}
+	return root
+}
+
+const demoNotes = `# Bench 1
+
+- Firmware 2.4 flashed, self-test passed
+- Calibrate the current sensor before the next run
+- Logs rotate daily, see /var/log
+`
+
 // relay is a shell tunnel: after the handshake it redraws a top-like screen
-// fps times a second at the size the client asked for, echoing input.
+// fps times a second at the size the client asked for, echoing input. Files
+// channels browse demoFiles.
 func relay(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Query().Get("p") == "5" {
+		fakeagent.Files(demoFiles)(w, r)
+		return
+	}
 	if r.URL.Query().Get("p") != "1" { // port routes aren't benchmarked
 		http.NotFound(w, r)
 		return

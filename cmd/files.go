@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"time"
 
@@ -72,6 +74,7 @@ var filesGetCmd = &cobra.Command{
 		}
 
 		s := openFiles(cmd, local == "-")
+		catchInterrupt()
 		if len(remotes) == 0 {
 			remotes = []string{pickRemote(s, "Download", "", true, false)}
 		}
@@ -84,7 +87,7 @@ var filesGetCmd = &cobra.Command{
 				filesFail(fmt.Errorf("%s: is a folder", remote))
 			}
 			if local == "-" {
-				if err := s.Download(remote, os.Stdout, nil); err != nil {
+				if err := s.Download(transferCtx, remote, os.Stdout, nil); err != nil {
 					filesFail(err)
 				}
 				continue
@@ -107,7 +110,7 @@ func download(s *meshcentral.FileSession, remote, target string, size int64) err
 		return err
 	}
 	p := newProgress(filepath.Base(target), size)
-	err = s.Download(remote, f, p.update)
+	err = s.Download(transferCtx, remote, f, p.update)
 	p.done()
 	if cerr := f.Close(); err == nil {
 		err = cerr
@@ -147,6 +150,7 @@ var filesPutCmd = &cobra.Command{
 		}
 
 		s := openFiles(cmd, false)
+		catchInterrupt()
 		if remote == "" {
 			remote = pickRemote(s, "Upload into", "", false, true)
 		}
@@ -163,7 +167,7 @@ var filesPutCmd = &cobra.Command{
 				if remoteDir {
 					filesFail(fmt.Errorf("%s: is a folder, give the file name to write", remote))
 				}
-				if err := s.Upload(remote, os.Stdin, nil); err != nil {
+				if err := s.Upload(transferCtx, remote, os.Stdin, nil); err != nil {
 					filesFail(err)
 				}
 				continue
@@ -191,7 +195,7 @@ func upload(s *meshcentral.FileSession, local, target string) error {
 		return err
 	}
 	p := newProgress(filepath.Base(local), st.Size())
-	err = s.Upload(target, f, p.update)
+	err = s.Upload(transferCtx, target, f, p.update)
 	p.done()
 	return err
 }
@@ -305,6 +309,20 @@ func forEachTarget(s *meshcentral.FileSession, args []string, op func(from, to s
 			filesFail(err)
 		}
 	}
+}
+
+// transferCtx ends on Ctrl-C during get and put, so a transfer stops
+// cleanly: an upload has the agent delete its partial file, a download
+// removes the local one. A second Ctrl-C exits at once.
+var transferCtx = context.Background()
+
+func catchInterrupt() {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
+	transferCtx = ctx
 }
 
 // openFiles resolves the node like the other commands and opens a files

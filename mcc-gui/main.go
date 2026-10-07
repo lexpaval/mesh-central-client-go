@@ -120,6 +120,16 @@ func main() {
 	win.SetCentralWidget(buildUI())
 	win.Resize(1100, 700)
 	win.OnCloseEvent(func(super func(*qt.QCloseEvent), e *qt.QCloseEvent) {
+		if n := unsavedEditors(); n > 0 {
+			b := qt.NewQMessageBox6(qt.QMessageBox__Question, "Unsaved changes",
+				fmt.Sprintf("%d open files have unsaved changes. Quit and lose them?", n),
+				qt.QMessageBox__Discard|qt.QMessageBox__Cancel, win.QWidget)
+			if b.Exec() != int(qt.QMessageBox__Discard) {
+				e.Ignore()
+				return
+			}
+		}
+		closeEditors()
 		if connected {
 			disconnect()
 		}
@@ -198,7 +208,7 @@ func buildUI() *qt.QWidget {
 	clear(treeChildren)
 	treeDirty = false
 	clear(collapsed)
-	routeRows, recentRows, shells = nil, nil, nil
+	routeRows, recentRows, shells, filesTabs = nil, nil, nil, nil
 	root := qt.NewQWidget2()
 
 	statusLabel = newElidedLabel("Disconnected")
@@ -278,12 +288,13 @@ func buildUI() *qt.QWidget {
 
 	deviceBtns = []*qt.QPushButton{
 		iconButton("Shell", "terminal", "Open a shell on the device"),
+		iconButton("Files", "folder", "Browse, transfer and edit the device's files"),
 		iconButton("Add route", "plus", "Forward a local port to the device"),
 		iconButton("Run command", "play", "Run a command on the device"),
 		iconButton("Copy", "copy", ""),
 		iconButton("", "rotate", "Reload the device list"),
 	}
-	shellBtn, copyBtn := deviceBtns[0], deviceBtns[3]
+	shellBtn, copyBtn := deviceBtns[0], deviceBtns[4]
 	shellBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			if menu := shellMenu(d); menu != nil {
@@ -293,8 +304,13 @@ func buildUI() *qt.QWidget {
 			}
 		}
 	})
-	deviceBtns[1].OnClicked(showAddRoute)
-	deviceBtns[2].OnClicked(showRunCommand)
+	deviceBtns[1].OnClicked(func() {
+		if d, ok := selectedDevice(); ok {
+			openFilesTab(d)
+		}
+	})
+	deviceBtns[2].OnClicked(showAddRoute)
+	deviceBtns[3].OnClicked(showRunCommand)
 	copyBtn.OnClicked(func() {
 		m := qt.NewQMenu(copyBtn.QWidget)
 		m.SetAttribute(qt.WA_DeleteOnClose)
@@ -302,7 +318,7 @@ func buildUI() *qt.QWidget {
 		m.AddActionWithText("SSH config…").OnTriggered(showSSHConfig)
 		popupBelow(m, copyBtn.QWidget)
 	})
-	deviceBtns[4].OnClicked(refreshDevices)
+	deviceBtns[5].OnClicked(refreshDevices)
 	btnRow := hbox(false)
 	for _, b := range deviceBtns {
 		btnRow.AddWidget(b.QWidget)
@@ -357,6 +373,10 @@ func buildUI() *qt.QWidget {
 		for _, st := range shells {
 			tabs.SetTabIcon(tabs.IndexOf(st.t.w), icon("terminal"))
 		}
+		for _, ft := range filesTabs {
+			tabs.SetTabIcon(tabs.IndexOf(ft.w), icon("folder"))
+			ft.retheme()
+		}
 	})
 	for i := range 2 {
 		tabs.TabBar().SetTabButton(i, qt.QTabBar__RightSide, nil)
@@ -365,6 +385,8 @@ func buildUI() *qt.QWidget {
 	tabs.OnTabCloseRequested(func(i int) {
 		if st := shellAt(i); st != nil {
 			closeShell(st)
+		} else if ft := filesAt(i); ft != nil {
+			ft.requestClose()
 		}
 	})
 
@@ -483,6 +505,7 @@ func buildTree() {
 		} else {
 			m.AddAction2(icon("terminal"), "Shell").OnTriggered(func() { openShell(d, 1) })
 		}
+		m.AddAction2(icon("folder"), "Files").OnTriggered(func() { openFilesTab(d) })
 		m.AddAction2(icon("plus"), "Add route…").OnTriggered(showAddRoute)
 		m.AddAction2(icon("play"), "Run command…").OnTriggered(showRunCommand)
 		m.AddSeparator()
@@ -595,6 +618,9 @@ func disconnect() {
 	}
 	for _, st := range slices.Clone(shells) {
 		closeShell(st)
+	}
+	for _, ft := range slices.Clone(filesTabs) {
+		ft.close()
 	}
 	routes = nil
 	rebuildRoutes()

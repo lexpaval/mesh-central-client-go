@@ -92,10 +92,29 @@ func TestScreenshot(t *testing.T) {
 	mainthread.Wait(func() {
 		settle()
 		save(t, win.QWidget, filepath.Join(dir, variant+"-shell.png"))
+		closeShell(shells[0])
+		openFilesTab(devices[deviceIdx["1"]])
+		filesTabs[0].navigate("/home/alice")
+	})
+	waitFor("files listing", func() bool { return len(filesTabs) == 1 && filesTabs[0].cur == "/home/alice" })
+	mainthread.Wait(func() {
+		ft := filesTabs[0]
+		ft.selectAfter = "notes.md"
+		ft.fill()
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+"-files.png"))
+		openEditor(ft, "/home/alice/notes.md")
+	})
+	waitFor("the editor", func() bool { return len(editors) == 1 })
+	mainthread.Wait(func() {
+		editors[0].w.Resize(640, 360)
+		settle()
+		save(t, editors[0].w, filepath.Join(dir, variant+"-editor.png"))
+		closeEditors()
+		filesTabs[0].close()
 		for _, ar := range routes {
 			ar.route.Close()
 		}
-		closeShell(shells[0])
 		win.Close()
 	})
 }
