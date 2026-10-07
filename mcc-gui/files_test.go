@@ -221,19 +221,15 @@ func TestTransferSpeed(t *testing.T) {
 		tr.began.Store(now.UnixNano())
 		for i := range 5 {
 			tr.sent.Store(int64(i) * 2 << 20)
+			tr.at.Store(now.UnixNano())
 			ft.showProgress()
 			now = now.Add(time.Second)
 		}
 		if got := ft.status.Text(); got != "Downloading big.iso · 8.0 MiB of 100.0 MiB · 2.0 MiB/s, 46 s left" {
 			t.Errorf("at 2 MiB/s: %q", got)
 		}
-		if got := tr.summary(); got != " (8.0 MiB in 5 s, 1.6 MiB/s)" {
+		if got := tr.summary(); got != " (8.0 MiB in 4 s, 2.0 MiB/s)" { // up to the last bytes
 			t.Errorf("summary %q", got)
 		}
 	})
-	for d, want := range map[time.Duration]string{200 * time.Millisecond: "1 s", 90 * time.Second: "2 min", 3700 * time.Second: "1 h 1 min"} {
-		if got := durationText(d); got != want {
-			t.Errorf("durationText(%v) = %q, want %q", d, got, want)
-		}
-	}
 }

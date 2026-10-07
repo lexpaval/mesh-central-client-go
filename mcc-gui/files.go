@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"math"
 	"os"
 	"path/filepath"
 	"slices"
@@ -17,6 +16,7 @@ import (
 	"github.com/mappu/miqt/qt6/mainthread"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
+	"github.com/lexpaval/mesh-central-client-go/internal/progress"
 )
 
 // A Files tab browses a device's files. Browsing and edits share one files
@@ -116,47 +116,9 @@ type transfer struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	sent          atomic.Int64
-	began         atomic.Int64 // Unix nanoseconds when the data started to flow
-	speed         speed        // on the Qt thread
-}
-
-// speed is a transfer's rate from its progress samples, smoothed over a
-// few seconds so the figure doesn't jump with every block.
-type speed struct {
-	lastN int64
-	lastT time.Time
-	rate  float64 // bytes per second, 0 until measured
-}
-
-func (sp *speed) sample(n int64, now time.Time) {
-	if sp.lastT.IsZero() {
-		sp.lastN, sp.lastT = n, now
-		return
-	}
-	dt := now.Sub(sp.lastT).Seconds()
-	if dt < 0.5 {
-		return
-	}
-	rate := float64(n-sp.lastN) / dt
-	if sp.rate == 0 {
-		sp.rate = rate
-	} else {
-		sp.rate += (1 - math.Exp(-dt/3)) * (rate - sp.rate)
-	}
-	sp.lastN, sp.lastT = n, now
-}
-
-func rateText(bytesPerSec float64) string { return fileSize(int64(bytesPerSec)) + "/s" }
-
-// durationText is a rough duration: "40 s", "3 min", "1 h 5 min".
-func durationText(d time.Duration) string {
-	switch {
-	case d < time.Minute:
-		return fmt.Sprintf("%d s", max(int(d.Seconds()), 1))
-	case d < time.Hour:
-		return fmt.Sprintf("%d min", int(d.Minutes()+0.5))
-	}
-	return fmt.Sprintf("%d h %d min", int(d.Hours()), int(d.Minutes())%60)
+	began, at     atomic.Int64   // Unix nanoseconds when the data started to flow, and of the latest bytes
+	meter         progress.Meter // on the Qt thread
+	metered       bool
 }
 
 var filesTabs []*filesTab
@@ -476,13 +438,13 @@ func (ft *filesTab) fill() {
 		case e.Type == meshcentral.FileDrive:
 			item.SetIcon(0, icon("server"))
 			if e.Size > 0 {
-				item.SetText(1, fmt.Sprintf("%s free of %s", fileSize(e.Free), fileSize(e.Size)))
+				item.SetText(1, fmt.Sprintf("%s free of %s", progress.Size(e.Free), progress.Size(e.Size)))
 			}
 		case e.IsDir():
 			item.SetIcon(0, icon("folder"))
 		default:
 			item.SetIcon(0, icon("file"))
-			item.SetText(1, fileSize(e.Size))
+			item.SetText(1, progress.Size(e.Size))
 		}
 		if !e.Mod.IsZero() {
 			item.SetText(2, e.Mod.Local().Format("2006-01-02 15:04"))
@@ -493,19 +455,6 @@ func (ft *filesTab) fill() {
 	}
 	ft.selectAfter = ""
 	ft.updateButtons()
-}
-
-func fileSize(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
 }
 
 func (ft *filesTab) entryOf(item *qt.QTreeWidgetItem) (meshcentral.FileEntry, bool) {
@@ -555,7 +504,7 @@ func (ft *filesTab) activate(e meshcentral.FileEntry) {
 	}
 	if e.Size > editMax {
 		confirm("Too large to edit", fmt.Sprintf("%s is %s, the editor opens files up to %s. Download it instead?",
-			e.Name, fileSize(e.Size), fileSize(editMax)), func() { ft.askDownload([]meshcentral.FileEntry{e}) })
+			e.Name, progress.Size(e.Size), progress.Size(editMax)), func() { ft.askDownload([]meshcentral.FileEntry{e}) })
 		return
 	}
 	openEditor(ft, ft.path(e))
@@ -865,20 +814,36 @@ func (ft *filesTab) startNext() {
 	})
 }
 
-// summary is the size, time and average speed of a finished transfer.
+// sample measures the speed, once the data started to flow.
+func (t *transfer) sample() bool {
+	began := t.began.Load()
+	if began == 0 {
+		return false
+	}
+	if !t.metered {
+		t.meter.Sample(0, time.Unix(0, began))
+		t.metered = true
+	}
+	t.meter.Sample(t.sent.Load(), timeNow())
+	return true
+}
+
+// summary is the size, time and average speed of a finished transfer, up
+// to its last bytes rather than the check after them.
 func (t *transfer) summary() string {
-	n, began := t.sent.Load(), t.began.Load()
-	if began == 0 || n == 0 {
+	if !t.sample() || t.sent.Load() == 0 {
 		return ""
 	}
-	d := timeNow().Sub(time.Unix(0, began))
-	return fmt.Sprintf(" (%s in %s, %s)", fileSize(n), durationText(d), rateText(float64(n)/max(d.Seconds(), 0.001)))
+	return " (" + t.meter.Summary(t.sent.Load(), time.Unix(0, t.at.Load())) + ")"
 }
 
 // run does the transfer, on the transfer channel's goroutine.
 func (t *transfer) run(s *meshcentral.FileSession) error {
 	t.began.Store(timeNow().UnixNano()) // the channel is open, waiting for consent is over
-	progress := func(n int64) { t.sent.Store(n) }
+	progress := func(n int64) {
+		t.sent.Store(n)
+		t.at.Store(timeNow().UnixNano())
+	}
 	if t.upload {
 		f, err := os.Open(t.local)
 		if err != nil {
@@ -911,14 +876,10 @@ func (ft *filesTab) showProgress() {
 		verb = "Uploading"
 	}
 	n := t.sent.Load()
-	text := fmt.Sprintf("%s %s · %s of %s", verb, name, fileSize(n), fileSize(t.size))
-	if t.began.Load() != 0 {
-		t.speed.sample(n, timeNow())
-	}
-	if r := t.speed.rate; r > 0 {
-		text += " · " + rateText(r)
-		if left := t.size - n; left > 0 {
-			text += ", " + durationText(time.Duration(float64(left)/r*float64(time.Second))) + " left"
+	text := fmt.Sprintf("%s %s · %s of %s", verb, name, progress.Size(n), progress.Size(t.size))
+	if t.sample() {
+		if sp := t.meter.Speed(n, t.size); sp != "" {
+			text += " · " + sp
 		}
 	}
 	if len(ft.queue) > 0 {

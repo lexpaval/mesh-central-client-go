@@ -16,6 +16,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
+	"github.com/lexpaval/mesh-central-client-go/internal/progress"
 )
 
 var filesCmd = &cobra.Command{
@@ -109,9 +110,9 @@ func download(s *meshcentral.FileSession, remote, target string, size int64) err
 	if err != nil {
 		return err
 	}
-	p := newProgress(filepath.Base(target), size)
-	err = s.Download(transferCtx, remote, f, p.update)
-	p.done()
+	l := newTransferLine(filepath.Base(target), size)
+	err = s.Download(transferCtx, remote, f, l.update)
+	l.done(err == nil)
 	if cerr := f.Close(); err == nil {
 		err = cerr
 	}
@@ -194,9 +195,9 @@ func upload(s *meshcentral.FileSession, local, target string) error {
 	if err != nil {
 		return err
 	}
-	p := newProgress(filepath.Base(local), st.Size())
-	err = s.Upload(transferCtx, target, f, p.update)
-	p.done()
+	l := newTransferLine(filepath.Base(local), st.Size())
+	err = s.Upload(transferCtx, target, f, l.update)
+	l.done(err == nil)
 	return err
 }
 
@@ -359,11 +360,11 @@ func filesFail(err error) {
 func formatEntry(e meshcentral.FileEntry) string {
 	switch e.Type {
 	case meshcentral.FileDrive:
-		return fmt.Sprintf("drive  %7s  %7s free  %s", humanSize(e.Size), humanSize(e.Free), e.Name)
+		return fmt.Sprintf("drive  %7s  %7s free  %s", progress.Size(e.Size), progress.Size(e.Free), e.Name)
 	case meshcentral.FileDir:
 		return fmt.Sprintf("dir    %7s  %s  %s/", "", formatTime(e.Mod), e.Name)
 	default:
-		return fmt.Sprintf("file   %7s  %s  %s", humanSize(e.Size), formatTime(e.Mod), e.Name)
+		return fmt.Sprintf("file   %7s  %s  %s", progress.Size(e.Size), formatTime(e.Mod), e.Name)
 	}
 }
 
@@ -374,45 +375,51 @@ func formatTime(t time.Time) string {
 	return t.Local().Format("2006-01-02 15:04")
 }
 
-func humanSize(n int64) string {
-	const unit = 1024
-	if n < unit {
-		return fmt.Sprintf("%d B", n)
-	}
-	div, exp := int64(unit), 0
-	for m := n / unit; m >= unit; m /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %ciB", float64(n)/float64(div), "KMGTPE"[exp])
+// transferLine draws a transfer's progress and speed on stderr when it's a
+// terminal, and what was done once it finished.
+type transferLine struct {
+	name     string
+	total, n int64
+	at, last time.Time // of the latest bytes, and the latest drawing
+	meter    progress.Meter
+	on       bool
 }
 
-// progress draws a transfer's progress on stderr when it's a terminal.
-type progress struct {
-	name  string
-	total int64
-	last  time.Time
-	on    bool
+func newTransferLine(name string, total int64) *transferLine {
+	l := &transferLine{name: name, total: total, on: term.IsTerminal(int(os.Stderr.Fd()))}
+	l.meter.Sample(0, time.Now())
+	return l
 }
 
-func newProgress(name string, total int64) *progress {
-	return &progress{name: name, total: total, on: term.IsTerminal(int(os.Stderr.Fd()))}
-}
-
-func (p *progress) update(n int64) {
-	if !p.on || (time.Since(p.last) < 100*time.Millisecond && n != p.total) {
+func (l *transferLine) update(n int64) {
+	if !l.on {
 		return
 	}
-	p.last = time.Now()
-	line := fmt.Sprintf("%s  %s", p.name, humanSize(n))
-	if p.total > 0 {
-		line += fmt.Sprintf(" / %s  %d%%", humanSize(p.total), n*100/p.total)
+	now := time.Now()
+	l.n, l.at = n, now
+	l.meter.Sample(n, now)
+	if now.Sub(l.last) < 100*time.Millisecond && n != l.total {
+		return
+	}
+	l.last = now
+	line := fmt.Sprintf("%s  %s", l.name, progress.Size(n))
+	if l.total > 0 {
+		line += fmt.Sprintf(" / %s  %d%%", progress.Size(l.total), n*100/l.total)
+	}
+	if sp := l.meter.Speed(n, l.total); sp != "" {
+		line += "  " + sp
 	}
 	fmt.Fprintf(os.Stderr, "\r\033[K%s", line)
 }
 
-func (p *progress) done() {
-	if p.on && !p.last.IsZero() {
+// done ends the line, with the size, time and average speed when ok, up to
+// the last bytes rather than the check after them.
+func (l *transferLine) done(ok bool) {
+	switch {
+	case !l.on || l.last.IsZero():
+	case ok:
+		fmt.Fprintf(os.Stderr, "\r\033[K%s  %s\n", l.name, l.meter.Summary(l.n, l.at))
+	default:
 		fmt.Fprintln(os.Stderr)
 	}
 }

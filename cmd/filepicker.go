@@ -10,6 +10,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
+	"github.com/lexpaval/mesh-central-client-go/internal/progress"
 )
 
 // pickRemote browses the device's folders from start ("" for the root) with
@@ -60,11 +61,11 @@ func pickRemote(s *meshcentral.FileSession, prompt, start string, wantFile, want
 			}
 			switch {
 			case e.Type == meshcentral.FileDrive:
-				add(fmt.Sprintf("%-*s  %s free", width, e.Name, humanSize(e.Free)), choice{p, true})
+				add(fmt.Sprintf("%-*s  %s free", width, e.Name, progress.Size(e.Free)), choice{p, true})
 			case e.IsDir():
 				add(e.Name+"/", choice{p, true})
 			case wantFile:
-				add(fmt.Sprintf("%-*s  %s", width, e.Name, humanSize(e.Size)), choice{p, false})
+				add(fmt.Sprintf("%-*s  %s", width, e.Name, progress.Size(e.Size)), choice{p, false})
 			}
 		}
 		if len(options) == 0 {
