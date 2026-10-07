@@ -1212,6 +1212,24 @@ func showAddRoute() {
 	target := f.entry("Target host", "", "the device itself", nil)
 	localPort := f.entry("Local port", "", "auto", portValidator(true))
 	bind := f.entry("Bind address", "", "127.0.0.1", nil)
+	// Open on start runs the route's Open action once it listens, for the
+	// ports that have one. The choice is remembered.
+	openNow := qt.NewQCheckBox3("Open on start")
+	openNow.SetChecked(pref("openOnStart") != "")
+	openNow.OnToggled(func(on bool) {
+		v := ""
+		if on {
+			v = "1"
+		}
+		setPref("openOnStart", v)
+	})
+	f.addFooter(openNow.QWidget)
+	canOpen := func(s string) {
+		rp, _ := strconv.Atoi(s)
+		openNow.SetEnabled(openCmd(&meshcentral.Route{RemotePort: rp}) != nil)
+	}
+	remotePort.OnTextChanged(canOpen)
+	canOpen(remotePort.Text())
 	f.show(0, func() {
 		rp, _ := strconv.Atoi(remotePort.Text())
 		lp, _ := strconv.Atoi(localPort.Text())
@@ -1219,18 +1237,23 @@ func showAddRoute() {
 		if t == "127.0.0.1" { // same as the device itself, matches the CLI
 			t = ""
 		}
-		err := startRoute(name, &meshcentral.Route{
+		r := &meshcentral.Route{
 			NodeID:      d.Id,
 			BindAddress: strings.TrimSpace(bind.Text()),
 			LocalPort:   lp,
 			Target:      t,
 			RemotePort:  rp,
-		})
-		if err != nil {
+		}
+		if err := startRoute(name, r); err != nil {
 			showError(err)
 			return
 		}
 		saveRoutes()
+		if open := openCmd(r); open != nil && openNow.IsChecked() {
+			if err := open(); err != nil {
+				showError(err)
+			}
+		}
 	})
 }
 

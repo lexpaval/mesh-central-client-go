@@ -224,6 +224,7 @@ type form struct {
 	d      *qt.QDialog
 	fl     *qt.QFormLayout
 	ok     *qt.QPushButton
+	foot   *qt.QHBoxLayout // the buttons' row
 	errLbl *qt.QLabel
 	checks []func() (edited bool, err error)
 }
@@ -245,9 +246,14 @@ func newForm(title, okText string) *form {
 	f.ok.SetText(okText)
 	box.OnAccepted(f.d.Accept)
 	box.OnRejected(f.d.Reject)
-	v.AddWidget(box.QWidget)
+	f.foot = qt.NewQHBoxLayout2()
+	f.foot.AddWidget(box.QWidget)
+	v.AddLayout(f.foot.QLayout)
 	return f
 }
+
+// addFooter puts w left of the dialog's buttons.
+func (f *form) addFooter(w *qt.QWidget) { f.foot.InsertWidget(0, w) }
 
 func (f *form) add(label string, w *qt.QWidget) {
 	if label == "" {
