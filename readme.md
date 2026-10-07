@@ -9,6 +9,7 @@ Simple client for [MeshCentral](https://github.com/Ylianst/MeshCentral) using th
 * SSH connections with proxy mode support
 * Direct shell access (cmd/powershell/bash)
 * Run a command on a node, fire and forget
+* File management: list, upload, download, copy, move, delete
 * Multi-profile management
 * Secure password storage (OS keyring)
 * Cross-platform (Windows, Linux, macOS)
@@ -114,6 +115,14 @@ mcc shell -i <nodeid> --powershell # Windows: PowerShell
 # Run a command, fire and forget (no output returned)
 mcc run -i <nodeid> "rename computer new-hostname"
 mcc run -i <nodeid> --as-user "notify-send hello" # as logged-in user instead of SYSTEM/root
+
+# Files (remote paths are absolute: /home/user, C:\Users)
+mcc files ls -i <nodeid> /var/log         # ls with no path lists the drives on Windows
+mcc files get -i <nodeid> /etc/hosts .    # several files go into a local folder
+mcc files get -i <nodeid> /etc/hosts - | grep localhost
+mcc files put -i <nodeid> a.txt b.txt /tmp
+echo hi | mcc files put -i <nodeid> - /tmp/hi.txt
+mcc files mkdir|rm [-r]|mv|cp -i <nodeid> ...  # cp copies files only, the agent can't copy folders
 
 # Profile management
 mcc profile add -n work -s mesh.company.com -u admin -p password

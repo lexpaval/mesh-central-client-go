@@ -29,17 +29,19 @@ func randomHex() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
-func dialShellTunnel(nodeID string) (*websocket.Conn, error) {
+// dialTunnel asks the agent on nodeID to join a relay tunnel for protocol p
+// (1 terminal, 5 files) and dials our side of it.
+func dialTunnel(nodeID string, p int) (*websocket.Conn, error) {
 	id, _ := randomHex()
 
 	if err := send([]byte(fmt.Sprintf(
-		`{"action":"msg","nodeid":"%s","type":"tunnel","usage":1,"value":"*/meshrelay.ashx?p=1&nodeid=%s&id=%s&rauth=%s","responseid":"meshctrl"}`,
-		nodeID, nodeID, id, settings.RCookie))); err != nil {
+		`{"action":"msg","nodeid":"%s","type":"tunnel","usage":1,"value":"*/meshrelay.ashx?p=%d&nodeid=%s&id=%s&rauth=%s","responseid":"meshctrl"}`,
+		nodeID, p, nodeID, id, settings.RCookie))); err != nil {
 		return nil, err
 	}
 
-	wsUrl, err := url.Parse(fmt.Sprintf("%s?browser=1&p=1&nodeid=%s&id=%s&auth=%s",
-		settings.ServerURL, nodeID, id, settings.ACookie))
+	wsUrl, err := url.Parse(fmt.Sprintf("%s?browser=1&p=%d&nodeid=%s&id=%s&auth=%s",
+		settings.ServerURL, p, nodeID, id, settings.ACookie))
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +195,7 @@ func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size fun
 
 	backoff := time.Second
 	for attempt := 1; ; attempt++ {
-		wsConn, err := dialShellTunnel(nodeID)
+		wsConn, err := dialTunnel(nodeID, 1)
 		if err != nil {
 			return fmt.Errorf("unable to connect to server: %w", err)
 		}
