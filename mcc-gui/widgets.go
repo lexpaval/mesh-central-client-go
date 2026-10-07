@@ -95,6 +95,49 @@ func paintRow(p *qt.QPainter, r *qt.QRect, pal *qt.QPalette, selected bool, d ro
 	}
 }
 
+// highlightOK caches whether the palette's highlighted text reads on the
+// style's selected-row background, nil until a selected row is painted and
+// after palette changes. Native styles may tint selected rows lightly rather
+// than fill them with the highlight color, as Windows 11 does in light mode.
+var highlightOK *bool
+
+// selectionColors reports whether a selected row in r is painted in the
+// highlighted text color, sampling once the background paintBg draws for it.
+func selectionColors(pal *qt.QPalette, r *qt.QRect, paintBg func(*qt.QPainter)) bool {
+	if highlightOK != nil || r.Width() <= 0 || r.Height() <= 0 {
+		return highlightOK == nil || *highlightOK
+	}
+	img := qt.NewQImage3(r.Width(), r.Height(), qt.QImage__Format_ARGB32_Premultiplied)
+	defer img.Delete()
+	img.FillWithColor(pal.ColorWithCr(qt.QPalette__Base))
+	p := qt.NewQPainter2(img.QPaintDevice)
+	p.Translate2(float64(-r.X()), float64(-r.Y()))
+	paintBg(p)
+	p.End()
+	p.Delete()
+	bg := img.PixelColor(r.Width()/2, r.Height()/2)
+	hl, text := contrast(bg, pal.ColorWithCr(qt.QPalette__HighlightedText)), contrast(bg, pal.ColorWithCr(qt.QPalette__Text))
+	ok := hl >= min(text, 3) // readable, or at least not worse than the text color
+	highlightOK = &ok
+	return ok
+}
+
+// contrast is the WCAG contrast ratio of two colors, from 1 to 21.
+func contrast(a, b *qt.QColor) float64 {
+	la, lb := luminance(a), luminance(b)
+	return (max(la, lb) + 0.05) / (min(la, lb) + 0.05)
+}
+
+func luminance(c *qt.QColor) float64 {
+	lin := func(v float32) float64 {
+		if v <= 0.04045 {
+			return float64(v) / 12.92
+		}
+		return math.Pow((float64(v)+0.055)/1.055, 2.4)
+	}
+	return 0.2126*lin(c.RedF()) + 0.7152*lin(c.GreenF()) + 0.0722*lin(c.BlueF())
+}
+
 func drawText(p *qt.QPainter, x, y float64, s string) {
 	pt := qt.NewQPointF3(x, y)
 	p.DrawText(pt, s)

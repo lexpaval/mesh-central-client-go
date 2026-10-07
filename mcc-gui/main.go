@@ -134,6 +134,7 @@ func main() {
 		super(e)
 		if e.Type() == qt.QEvent__PaletteChange {
 			resetIcons()
+			highlightOK = nil
 			for _, set := range iconSetters {
 				set()
 			}
@@ -394,7 +395,9 @@ func buildTree() {
 	})
 	delegate.OnPaint(func(super func(*qt.QPainter, *qt.QStyleOptionViewItem, *qt.QModelIndex), p *qt.QPainter, opt *qt.QStyleOptionViewItem, idx *qt.QModelIndex) {
 		super(p, opt, idx) // the background and selection, rows have no text of their own
-		paintRow(p, opt.Rect(), opt.Palette(), opt.State()&qt.QStyle__State_Selected != 0, treeRowData(itemID(idx)))
+		selected := opt.State()&qt.QStyle__State_Selected != 0 &&
+			selectionColors(opt.Palette(), opt.Rect(), func(p *qt.QPainter) { super(p, opt, idx) })
+		paintRow(p, opt.Rect(), opt.Palette(), selected, treeRowData(itemID(idx)))
 	})
 	deviceTree.SetItemDelegate(delegate.QAbstractItemDelegate)
 
