@@ -53,10 +53,13 @@ const fileReplyTimeout = 90 * time.Second
 // The agent answers download in 16 KB blocks, one per ack. downloadWindow
 // acks are kept ahead of the data so the blocks stream instead of waiting a
 // round trip each; acks past the end are ignored. uploadWindow is the number
-// of uploadChunk frames in flight, as meshctrl does.
+// of uploadChunk frames in flight, the agent acks each once written. Both
+// keep 4 MiB in flight: the speed through the relay is about what's in
+// flight per round trip, 4 MiB covers 1 Gbit/s at 30 ms. The relay holds
+// back a side that sends faster than the other reads, rather than buffer.
 const (
-	downloadWindow = 8
-	uploadWindow   = 16
+	downloadWindow = 256
+	uploadWindow   = 64
 	uploadChunk    = 65535
 )
 
@@ -342,8 +345,8 @@ func (s *FileSession) Download(ctx context.Context, path string, w io.Writer, pr
 
 // Upload writes r to path on the device, replacing any file there, and
 // checks the result against the agent's hash of it. progress (may be nil)
-// gets the bytes sent so far. Canceling ctx stops it and has the agent
-// delete the partial file.
+// gets the bytes the agent wrote so far. Canceling ctx stops it and has the
+// agent delete the partial file.
 func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, progress func(int64)) error {
 	id := s.nextID()
 	if err := s.send(map[string]any{"action": "upload", "reqid": id, "path": path}); err != nil {
@@ -352,8 +355,8 @@ func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, prog
 
 	h := sha512.New384()
 	buf := make([]byte, 1+uploadChunk)
-	var n int64
-	inFlight := 1 // uploadstart counts as the first ack
+	var written int64
+	var inFlight []int // sizes of the frames not acked yet
 	eof, done := false, false
 	for {
 		m, err := s.await(func(m *fileMsg) bool {
@@ -375,10 +378,15 @@ func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, prog
 			s.send(map[string]any{"action": "uploadcancel", "reqid": id})
 			return err
 		}
-		inFlight--
 		frames := 1
 		if m.Action == "uploadstart" {
 			frames = uploadWindow
+		} else if len(inFlight) > 0 {
+			written += int64(inFlight[0])
+			inFlight = inFlight[1:]
+			if progress != nil {
+				progress(written)
+			}
 		}
 		for ; frames > 0 && !eof; frames-- {
 			k, err := io.ReadFull(r, buf[1:])
@@ -394,11 +402,7 @@ func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, prog
 					return err
 				}
 				h.Write(buf[1 : 1+k])
-				n += int64(k)
-				inFlight++
-				if progress != nil {
-					progress(n)
-				}
+				inFlight = append(inFlight, k)
 			}
 			if err == io.EOF || err == io.ErrUnexpectedEOF {
 				eof = true
@@ -407,7 +411,7 @@ func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, prog
 				return err
 			}
 		}
-		if eof && inFlight == 0 && !done {
+		if eof && len(inFlight) == 0 && !done {
 			if err := s.send(map[string]any{"action": "uploaddone", "reqid": id}); err != nil {
 				return err
 			}

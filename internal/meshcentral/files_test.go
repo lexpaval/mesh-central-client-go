@@ -77,7 +77,7 @@ func TestFilesUploadDownload(t *testing.T) {
 
 func TestFilesCancel(t *testing.T) {
 	s, root := filesSession(t)
-	big := make([]byte, 2_000_000)
+	big := make([]byte, 16<<20) // more than the windows, so canceling stops it midway
 	os.WriteFile(filepath.Join(root, "big"), big, 0o644)
 	os.WriteFile(filepath.Join(root, "small"), []byte("small file"), 0o644)
 
