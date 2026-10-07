@@ -7,9 +7,9 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"sort"
 	"time"
 
+	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
@@ -20,7 +20,8 @@ var filesCmd = &cobra.Command{
 	Use:   "files",
 	Short: "List, transfer and manage files on a node",
 	Long: `Works over the agent's file channel, like the Files tab of the web UI.
-Remote paths are absolute: /home/user on Linux and macOS, C:\Users on Windows.`,
+Remote paths are absolute: /home/user on Linux and macOS, C:\Users on Windows.
+Leave out -i to pick the device, and a remote path to browse for it.`,
 }
 
 var filesLsCmd = &cobra.Command{
@@ -38,12 +39,7 @@ var filesLsCmd = &cobra.Command{
 		if err != nil {
 			filesFail(err)
 		}
-		sort.Slice(entries, func(i, j int) bool {
-			if entries[i].IsDir() != entries[j].IsDir() {
-				return entries[i].IsDir()
-			}
-			return entries[i].Name < entries[j].Name
-		})
+		sortEntries(entries)
 		if asJSON {
 			enc := json.NewEncoder(os.Stdout)
 			enc.SetIndent("", "  ")
@@ -58,9 +54,8 @@ var filesLsCmd = &cobra.Command{
 }
 
 var filesGetCmd = &cobra.Command{
-	Use:   "get <remote>... [local|-]",
+	Use:   "get [remote]... [local|-]",
 	Short: "Download files (into the current folder, a local folder, a file, or - for stdout)",
-	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		remotes, local := args, "."
 		if len(args) > 1 {
@@ -77,6 +72,9 @@ var filesGetCmd = &cobra.Command{
 		}
 
 		s := openFiles(cmd, local == "-")
+		if len(remotes) == 0 {
+			remotes = []string{pickRemote(s, "Download", "", true, false)}
+		}
 		for _, remote := range remotes {
 			e, err := s.Stat(remote)
 			if err != nil {
@@ -121,11 +119,17 @@ func download(s *meshcentral.FileSession, remote, target string, size int64) err
 }
 
 var filesPutCmd = &cobra.Command{
-	Use:   "put <local|->... <remote>",
+	Use:   "put <local|->... [remote]",
 	Short: "Upload files (into a remote folder, or as a remote file; - reads stdin)",
-	Args:  cobra.MinimumNArgs(2),
+	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		locals, remote := args[:len(args)-1], args[len(args)-1]
+		if len(args) == 1 {
+			if args[0] == "-" {
+				filesFail(errors.New("give the remote file to write stdin to"))
+			}
+			locals, remote = args, ""
+		}
 		for _, l := range locals {
 			if l == "-" {
 				if len(locals) > 1 {
@@ -143,6 +147,9 @@ var filesPutCmd = &cobra.Command{
 		}
 
 		s := openFiles(cmd, false)
+		if remote == "" {
+			remote = pickRemote(s, "Upload into", "", false, true)
+		}
 		e, err := s.Stat(remote)
 		remoteDir := err == nil && e.IsDir()
 		if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -190,11 +197,18 @@ func upload(s *meshcentral.FileSession, local, target string) error {
 }
 
 var filesMkdirCmd = &cobra.Command{
-	Use:   "mkdir <path>...",
+	Use:   "mkdir [path]...",
 	Short: "Create remote folders",
-	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		s := openFiles(cmd, false)
+		if len(args) == 0 {
+			dir := pickRemote(s, "Create a folder in", "", false, true)
+			name, _ := pterm.DefaultInteractiveTextInput.Show("Folder name")
+			if name == "" {
+				filesFail(errors.New("no folder name given"))
+			}
+			args = []string{meshcentral.JoinPath(dir, name)}
+		}
 		for _, p := range args {
 			if err := s.Mkdir(p); err != nil {
 				filesFail(err)
@@ -205,12 +219,28 @@ var filesMkdirCmd = &cobra.Command{
 }
 
 var filesRmCmd = &cobra.Command{
-	Use:   "rm <path>...",
+	Use:   "rm [path]...",
 	Short: "Delete remote files, or folders with -r",
-	Args:  cobra.MinimumNArgs(1),
 	Run: func(cmd *cobra.Command, args []string) {
 		recursive, _ := cmd.Flags().GetBool("recursive")
 		s := openFiles(cmd, false)
+		if len(args) == 0 {
+			p := pickRemote(s, "Delete", "", true, true)
+			e, err := s.Stat(p)
+			if err != nil {
+				filesFail(err)
+			}
+			question := fmt.Sprintf("Delete %s?", p)
+			if e.IsDir() {
+				question = fmt.Sprintf("Delete %s and everything in it?", p)
+				recursive = true
+			}
+			if ok, _ := pterm.DefaultInteractiveConfirm.Show(question); !ok {
+				closeFiles(s)
+				return
+			}
+			args = []string{p}
+		}
 		for _, p := range args {
 			if err := s.Remove(p, recursive); err != nil {
 				filesFail(err)
@@ -221,25 +251,36 @@ var filesRmCmd = &cobra.Command{
 }
 
 var filesMvCmd = &cobra.Command{
-	Use:   "mv <source>... <target>",
+	Use:   "mv [source]... [target]",
 	Short: "Move or rename remote files and folders",
-	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		s := openFiles(cmd, false)
-		forEachTarget(s, args, s.Rename)
+		forEachTarget(s, pickSourceTarget(s, args, "Move", true), s.Rename)
 		closeFiles(s)
 	},
 }
 
 var filesCpCmd = &cobra.Command{
-	Use:   "cp <source>... <target>",
+	Use:   "cp [source]... [target]",
 	Short: "Copy remote files (the agent can't copy folders)",
-	Args:  cobra.MinimumNArgs(2),
 	Run: func(cmd *cobra.Command, args []string) {
 		s := openFiles(cmd, false)
-		forEachTarget(s, args, s.Copy)
+		forEachTarget(s, pickSourceTarget(s, args, "Copy", false), s.Copy)
 		closeFiles(s)
 	},
+}
+
+// pickSourceTarget browses for the source and target folder of mv and cp
+// when left out, the target starting from the source's folder.
+func pickSourceTarget(s *meshcentral.FileSession, args []string, verb string, dirs bool) []string {
+	if len(args) == 0 {
+		args = []string{pickRemote(s, verb, "", true, dirs)}
+	}
+	if len(args) == 1 {
+		from, _ := meshcentral.SplitPath(args[0])
+		args = append(args, pickRemote(s, verb+" "+args[0]+" into", from, false, true))
+	}
+	return args
 }
 
 // forEachTarget runs op from each source to the last arg, or into it when

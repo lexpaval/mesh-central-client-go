@@ -117,6 +117,7 @@ mcc run -i <nodeid> "rename computer new-hostname"
 mcc run -i <nodeid> --as-user "notify-send hello" # as logged-in user instead of SYSTEM/root
 
 # Files (remote paths are absolute: /home/user, C:\Users)
+# Leave out -i or a remote path to pick it interactively, e.g. `mcc files get`
 mcc files ls -i <nodeid> /var/log         # ls with no path lists the drives on Windows
 mcc files get -i <nodeid> /etc/hosts .    # several files go into a local folder
 mcc files get -i <nodeid> /etc/hosts - | grep localhost
