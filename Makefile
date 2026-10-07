@@ -49,7 +49,8 @@ gui-shots:
 
 gui-readme-shots: gui-shots
 	mkdir -p docs/screenshots
-	cp dist/shots/light.png dist/shots/dark.png dist/shots/light-shell.png dist/shots/dark-shell.png docs/screenshots/
+	cp dist/shots/light.png dist/shots/dark.png dist/shots/light-shell.png dist/shots/dark-shell.png \
+		dist/shots/light-files.png dist/shots/dark-files.png docs/screenshots/
 
 gui-linux:
 	$(call GUI_IMAGE,linux-appimage-qt6.11,,linux)

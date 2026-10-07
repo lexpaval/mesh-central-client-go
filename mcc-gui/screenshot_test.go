@@ -67,6 +67,7 @@ func TestScreenshot(t *testing.T) {
 				t.Error(err)
 			}
 		}
+		tabs.SetCurrentWidget(routesTab) // the routes, Recent comes first
 		settle()
 		save(t, win.QWidget, filepath.Join(dir, variant+".png"))
 

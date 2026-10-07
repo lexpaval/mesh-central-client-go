@@ -45,13 +45,20 @@ An integrated terminal receiving sample output through the dummy server's shell 
   <img alt="MeshCentral Client terminal showing a sample Linux shell session" src="docs/screenshots/light-shell.png" width="1200">
 </picture>
 
+The Files tab browsing a fictional home folder through the dummy server's files channel:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark-files.png">
+  <img alt="MeshCentral Client Files tab listing folders and files with their sizes and dates" src="docs/screenshots/light-files.png" width="1200">
+</picture>
+
 The GUI uses Qt 6 through miqt and needs cgo and a C++ compiler. For a native build, install the Qt 6 development packages (`qt6-qtbase-devel` on Fedora or `qt6-base-dev` on Debian/Ubuntu):
 
 ```bash
 make gui          # dist/mcc-gui, linked against the system Qt
 make gui-test     # GUI tests using Qt's offscreen platform
 make gui-shots    # Start a dummy server and capture both themes in dist/shots
-make gui-readme-shots # Regenerate the four README images in docs/screenshots
+make gui-readme-shots # Regenerate the README images in docs/screenshots
 ```
 
 Screenshot generation runs offscreen on Linux using the GUI test binary and `tools/guibench`'s local dummy server. It uses temporary preferences and a mock keyring, exercises login, device queries, a shell relay and a files channel, and waits for the device list, terminal output and file listing before saving PNGs. No real MeshCentral account, credentials, or desktop session is needed. The images show fictional devices and documentation IP addresses; local server and route ports are assigned automatically.
