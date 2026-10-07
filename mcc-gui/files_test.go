@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+	qt "github.com/mappu/miqt/qt6"
 	"github.com/mappu/miqt/qt6/mainthread"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
@@ -232,4 +233,66 @@ func TestTransferSpeed(t *testing.T) {
 			t.Errorf("summary %q", got)
 		}
 	})
+}
+
+func TestFilesFilter(t *testing.T) {
+	root := fakeFiles(t)
+	os.Mkdir(filepath.Join(root, "logs"), 0o755)
+	for _, n := range []string{"app.log", "SYS.LOG", "app.conf", "notes.txt"} {
+		os.WriteFile(filepath.Join(root, n), []byte(n), 0o644)
+	}
+	var ft *filesTab
+	ui(t, func() {
+		openFilesTab(meshcentral.Device{Id: "n", Name: "dev"})
+		ft = filesTabs[0]
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { ft.close() }) })
+	waitFor(t, "the listing", func() bool { return len(ft.entries) == 5 })
+	shown := func() []string {
+		var names []string
+		for i := range ft.list.TopLevelItemCount() {
+			if item := ft.list.TopLevelItem(i); !item.IsHidden() {
+				names = append(names, item.Text(0))
+			}
+		}
+		return names
+	}
+	mainthread.Wait(func() {
+		ft.list.SelectAll()
+		ft.filter.SetText("LOG")
+		if got := shown(); !slices.Equal(got, []string{"logs", "app.log", "SYS.LOG"}) || ft.status.Text() != "3 of 5 match" {
+			t.Errorf("filtered by log: %v, %q", got, ft.status.Text())
+		}
+		if n := len(ft.list.SelectedItems()); n != 3 || len(ft.selected()) != 3 {
+			t.Errorf("%d selected after filtering a selection of all, want only the 3 shown", n)
+		}
+		ft.filter.SetText("*.conf")
+		if got := shown(); !slices.Equal(got, []string{"app.conf"}) {
+			t.Errorf("filtered by *.conf: %v", got)
+		}
+		ft.filter.SetText("zzz")
+		if len(shown()) != 0 || ft.status.Text() != "Nothing here matches zzz" {
+			t.Errorf("no match: %v, %q", shown(), ft.status.Text())
+		}
+		ft.filter.Clear()
+		if len(shown()) != 5 || ft.status.Text() != "1 folders, 4 files" {
+			t.Errorf("cleared: %v, %q", shown(), ft.status.Text())
+		}
+
+		// Typing in the list starts filtering.
+		ft.list.SetFocus()
+		ev := qt.NewQKeyEvent3(qt.QEvent__KeyPress, int(qt.Key_N), qt.NoModifier, "n")
+		qt.QCoreApplication_SendEvent(ft.list.QObject, ev.QEvent)
+		if ft.filter.Text() != "n" || !slices.Equal(shown(), []string{"app.conf", "notes.txt"}) {
+			t.Errorf("typing n: filter %q, shown %v", ft.filter.Text(), shown())
+		}
+		ft.filter.SetText("log")
+		ft.navigate(ft.cur) // a reload keeps the filter
+	})
+	waitFor(t, "the reload", func() bool { return ft.status.Text() == "3 of 5 match" })
+	mainthread.Wait(func() {
+		e, _ := ft.entryNamed("logs")
+		ft.activate(e) // another folder clears it
+	})
+	waitFor(t, "logs", func() bool { return ft.cur == "/logs" && ft.filter.Text() == "" && ft.status.Text() == "Empty folder" })
 }

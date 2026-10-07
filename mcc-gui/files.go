@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -87,7 +88,8 @@ type filesTab struct {
 	w     *qt.QWidget
 	icons []func() // set again on a palette change
 
-	pathEdit                          *qt.QLineEdit
+	pathEdit, filter                  *qt.QLineEdit
+	counts                            string // what the folder holds, the status when not filtered
 	upBtn, mkdirBtn, upload, download *qt.QPushButton
 	renameBtn, deleteBtn              *qt.QPushButton
 	list                              *qt.QTreeWidget
@@ -204,8 +206,35 @@ func (ft *filesTab) build() {
 	})
 	ft.deleteBtn = button("", "trash-can", "Delete (Del)")
 	ft.deleteBtn.OnClicked(func() { ft.askDelete(ft.selected()) })
+	ft.filter = qt.NewQLineEdit2()
+	ft.filter.SetPlaceholderText("Filter")
+	ft.filter.SetToolTip("Show only the names containing this, or matching it with * and ? (Ctrl+F)")
+	ft.filter.SetClearButtonEnabled(true)
+	ft.filter.SetMinimumWidth(110)
+	ft.filter.SetMaximumWidth(220)
+	filterIcon := ft.filter.AddAction2(icon("magnifying-glass"), qt.QLineEdit__LeadingPosition)
+	ft.icons = append(ft.icons, func() { filterIcon.SetIcon(icon("magnifying-glass")) })
+	ft.filter.OnTextChanged(func(string) { ft.applyFilter() })
+	ft.filter.OnKeyPressEvent(func(super func(*qt.QKeyEvent), e *qt.QKeyEvent) {
+		switch e.Key() {
+		case int(qt.Key_Escape):
+			ft.filter.Clear()
+			ft.list.SetFocus()
+		case int(qt.Key_Down), int(qt.Key_Return), int(qt.Key_Enter):
+			ft.focusFirstShown()
+		default:
+			super(e)
+		}
+	})
+	find := qt.NewQShortcut3(qt.QKeySequence__Find, ft.w.QObject)
+	find.SetContext(qt.WidgetWithChildrenShortcut)
+	find.OnActivated(func() {
+		ft.filter.SetFocus()
+		ft.filter.SelectAll()
+	})
 	bar := hbox(false, ft.upBtn.QWidget)
-	bar.AddWidget2(ft.pathEdit.QWidget, 1)
+	bar.AddWidget2(ft.pathEdit.QWidget, 2)
+	bar.AddWidget2(ft.filter.QWidget, 1)
 	for _, b := range []*qt.QPushButton{reload, ft.mkdirBtn, ft.upload, ft.download, ft.renameBtn, ft.deleteBtn} {
 		bar.AddWidget(b.QWidget)
 	}
@@ -263,7 +292,19 @@ func (ft *filesTab) build() {
 			}
 		case int(qt.Key_F5):
 			ft.navigate(ft.cur)
+		case int(qt.Key_Escape):
+			if ft.filter.Text() != "" {
+				ft.filter.Clear()
+			} else {
+				super(e)
+			}
 		default:
+			// Typing a name filters the list, rather than jumping to it.
+			if t := e.Text(); t != "" && t[0] > ' ' && t[0] != 0x7f && e.Modifiers()&(qt.ControlModifier|qt.AltModifier|qt.MetaModifier) == 0 {
+				ft.filter.SetFocus()
+				ft.filter.Insert(t)
+				return
+			}
 			super(e)
 		}
 	})
@@ -365,9 +406,11 @@ func (ft *filesTab) navigate(path string) {
 		if path == "" && !ft.drives {
 			path = "/"
 		}
+		if path != ft.cur {
+			ft.filter.Clear()
+		}
 		ft.cur, ft.entries = path, entries
 		ft.pathEdit.SetText(path)
-		ft.fill()
 		dirs := 0
 		for _, e := range entries {
 			if e.IsDir() {
@@ -376,12 +419,13 @@ func (ft *filesTab) navigate(path string) {
 		}
 		switch {
 		case ft.drives:
-			ft.setStatus(fmt.Sprintf("%d drives", len(entries)), false)
+			ft.counts = fmt.Sprintf("%d drives", len(entries))
 		case len(entries) == 0:
-			ft.setStatus("Empty folder", false)
+			ft.counts = "Empty folder"
 		default:
-			ft.setStatus(fmt.Sprintf("%d folders, %d files", dirs, len(entries)-dirs), false)
+			ft.counts = fmt.Sprintf("%d folders, %d files", dirs, len(entries)-dirs)
 		}
+		ft.fill()
 	})
 }
 
@@ -454,7 +498,57 @@ func (ft *filesTab) fill() {
 		}
 	}
 	ft.selectAfter = ""
+	ft.applyFilter()
+}
+
+// applyFilter hides the entries the filter leaves out, and unselects them
+// so no action reaches files out of sight.
+func (ft *filesTab) applyFilter() {
+	q := strings.ToLower(strings.TrimSpace(ft.filter.Text()))
+	shown := 0
+	for i := range ft.list.TopLevelItemCount() {
+		item := ft.list.TopLevelItem(i)
+		hide := q != "" && !nameMatches(q, strings.ToLower(item.Text(0)))
+		item.SetHidden(hide)
+		if hide {
+			item.SetSelected(false)
+		} else {
+			shown++
+		}
+	}
+	switch {
+	case q == "":
+		ft.setStatus(ft.counts, false)
+	case shown == 0:
+		ft.setStatus("Nothing here matches "+ft.filter.Text(), false)
+	default:
+		ft.setStatus(fmt.Sprintf("%d of %d match", shown, len(ft.entries)), false)
+	}
 	ft.updateButtons()
+}
+
+// nameMatches tells if name contains q, or matches it as a pattern with
+// *, ? or [ ], both lower case.
+func nameMatches(q, name string) bool {
+	if strings.ContainsAny(q, "*?[") {
+		if ok, err := path.Match(q, name); err == nil {
+			return ok
+		}
+	}
+	return strings.Contains(name, q)
+}
+
+// focusFirstShown moves from the filter to the list, on its first entry.
+func (ft *filesTab) focusFirstShown() {
+	for i := range ft.list.TopLevelItemCount() {
+		if item := ft.list.TopLevelItem(i); !item.IsHidden() {
+			if cur := ft.list.CurrentItem(); cur == nil || cur.IsHidden() {
+				ft.list.SetCurrentItem(item)
+			}
+			break
+		}
+	}
+	ft.list.SetFocus()
 }
 
 func (ft *filesTab) entryOf(item *qt.QTreeWidgetItem) (meshcentral.FileEntry, bool) {
@@ -470,7 +564,7 @@ func (ft *filesTab) entryOf(item *qt.QTreeWidgetItem) (meshcentral.FileEntry, bo
 func (ft *filesTab) selected() []meshcentral.FileEntry {
 	var sel []meshcentral.FileEntry
 	for _, item := range ft.list.SelectedItems() {
-		if e, ok := ft.entryOf(item); ok {
+		if e, ok := ft.entryOf(item); ok && !item.IsHidden() {
 			sel = append(sel, e)
 		}
 	}
