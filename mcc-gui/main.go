@@ -326,7 +326,6 @@ func buildUI() *qt.QWidget {
 	scroll.SetWidget(routePane)
 	scroll.SetFrameShape(qt.QFrame__NoFrame)
 	tabs = qt.NewQTabWidget2()
-	tabs.SetDocumentMode(true)
 	tabs.SetTabsClosable(true)
 	tabs.SetUsesScrollButtons(true)
 	tabs.SetElideMode(qt.ElideRight)
