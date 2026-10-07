@@ -122,6 +122,10 @@ func TestFilesTab(t *testing.T) {
 	waitFor(t, "going up", func() bool {
 		return ft.cur == "/" && ft.list.CurrentItem() != nil && ft.list.CurrentItem().Text(0) == "docs"
 	})
+	mainthread.Wait(ft.close)
+	waitFor(t, "the close logged", func() bool {
+		return len(logLines) > 0 && strings.HasSuffix(logLines[len(logLines)-1], "dev: files closed")
+	})
 }
 
 // retype replaces the editor's text the way typing does, marking it modified.
@@ -197,7 +201,12 @@ func TestFilesEditor(t *testing.T) {
 		t.Fatalf("saved %q without the tab", b)
 	}
 	mainthread.Wait(func() {
+		retype(ed, "unsaved\n")
 		closeEditors()
+		settle()
+		if last := logLines[len(logLines)-1]; !strings.HasSuffix(last, "dev: closed /win.txt, discarding the changes") {
+			t.Errorf("closing logged %q", last)
+		}
 		if len(editors) != 0 || ft.browse.users != 0 {
 			t.Errorf("%d editors left, channel users %d", len(editors), ft.browse.users)
 		}

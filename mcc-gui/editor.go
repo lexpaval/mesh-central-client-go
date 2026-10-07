@@ -146,6 +146,11 @@ func newEditor(ft *filesTab, ch *fileChannel, path string, data []byte) *editor 
 		ed.closed = true
 		editors = slices.DeleteFunc(editors, func(x *editor) bool { return x == ed })
 		ed.ch.release()
+		if ed.text.Document().IsModified() {
+			logf("%s: closed %s, discarding the changes", ed.device, ed.path)
+		} else {
+			logf("%s: closed %s", ed.device, ed.path)
+		}
 	})
 	editors = append(editors, ed)
 	logf("%s: editing %s", ed.device, path)

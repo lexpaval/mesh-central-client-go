@@ -173,6 +173,7 @@ func (ft *filesTab) close() {
 	filesTabs = slices.DeleteFunc(filesTabs, func(x *filesTab) bool { return x == ft })
 	tabs.RemoveTab(tabs.IndexOf(ft.w))
 	ft.w.DeleteLater()
+	logf("%s: files closed", ft.name)
 }
 
 func (ft *filesTab) build() {
