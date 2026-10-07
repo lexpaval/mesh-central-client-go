@@ -82,12 +82,14 @@ var (
 	routeBox      *qt.QVBoxLayout
 	routeHint     *qt.QLabel
 	routeRows     []*routeRow
+	routesTab     *qt.QWidget
 	deviceBtns    []*qt.QPushButton
 	reloadTimer   *time.Timer // pending debounced device list reload
 	// A reload is running, and another was asked for meanwhile. A large
 	// server takes seconds to send the list, overlapping loads pile up.
 	reloading, reloadAgain bool
-	// Right panel tabs: Routes first (not closable), then one per shell.
+	// Right panel tabs: Recent and Routes first (not closable), then one per
+	// shell.
 	tabs   *qt.QTabWidget
 	shells []*shellTab
 	// Icon setters of the main window's widgets, rerun when the palette
@@ -128,7 +130,7 @@ func main() {
 		if treeDirty {
 			rebuildTree()
 		}
-		refreshRouteRows()
+		refreshRows()
 	})
 	win.OnChangeEvent(func(super func(*qt.QEvent), e *qt.QEvent) {
 		super(e)
@@ -139,12 +141,13 @@ func main() {
 				set()
 			}
 			rebuildRoutes()
+			rebuildRecent()
 		}
 	})
 
 	// Active-connection counts change without any UI event.
 	timer := qt.NewQTimer2(win.QObject)
-	timer.OnTimeout(refreshRouteRows)
+	timer.OnTimeout(refreshRows)
 	timer.Start(1000)
 
 	win.Show()
@@ -195,7 +198,7 @@ func buildUI() *qt.QWidget {
 	clear(treeChildren)
 	treeDirty = false
 	clear(collapsed)
-	routeRows, shells = nil, nil
+	routeRows, recentRows, shells = nil, nil, nil
 	root := qt.NewQWidget2()
 
 	statusLabel = newElidedLabel("Disconnected")
@@ -239,6 +242,7 @@ func buildUI() *qt.QWidget {
 		confirm("Remove profile", "Remove profile "+name+" and its stored password?", func() {
 			config.RemoveProfile(name)
 			setPref(routesKey(name), "")
+			setPref(recentKey(name), "")
 			refreshProfiles()
 		})
 	})
@@ -325,19 +329,39 @@ func buildUI() *qt.QWidget {
 	scroll.SetWidgetResizable(true)
 	scroll.SetWidget(routePane)
 	scroll.SetFrameShape(qt.QFrame__NoFrame)
+	routesTab = scroll.QWidget
+
+	// The Recent tab, the same kind of rows.
+	recentHint = qt.NewQLabel2()
+	recentHint.SetForegroundRole(qt.QPalette__PlaceholderText)
+	recentHint.SetAlignment(qt.AlignCenter)
+	recentHint.SetWordWrap(true)
+	recentPane := qt.NewQWidget2()
+	recentBox = qt.NewQVBoxLayout(recentPane)
+	recentBox.AddWidget(recentHint.QWidget)
+	recentBox.AddStretch()
+	recentScroll := qt.NewQScrollArea2()
+	recentScroll.SetWidgetResizable(true)
+	recentScroll.SetWidget(recentPane)
+	recentScroll.SetFrameShape(qt.QFrame__NoFrame)
+
 	tabs = qt.NewQTabWidget2()
 	tabs.SetTabsClosable(true)
 	tabs.SetUsesScrollButtons(true)
 	tabs.SetElideMode(qt.ElideRight)
+	tabs.AddTab2(recentScroll.QWidget, icon("clock-rotate-left"), "Recent")
 	tabs.AddTab2(scroll.QWidget, icon("network-wired"), "Routes")
 	themed(func() {
-		tabs.SetTabIcon(0, icon("network-wired"))
+		tabs.SetTabIcon(0, icon("clock-rotate-left"))
+		tabs.SetTabIcon(1, icon("network-wired"))
 		for _, st := range shells {
 			tabs.SetTabIcon(tabs.IndexOf(st.t.w), icon("terminal"))
 		}
 	})
-	tabs.TabBar().SetTabButton(0, qt.QTabBar__RightSide, nil)
-	tabs.TabBar().SetTabButton(0, qt.QTabBar__LeftSide, nil)
+	for i := range 2 {
+		tabs.TabBar().SetTabButton(i, qt.QTabBar__RightSide, nil)
+		tabs.TabBar().SetTabButton(i, qt.QTabBar__LeftSide, nil)
+	}
 	tabs.OnTabCloseRequested(func(i int) {
 		if st := shellAt(i); st != nil {
 			closeShell(st)
@@ -371,6 +395,8 @@ func buildUI() *qt.QWidget {
 	rl.AddLayout(top.QLayout)
 	rl.AddWidget2(vsplit.QWidget, 1)
 	setConnected(false)
+	recent = nil
+	rebuildRecent()
 	return root
 }
 
@@ -529,6 +555,7 @@ func connect(insecure bool) {
 			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
 			logf("Connected to %s as %s (profile %s), loading devices", p.Server, p.Username, name)
 			restoreRoutes()
+			loadRecent()
 		})
 		if err != nil {
 			return
@@ -577,6 +604,8 @@ func disconnect() {
 	pendingEvents.Unlock()
 	setDevices(nil)
 	setConnected(false)
+	recent = nil
+	rebuildRecent()
 	statusLabel.SetText("Disconnected")
 	logf("Disconnected")
 }
@@ -718,12 +747,13 @@ func rebuildRoutes() {
 	routeHint.SetVisible(len(routes) == 0)
 }
 
-// refreshRouteRows redraws the routes, for their connection counts and
-// device state.
-func refreshRouteRows() {
+// refreshRows redraws the routes and recent actions, for connection
+// counts, device state and ages.
+func refreshRows() {
 	for _, rr := range routeRows {
 		bindRouteRow(rr)
 	}
+	refreshRecentRows()
 }
 
 func bindRouteRow(rr *routeRow) {
@@ -733,21 +763,7 @@ func bindRouteRow(rr *routeRow) {
 	if target == "" {
 		target = "device"
 	}
-	svc, ic := fmt.Sprintf("Port %d", r.RemotePort), "network-wired"
-	switch r.RemotePort {
-	case 22:
-		svc, ic = "SSH", "terminal"
-	case 3389:
-		svc, ic = "RDP", "desktop"
-	case 80, 8080:
-		svc, ic = "HTTP", "globe"
-	case 443, 8443:
-		svc, ic = "HTTPS", "globe"
-	case 9090:
-		svc, ic = "Cockpit", "globe"
-	case 5900:
-		svc, ic = "VNC", "display"
-	}
+	svc, ic := service(r.RemotePort)
 	d := rowData{
 		title: ar.device + " · " + svc,
 		sub:   fmt.Sprintf("%s » %s:%d · %d active", localAddr(r), target, r.RemotePort, r.Active()),
@@ -762,6 +778,25 @@ func bindRouteRow(rr *routeRow) {
 	}
 	rr.text.set(d)
 	rr.open.SetVisible(openCmd(r) != nil)
+}
+
+// service names a remote port and picks its icon.
+func service(port int) (name, icon string) {
+	switch port {
+	case 22:
+		return "SSH", "terminal"
+	case 3389:
+		return "RDP", "desktop"
+	case 80, 8080:
+		return "HTTP", "globe"
+	case 443, 8443:
+		return "HTTPS", "globe"
+	case 9090:
+		return "Cockpit", "globe"
+	case 5900:
+		return "VNC", "display"
+	}
+	return fmt.Sprintf("Port %d", port), "network-wired"
 }
 
 // Node events are queued by the control socket reader and applied together,
@@ -854,7 +889,7 @@ func flushNodeEvents() {
 	} else {
 		deviceTree.Viewport().Update()
 	}
-	refreshRouteRows()
+	refreshRows()
 }
 
 // setDevices replaces the device list and rebuilds the tree.
@@ -1170,6 +1205,7 @@ func openShell(d meshcentral.Device, protocol int) {
 	tabs.SetCurrentIndex(tabs.AddTab2(t.w, icon("terminal"), title))
 	t.w.SetFocus()
 	logf("%s: shell opened", name)
+	recordRecent(recentAction{Kind: "shell", NodeID: d.Id, Device: name, Protocol: protocol})
 }
 
 func shellAt(i int) *shellTab {
@@ -1237,24 +1273,41 @@ func showAddRoute() {
 		if t == "127.0.0.1" { // same as the device itself, matches the CLI
 			t = ""
 		}
-		r := &meshcentral.Route{
+		useRoute(name, &meshcentral.Route{
 			NodeID:      d.Id,
 			BindAddress: strings.TrimSpace(bind.Text()),
 			LocalPort:   lp,
 			Target:      t,
 			RemotePort:  rp,
-		}
-		if err := startRoute(name, r); err != nil {
+		}, openNow.IsChecked())
+		tabs.SetCurrentWidget(routesTab)
+	})
+}
+
+// useRoute starts r, or reuses a running route to the same place, records
+// it in Recent and opens it if asked and it has an Open action.
+func useRoute(device string, r *meshcentral.Route, open bool) {
+	a := recentAction{Kind: "route", NodeID: r.NodeID, Device: device, BindAddress: r.BindAddress, LocalPort: r.LocalPort, Target: r.Target, RemotePort: r.RemotePort}
+	i := slices.IndexFunc(routes, func(ar *activeRoute) bool {
+		x := ar.route
+		return x.NodeID == r.NodeID && x.BindAddress == r.BindAddress && x.Target == r.Target && x.RemotePort == r.RemotePort &&
+			(r.LocalPort == 0 || x.LocalPort == r.LocalPort)
+	})
+	if i >= 0 {
+		r = routes[i].route
+	} else {
+		if err := startRoute(device, r); err != nil {
 			showError(err)
 			return
 		}
 		saveRoutes()
-		if open := openCmd(r); open != nil && openNow.IsChecked() {
-			if err := open(); err != nil {
-				showError(err)
-			}
+	}
+	recordRecent(a)
+	if o := openCmd(r); open && o != nil {
+		if err := o(); err != nil {
+			showError(err)
 		}
-	})
+	}
 }
 
 func startRoute(device string, r *meshcentral.Route) error {
@@ -1312,10 +1365,13 @@ func restoreRoutes() {
 }
 
 func showRunCommand() {
-	d, ok := selectedDevice()
-	if !ok {
-		return
+	if d, ok := selectedDevice(); ok {
+		showRunCommandFor(d, "", false)
 	}
+}
+
+// showRunCommandFor asks to run a command on d, filled in with command.
+func showRunCommandFor(d meshcentral.Device, command string, runAsUser bool) {
 	f := newForm("Run on "+deviceName(d), "Run")
 	cmd := f.entry("Command", "", "e.g. systemctl restart myservice", func(s string) error {
 		if strings.TrimSpace(s) == "" {
@@ -1324,7 +1380,9 @@ func showRunCommand() {
 		return nil
 	})
 	cmd.SetMinimumWidth(320)
+	cmd.SetText(command)
 	asUser := qt.NewQCheckBox3("Run as the logged-in user instead of SYSTEM/root")
+	asUser.SetChecked(runAsUser)
 	f.add("", asUser.QWidget)
 	f.show(0, func() {
 		runAsUser := 0
@@ -1336,6 +1394,7 @@ func showRunCommand() {
 			return
 		}
 		logf("%s: sent %q (no output is returned)", deviceName(d), cmd.Text())
+		recordRecent(recentAction{Kind: "command", NodeID: d.Id, Device: deviceName(d), Command: cmd.Text(), AsUser: asUser.IsChecked()})
 	})
 }
 
@@ -1487,6 +1546,8 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 				// The GUI's own memory of the profile follows a rename.
 				setPref(routesKey(p.Name), pref(routesKey(edit.Name)))
 				setPref(routesKey(edit.Name), "")
+				setPref(recentKey(p.Name), pref(recentKey(edit.Name)))
+				setPref(recentKey(edit.Name), "")
 				if pref("lastProfile") == edit.Name {
 					setPref("lastProfile", p.Name)
 				}

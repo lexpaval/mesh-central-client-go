@@ -507,22 +507,22 @@ func TestShellTabs(t *testing.T) {
 		// No server, the sessions fail and say so in their tabs.
 		openShell(devices[0], 1)
 		openShell(devices[1], 6)
-		if tabs.Count() != 3 || tabs.TabText(2) != "b · PowerShell" || tabs.CurrentIndex() != 2 {
-			t.Errorf("%d tabs, last %q, current %d", tabs.Count(), tabs.TabText(2), tabs.CurrentIndex())
+		if tabs.Count() != 4 || tabs.TabText(3) != "b · PowerShell" || tabs.CurrentIndex() != 3 {
+			t.Errorf("%d tabs, last %q, current %d", tabs.Count(), tabs.TabText(3), tabs.CurrentIndex())
 			return
 		}
-		if shellAt(0) != nil || shellAt(1) != shells[0] {
+		if shellAt(0) != nil || shellAt(1) != nil || shellAt(2) != shells[0] {
 			t.Error("shellAt maps tabs wrong")
 			return
 		}
 		closeShell(shells[0])
-		if tabs.Count() != 2 || len(shells) != 1 || tabs.TabText(1) != "b · PowerShell" {
+		if tabs.Count() != 3 || len(shells) != 1 || tabs.TabText(2) != "b · PowerShell" {
 			t.Errorf("after close: %d tabs, %d shells", tabs.Count(), len(shells))
 			return
 		}
 		disconnect()
-		if tabs.Count() != 1 || len(shells) != 0 {
-			t.Errorf("disconnect left %d tabs", tabs.Count()-1)
+		if tabs.Count() != 2 || len(shells) != 0 {
+			t.Errorf("disconnect left %d tabs", tabs.Count()-2)
 		}
 	})
 }
@@ -599,5 +599,84 @@ func TestHiddenTreeDefersChanges(t *testing.T) {
 			t.Error("show did not reconcile the latest device list")
 		}
 		win.Hide()
+	})
+}
+
+func TestRecentRanking(t *testing.T) {
+	ui(t, func() {
+		session.profile = "p"
+		start := time.Unix(1_700_000_000, 0)
+		clock := start
+		timeNow = func() time.Time { return clock }
+		defer func() { timeNow = time.Now }()
+
+		// Three uses two weeks old count less than two today.
+		shell := recentAction{Kind: "shell", NodeID: "a", Device: "a", Protocol: 1}
+		cmd := recentAction{Kind: "command", NodeID: "b", Device: "b", Command: "uptime"}
+		for range 3 {
+			recordRecent(shell)
+		}
+		clock = start.Add(14 * 24 * time.Hour)
+		recordRecent(cmd)
+		recordRecent(cmd)
+		if len(recent) != 2 || recent[0].Kind != "command" || recent[0].Uses != 2 || recent[1].Uses != 3 || len(recentRows) != 2 {
+			t.Errorf("ranked %+v, %d rows", recent, len(recentRows))
+			return
+		}
+
+		// Pinned comes first, and past recentKeep only unpinned ones drop,
+		// never the one just used.
+		recent[1].Pinned = true
+		sortRecent()
+		var last recentAction
+		for i := range recentKeep + 5 {
+			last = recentAction{Kind: "shell", NodeID: fmt.Sprint("n", i), Protocol: 1}
+			recordRecent(last)
+		}
+		if len(recent) != recentKeep+1 || recent[0].id() != shell.id() ||
+			!slices.ContainsFunc(recent, func(a *recentAction) bool { return a.id() == last.id() }) {
+			t.Errorf("kept %d, first %+v", len(recent), recent[0])
+			return
+		}
+
+		// Saved per profile.
+		loadRecent()
+		if len(recent) != recentKeep+1 || !recent[0].Pinned {
+			t.Errorf("reloaded %d", len(recent))
+		}
+		session.profile = "q"
+		loadRecent()
+		if len(recent) != 0 {
+			t.Errorf("profile q has %d", len(recent))
+		}
+	})
+}
+
+func TestRecentRouteReplay(t *testing.T) {
+	ui(t, func() {
+		session.profile = "p"
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "a", MeshID: "m", Group: "G", Name: "a", Pwr: 1}})
+		closeAll := func() {
+			for _, ar := range routes {
+				ar.route.Close()
+			}
+			routes = nil
+		}
+		defer closeAll()
+
+		// A running route is reused, the automatic local port stays automatic.
+		useRoute("a", &meshcentral.Route{NodeID: "a", RemotePort: 5900}, false)
+		replayRecent(recent[0])
+		if len(routes) != 1 || len(recent) != 1 || recent[0].Uses != 2 || recent[0].LocalPort != 0 {
+			t.Errorf("%d routes, recent %+v", len(routes), recent)
+			return
+		}
+		// Once stopped, replaying starts it again.
+		closeAll()
+		replayRecent(recent[0])
+		if len(routes) != 1 || routes[0].route.RemotePort != 5900 || recent[0].Uses != 3 {
+			t.Errorf("%d routes after replay, recent %+v", len(routes), recent)
+		}
 	})
 }
