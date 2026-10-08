@@ -19,6 +19,7 @@ cat > "$app/$id.desktop" <<-EOF
 	Comment=Devices, port routes and shells on a MeshCentral server
 	Exec=mcc-gui
 	Icon=$id
+	StartupWMClass=$id
 	Categories=Network;RemoteAccess;
 EOF
 ln -s "$id.png" "$app/.DirIcon"
