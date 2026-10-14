@@ -728,7 +728,6 @@ type routeRow struct {
 	ar   *activeRoute
 	w    *qt.QWidget
 	text *rowText
-	open *qt.QPushButton
 }
 
 // rebuildRoutes recreates the route rows after routes changed.
@@ -740,18 +739,16 @@ func rebuildRoutes() {
 	routeRows = nil
 	for i, ar := range routes {
 		rr := &routeRow{ar: ar, w: qt.NewQWidget2(), text: newRowText(false)}
-		rr.open = qt.NewQPushButton4(icon("arrow-up-right-from-square"), "Open")
+		open := qt.NewQPushButton4(icon("arrow-up-right-from-square"), "Open")
 		cp := qt.NewQPushButton4(icon("copy"), "Copy")
 		stop := qt.NewQPushButton4(icon("circle-stop"), "Stop")
-		row := hbox(false, rr.text.w, rr.open.QWidget, cp.QWidget, stop.QWidget)
+		row := hbox(false, rr.text.w, open.QWidget, cp.QWidget, stop.QWidget)
 		row.SetStretch(0, 1)
 		rr.w.SetLayout(row.QLayout)
 		r := ar.route
-		rr.open.OnClicked(func() {
-			if open := openCmd(r); open != nil {
-				if err := open(); err != nil {
-					showError(err)
-				}
+		open.OnClicked(func() {
+			if err := openCmd(r)(); err != nil {
+				showError(err)
 			}
 		})
 		cp.OnClicked(func() {
@@ -803,7 +800,6 @@ func bindRouteRow(rr *routeRow) {
 		d.sub += " · recorded"
 	}
 	rr.text.set(d)
-	rr.open.SetVisible(openCmd(r) != nil)
 }
 
 // service names a remote port and picks its icon.
@@ -1274,8 +1270,8 @@ func showAddRoute() {
 	target := f.entry("Target host", "", "the device itself", nil)
 	localPort := f.entry("Local port", "", "auto", portValidator(true))
 	bind := f.entry("Bind address", "", "127.0.0.1", nil)
-	// Open on start runs the route's Open action once it listens, for the
-	// ports that have one. The choice is remembered.
+	// Open on start runs the route's Open action once it listens. The choice
+	// is remembered.
 	openNow := qt.NewQCheckBox3("Open on start")
 	openNow.SetChecked(pref("openOnStart") != "")
 	openNow.OnToggled(func(on bool) {
@@ -1286,12 +1282,6 @@ func showAddRoute() {
 		setPref("openOnStart", v)
 	})
 	f.addFooter(openNow.QWidget)
-	canOpen := func(s string) {
-		rp, _ := strconv.Atoi(s)
-		openNow.SetEnabled(openCmd(&meshcentral.Route{RemotePort: rp}) != nil)
-	}
-	remotePort.OnTextChanged(canOpen)
-	canOpen(remotePort.Text())
 	f.show(0, func() {
 		rp, _ := strconv.Atoi(remotePort.Text())
 		lp, _ := strconv.Atoi(localPort.Text())
@@ -1311,7 +1301,7 @@ func showAddRoute() {
 }
 
 // useRoute starts r, or reuses a running route to the same place, records
-// it in Recent and opens it if asked and it has an Open action.
+// it in Recent and opens it if asked.
 func useRoute(device string, r *meshcentral.Route, open bool) {
 	a := recentAction{Kind: "route", NodeID: r.NodeID, Device: device, BindAddress: r.BindAddress, LocalPort: r.LocalPort, Target: r.Target, RemotePort: r.RemotePort}
 	i := slices.IndexFunc(routes, func(ar *activeRoute) bool {
@@ -1329,8 +1319,8 @@ func useRoute(device string, r *meshcentral.Route, open bool) {
 		saveRoutes()
 	}
 	recordRecent(a)
-	if o := openCmd(r); open && o != nil {
-		if err := o(); err != nil {
+	if open {
+		if err := openCmd(r)(); err != nil {
 			showError(err)
 		}
 	}
@@ -1733,28 +1723,28 @@ func copyText(r *meshcentral.Route) string {
 	switch r.RemotePort {
 	case 22:
 		return strings.Join(sshArgs(r), " ")
-	case 80, 8080:
-		return (&url.URL{Scheme: "http", Host: addr}).String()
-	case 443, 8443, 9090: // Cockpit serves TLS on 9090
-		return (&url.URL{Scheme: "https", Host: addr}).String()
+	case 80, 8080, 443, 8443, 9090:
+		return webURL(r).String()
 	}
 	return addr
 }
 
-// openCmd returns the action for the route's Open button, or nil if the port
-// has no known client on this platform.
+// webURL is the browser link for a route, https for the ports that serve TLS.
+func webURL(r *meshcentral.Route) *url.URL {
+	scheme := "http"
+	switch r.RemotePort {
+	case 443, 8443, 9090: // Cockpit serves TLS on 9090
+		scheme = "https"
+	}
+	return &url.URL{Scheme: scheme, Host: localAddr(r)}
+}
+
+// openCmd returns the action for the route's Open button: a terminal for
+// SSH, the RDP client for RDP and the browser for any other port.
 func openCmd(r *meshcentral.Route) func() error {
 	switch r.RemotePort {
 	case 22:
 		return func() error { return openTerminal(sshArgs(r)) }
-	case 80, 8080, 443, 8443, 9090:
-		return func() error {
-			u, err := url.Parse(copyText(r))
-			if err != nil {
-				return err
-			}
-			return openURL(u)
-		}
 	case 3389:
 		if runtime.GOOS == "windows" { // mstsc doesn't register rdp://
 			return func() error { return startCommand(exec.Command("mstsc", "/v:"+localAddr(r))) }
@@ -1768,7 +1758,7 @@ func openCmd(r *meshcentral.Route) func() error {
 			return openURL(rdpURL(r, runtime.GOOS))
 		}
 	}
-	return nil
+	return func() error { return openURL(webURL(r)) }
 }
 
 // openURL opens a link in its default application. macOS gets it through

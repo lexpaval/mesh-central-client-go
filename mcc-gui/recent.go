@@ -188,17 +188,14 @@ func refreshRecentRows() {
 }
 
 func recentDoText(a *recentAction) string {
-	switch {
-	case a.Kind == "command":
+	if a.Kind == "command" {
 		return "Run…"
-	case a.Kind == "route" && openCmd(&meshcentral.Route{RemotePort: a.RemotePort}) == nil:
-		return "Start"
 	}
 	return "Open"
 }
 
 func recentDoIcon(a *recentAction) string {
-	if a.Kind == "command" || recentDoText(a) == "Start" {
+	if a.Kind == "command" {
 		return "play"
 	}
 	return "arrow-up-right-from-square"

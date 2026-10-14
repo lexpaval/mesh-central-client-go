@@ -420,6 +420,19 @@ func TestRDPURL(t *testing.T) {
 	}
 }
 
+func TestWebURL(t *testing.T) {
+	for port, want := range map[int]string{
+		80:   "http://127.0.0.1:40123",
+		5000: "http://127.0.0.1:40123",
+		8443: "https://127.0.0.1:40123",
+	} {
+		r := &meshcentral.Route{LocalPort: 40123, RemotePort: port}
+		if got := webURL(r).String(); got != want {
+			t.Errorf("port %d: %s, want %s", port, got, want)
+		}
+	}
+}
+
 func TestRouteClientAddresses(t *testing.T) {
 	for _, tc := range []struct {
 		bind, host, addr string
