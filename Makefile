@@ -19,7 +19,8 @@ APP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 # system Qt 6 (Fedora: qt6-qtbase-devel, Debian/Ubuntu: qt6-base-dev), the
 # first build compiles the bindings for a few minutes. gui-linux, gui-windows
 # and gui-macos cross-build in podman images from mcc-gui/package, built on
-# first use: Linux amd64/arm64 AppImages with Qt 6.11 (glibc 2.39+),
+# first use: Linux amd64/arm64 AppImages with Qt 6.11 (glibc 2.39+), packed
+# with the latest continuous appimagetool and runtime, downloaded per build,
 # Windows amd64/arm64 as static exes (Qt 6.11), macOS 14+ arm64/x86_64
 # as zipped .app bundles with Qt inside, ad-hoc signed. gui-all builds all of
 # them, gui-release packages Windows as .zip, keeping Linux .AppImage and

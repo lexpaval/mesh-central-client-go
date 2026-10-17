@@ -23,19 +23,6 @@ RUN python3 -m venv /opt/aqt && /opt/aqt/bin/pip install --no-cache-dir aqtinsta
     ln -s /opt/qt/${QT_VERSION}/gcc_arm64 /opt/qt/arm64 && \
     sed -i 's|^prefix=.*|prefix=/opt/qt/arm64|' /opt/qt/arm64/lib/pkgconfig/*.pc
 
-# Current Type 2 runtime (2026-09-28), with libfuse linked statically.
-# Continuous assets can change; verify them rather than silently changing releases.
-ARG APPIMAGETOOL_SHA256=a6d71e2b6cd66f8e8d16c37ad164658985e0cf5fcaa950c90a482890cb9d13e0
-ARG RUNTIME_AMD64_SHA256=156f4bdbde9c52d01814600013e0a273f0118dc2de98975f3c8c63427ec79074
-ARG RUNTIME_ARM64_SHA256=b4ff0030242d0c3bb12ce40541828303cf167493f4793456f0436edd6255c39d
-RUN mkdir -p /opt/appimage && cd /opt/appimage && \
-    wget -q -O appimagetool https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage && \
-    wget -q https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-x86_64 && \
-    wget -q https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-aarch64 && \
-    printf '%s  %s\n' "$APPIMAGETOOL_SHA256" appimagetool "$RUNTIME_AMD64_SHA256" runtime-x86_64 "$RUNTIME_ARM64_SHA256" runtime-aarch64 | sha256sum -c - && \
-    chmod +x appimagetool && ./appimagetool --appimage-extract > /dev/null && \
-    rm appimagetool
-
 ARG GO_VERSION=1.26.2
 RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
     tar x -C /usr/local -f "go${GO_VERSION}.linux-amd64.tar.gz" && \
