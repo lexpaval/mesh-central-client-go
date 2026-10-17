@@ -113,10 +113,14 @@ func initializeSetup() {
 
 		// Create the config file
 		server, _ := pterm.DefaultInteractiveTextInput.Show("Enter the MeshCentral server hostname or IP (ex: mesh.example.com)")
-		username, _ := pterm.DefaultInteractiveTextInput.Show("Enter the MeshCentral username")
-		password, _ := pterm.DefaultInteractiveTextInput.WithMask("*").Show("Enter the MeshCentral password")
+		sso, _ := pterm.DefaultInteractiveConfirm.Show("Log in with single sign-on (OIDC) through the web UI?")
+		username, password := "", ""
+		if !sso {
+			username, _ = pterm.DefaultInteractiveTextInput.Show("Enter the MeshCentral username")
+			password, _ = pterm.DefaultInteractiveTextInput.WithMask("*").Show("Enter the MeshCentral password")
+		}
 
-		err := config.CreateConfig(server, username, password)
+		err := config.CreateConfig(server, username, password, sso)
 		if err != nil {
 			pterm.Error.Println("Error creating config file:", err)
 			os.Exit(1)

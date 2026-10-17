@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -39,6 +40,10 @@ const maxControlReconnectAttempts = 8
 
 const controlAuthTimeout = 15 * time.Second
 
+// loginTokenExpiry bounds how long an SSO login lasts before the browser
+// sign-in is needed again, in minutes as createLoginToken takes it.
+const loginTokenExpiry = 30 * 24 * 60
+
 // StartSocket logs in with the default profile, see StartSocketAs.
 func StartSocket() error { return StartSocketAs(config.GetDefaultProfile()) }
 
@@ -47,10 +52,25 @@ func StartSocket() error { return StartSocketAs(config.GetDefaultProfile()) }
 func StartSocketAs(p config.Profile) error {
 	settings.profileName = p.Name
 
+	// SSO profiles log in with a stored login token. Without one (first login,
+	// expired, revoked) the user signs in in the browser and hands over the
+	// session's auth cookie through a Router link, which is traded for a new
+	// token once connected. The cookie is reset so one left by an earlier
+	// session (GUI reconnecting with another profile) can't log in.
+	settings.AuthCookie = ""
+	if p.SSO {
+		p.Username, p.Password, _ = p.GetLoginToken()
+		if p.Username == "" {
+			if err := promptSSO(p.Server); err != nil {
+				return err
+			}
+		}
+	}
+
 	// A remembered 2FA cookie stands in for the token until the server
 	// rejects it (expired, revoked), then it's dropped and the user prompted.
 	usingCookie := false
-	if settings.Token == "" && !settings.EmailToken && !settings.SMSToken {
+	if !p.SSO && settings.Token == "" && !settings.EmailToken && !settings.SMSToken {
 		if c, err := p.GetTwoFactorCookie(); err == nil && c != "" {
 			ApplyAuth("cookie="+c, false, false)
 			usingCookie = true
@@ -65,7 +85,7 @@ func StartSocketAs(p config.Profile) error {
 	urlStr := strings.Replace(settings.ServerURL, "meshrelay.ashx", "control.ashx", 1)
 
 	dial := func() (*websocket.Conn, error) {
-		options, err := url.Parse(settings.ServerURL)
+		options, err := url.Parse(urlStr)
 		if err != nil {
 			return nil, err
 		}
@@ -82,9 +102,9 @@ func StartSocketAs(p config.Profile) error {
 		headers := http.Header{}
 		if settings.ServerID == "" {
 			if settings.AuthCookie != "" {
-				options.RawQuery = fmt.Sprintf("auth=%s", settings.AuthCookie)
+				options.RawQuery = "auth=" + url.QueryEscape(settings.AuthCookie)
 				if xtoken != "" {
-					options.RawQuery += fmt.Sprintf("&token=%s", xtoken)
+					options.RawQuery += "&token=" + url.QueryEscape(xtoken)
 				}
 			} else {
 				auth := base64.StdEncoding.EncodeToString([]byte(settings.Username)) + "," +
@@ -102,7 +122,7 @@ func StartSocketAs(p config.Profile) error {
 			HandshakeTimeout: 10 * time.Second,
 			TLSClientConfig:  &tls.Config{InsecureSkipVerify: settings.Insecure},
 		}
-		conn, _, err := dialer.Dial(urlStr, headers)
+		conn, _, err := dialer.Dial(options.String(), headers)
 		return conn, err
 	}
 
@@ -133,14 +153,23 @@ func StartSocketAs(p config.Profile) error {
 		select {
 		case <-settings.WebChannel:
 			// A token typed this session is single use, trade it for a 2FA
-			// cookie so reconnects and later logins don't prompt again.
+			// cookie so reconnects and later logins don't prompt again. An SSO
+			// session's auth cookie is likewise traded for a login token.
 			// Waits for the reply so short CLI commands don't close the socket
 			// before it's stored. Servers with remembering disabled never reply.
-			if settings.EmailToken || settings.SMSToken || (settings.Token != "" && !strings.HasPrefix(settings.Token, "cookie=")) {
-				settings.cookieChan = make(chan struct{})
-				if send([]byte(`{"action":"twoFactorCookie"}`)) == nil {
+			var req []byte
+			if p.SSO && settings.AuthCookie != "" {
+				host, _ := os.Hostname()
+				req, _ = json.Marshal(map[string]any{"action": "createLoginToken", "name": "MeshCentral Client on " + host,
+					"expire": loginTokenExpiry, "responseid": "mcc"})
+			} else if settings.EmailToken || settings.SMSToken || (settings.Token != "" && !strings.HasPrefix(settings.Token, "cookie=")) {
+				req = []byte(`{"action":"twoFactorCookie"}`)
+			}
+			if req != nil {
+				settings.replyChan = make(chan struct{})
+				if send(req) == nil {
 					select {
-					case <-settings.cookieChan:
+					case <-settings.replyChan:
 					case <-time.After(5 * time.Second):
 					}
 				}
@@ -149,6 +178,19 @@ func StartSocketAs(p config.Profile) error {
 		case err := <-settings.AuthErrChannel:
 			StopSocket()
 			ae, ok := err.(authError)
+			if ok && p.SSO && ae.code == "badcredentials" {
+				if settings.AuthCookie != "" {
+					settings.AuthCookie = ""
+					return errors.New("the Router link was not accepted: it expires after an hour and works only from the IP address of the browser it was copied from")
+				}
+				// The login token expired or was revoked, sign in again.
+				p.DeleteLoginToken()
+				settings.Username, settings.Password = "", ""
+				if err := promptSSO(p.Server); err != nil {
+					return err
+				}
+				continue
+			}
 			if !ok || ae.code != "tokenrequired" {
 				return err
 			}
@@ -297,10 +339,22 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 					fmt.Fprintln(os.Stderr, "Unable to store 2FA cookie:", err)
 				}
 			}
-			if settings.cookieChan != nil {
-				close(settings.cookieChan)
-				settings.cookieChan = nil
+			replied()
+		case "createLoginToken":
+			user, _ := command["tokenUser"].(string)
+			pass, _ := command["tokenPass"].(string)
+			p := config.Profile{Name: settings.profileName}
+			if user == "" || pass == "" {
+				// Disabled on the server or for this user. The renewed auth
+				// cookie keeps this session going, the next one signs in again.
+				fmt.Fprintf(os.Stderr, "Unable to create a login token (%v), the next login will need the browser again.\n", command["result"])
+			} else if err := p.SetLoginToken(user, pass); err != nil {
+				fmt.Fprintln(os.Stderr, "Unable to store login token:", err)
+			} else {
+				// Reconnects use the token, the auth cookie expires.
+				settings.Username, settings.Password, settings.AuthCookie = user, pass, ""
 			}
+			replied()
 		case "meshes":
 			handleMeshesCommand(command)
 		case "nodes":
@@ -350,7 +404,21 @@ func handleCloseCommand(command map[string]interface{}) {
 	}
 }
 
+// replied releases StartSocketAs waiting for a twoFactorCookie or
+// createLoginToken reply.
+func replied() {
+	if settings.replyChan != nil {
+		close(settings.replyChan)
+		settings.replyChan = nil
+	}
+}
+
 func handleAuthCookieCommand(command map[string]interface{}) {
+	// A session logged in with an auth cookie reconnects with the renewed one,
+	// the original expires after an hour.
+	if settings.AuthCookie != "" {
+		settings.AuthCookie = command["cookie"].(string)
+	}
 	if settings.ACookie == "" {
 		settings.ACookie = command["cookie"].(string)
 		settings.RCookie = command["rcookie"].(string)
@@ -388,7 +456,7 @@ func handleServerAuthCommand(command map[string]interface{}) {
 
 	auth := ""
 	if settings.AuthCookie != "" {
-		auth = fmt.Sprintf(`{"action":"userAuth","auth":"%s"`, settings.AuthCookie)
+		auth = fmt.Sprintf(`{"action":"userAuth","auth":%q`, settings.AuthCookie)
 		if xtoken != "" {
 			auth += fmt.Sprintf(`,"token":"%s"`, xtoken)
 		}
@@ -477,4 +545,73 @@ func promptForToken(email2fa, sms2fa, emailSent bool) (string, bool) {
 		}
 		return token, true
 	}
+}
+
+// ParseRouterLink returns the server (host and domain path, as in a profile)
+// and auth cookie of the link behind the web UI's "Launch MeshCentral Router"
+// button: mcrouter://host[:port]/[domain/]control.ashx?c=<cookie>&t=<tls hash>.
+func ParseRouterLink(link string) (server, cookie string, err error) {
+	u, err := url.Parse(strings.TrimSpace(link))
+	if err != nil || u.Scheme != "mcrouter" || u.Host == "" || u.Query().Get("c") == "" {
+		return "", "", errors.New("not a MeshCentral Router link (mcrouter://...)")
+	}
+	return u.Host + strings.TrimSuffix(strings.TrimSuffix(u.Path, "control.ashx"), "/"), u.Query().Get("c"), nil
+}
+
+// SameServer reports whether two profile server strings name the same host,
+// ignoring case, the default port and a trailing slash.
+func SameServer(a, b string) bool {
+	norm := func(s string) string {
+		s = strings.TrimSuffix(strings.ToLower(s), "/")
+		host, path, _ := strings.Cut(s, "/")
+		return strings.TrimSuffix(host, ":443") + "/" + path
+	}
+	return norm(a) == norm(b)
+}
+
+func promptSSO(server string) error {
+	link, ok := SSOPrompt(server)
+	if !ok {
+		return errors.New("single sign-on cancelled")
+	}
+	linkServer, cookie, err := ParseRouterLink(link)
+	if err != nil {
+		return err
+	}
+	if !SameServer(linkServer, server) {
+		return fmt.Errorf("the Router link is for %s, the profile's server is %s", linkServer, server)
+	}
+	settings.AuthCookie = cookie
+	return nil
+}
+
+// promptForSSOLink opens the server's web UI in the browser and reads the
+// Router link the user copies from it.
+func promptForSSOLink(server string) (string, bool) {
+	web := "https://" + server + "/"
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", web)
+	case "windows":
+		cmd = exec.Command("rundll32", "url.dll,FileProtocolHandler", web)
+	default:
+		cmd = exec.Command("xdg-open", web)
+	}
+	cmd.Start()
+
+	pterm.Info.Printfln("Single sign-on: sign in at %s (opened in your browser), click Router "+
+		"on the devices page and copy the link of the Launch MeshCentral Router button.", web)
+	console, err := openConsole()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Single sign-on needs a console (%v).\n", err)
+		return "", false
+	}
+	defer console.Close()
+	// Not echoed, the link holds a login cookie that would stay in scrollback.
+	fmt.Fprint(console, "Router link (hidden): ")
+	b, _ := term.ReadPassword(int(console.Fd()))
+	fmt.Fprintln(console)
+	line := strings.TrimSpace(string(b))
+	return line, line != ""
 }

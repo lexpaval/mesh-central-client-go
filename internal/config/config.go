@@ -19,13 +19,14 @@ const keyringService = "meshcentral-client"
 // DefaultConfigPath constant containing default path to config file
 var DefaultConfigPath = configPath + "/" + configName + "." + configType
 
-func CreateConfig(server string, username string, password string) error {
+func CreateConfig(server string, username string, password string, sso bool) error {
 	// Create profile without password in config
 	viper.Set("profiles", []map[string]interface{}{
 		{
 			"name":     "default",
 			"server":   server,
 			"username": username,
+			"sso":      sso,
 		},
 	})
 
@@ -44,7 +45,10 @@ func CreateConfig(server string, username string, password string) error {
 		return err
 	}
 
-	// Store password in keyring
+	// Store password in keyring, SSO profiles get a login token on first login
+	if password == "" {
+		return nil
+	}
 	return keyring.Set(keyringService, "default", password)
 }
 

@@ -17,7 +17,8 @@ cat > "$app/$id.desktop" <<-EOF
 	Type=Application
 	Name=MeshCentral Client
 	Comment=Devices, port routes and shells on a MeshCentral server
-	Exec=mcc-gui
+	Exec=mcc-gui %u
+	MimeType=x-scheme-handler/mcrouter;
 	Icon=$id
 	StartupWMClass=$id
 	Categories=Network;RemoteAccess;
@@ -105,8 +106,16 @@ cat > "$app/AppRun" <<-'EOF'
 	exec "$app/usr/bin/mcc-gui" "$@"
 EOF
 chmod +x "$app/AppRun"
+# The latest continuous appimagetool and Type 2 runtime (libfuse linked
+# statically), fetched per build so their fixes arrive without rebuilding the
+# image, which would also drop its Go build cache.
+tools=$(mktemp -d)
 output=$(mktemp "$bin.AppImage.XXXXXX")
-trap 'rm -f "$output"' EXIT
-ARCH=$runtime /opt/appimage/squashfs-root/AppRun --no-appstream \
-	--runtime-file "/opt/appimage/runtime-$runtime" "$app" "$output"
+trap 'rm -rf "$tools" "$output"' EXIT
+wget -q -O "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
+wget -q -O "$tools/runtime" "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-$runtime"
+chmod +x "$tools/appimagetool"
+(cd "$tools" && ./appimagetool --appimage-extract > /dev/null)
+ARCH=$runtime "$tools/squashfs-root/AppRun" --no-appstream \
+	--runtime-file "$tools/runtime" "$app" "$output"
 mv "$output" "$bin.AppImage"

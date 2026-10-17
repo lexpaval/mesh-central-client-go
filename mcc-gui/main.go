@@ -70,6 +70,7 @@ var (
 	profileSel    *qt.QComboBox
 	profileBar    *qt.QWidget // hidden while connected, the status shows the server
 	connectBtn    *qt.QPushButton
+	insecureChk   *qt.QCheckBox
 	searchEntry   *qt.QLineEdit
 	offlineChk    *qt.QCheckBox
 	deviceTree    *qt.QTreeWidget
@@ -100,13 +101,34 @@ var (
 var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
 
 func main() {
-	qt.NewQApplication(os.Args)
+	link := routerLinkArg()
+	if link != "" && forwardLink(link) {
+		return
+	}
+	args := os.Args
+	if link != "" {
+		// A link launch comes from the browser, keep its text away from
+		// Qt's own options (-platformpluginpath loads libraries).
+		args = args[:1]
+	}
+	app := qt.NewQApplication(args)
+	// macOS opens links in the running app with an event, not arguments.
+	app.OnEvent(func(super func(*qt.QEvent) bool, e *qt.QEvent) bool {
+		if e.Type() == qt.QEvent__FileOpen {
+			if u := qt.UnsafeNewQFileOpenEvent(e.UnsafePointer()).Url(); u.Scheme() == "mcrouter" {
+				handleRouterLink(u.ToString())
+				return true
+			}
+		}
+		return super(e)
+	})
 	qt.QGuiApplication_SetDesktopFileName(appID)
 	qt.QGuiApplication_SetWindowIcon(appIcon())
 	viper.SetConfigFile(config.DefaultConfigPath)
 	loadPrefs(filepath.Join(filepath.Dir(config.DefaultConfigPath), "mcc-gui.json"))
 
 	meshcentral.TokenPrompt = promptToken
+	meshcentral.SSOPrompt = promptSSO
 	meshcentral.OnNodeEvent = onNodeEvent
 	meshcentral.OnConnectionLost = func(err error) {
 		mainthread.Start(func() {
@@ -161,13 +183,19 @@ func main() {
 	timer.Start(1000)
 
 	win.Show()
+	listenLinks()
 	if _, err := os.Stat(config.DefaultConfigPath); errors.Is(err, os.ErrNotExist) {
-		showProfileDialog(true, nil)
+		if link == "" { // the link offers its own profile
+			showProfileDialog(true, nil)
+		}
 	} else if err := config.LoadConfig(); err != nil {
 		showError(fmt.Errorf("unable to read %s: %w", config.DefaultConfigPath, err))
 	} else {
 		refreshProfiles()
 		benchStart()
+	}
+	if link != "" {
+		handleRouterLink(link)
 	}
 	qt.QApplication_Exec()
 }
@@ -216,7 +244,7 @@ func buildUI() *qt.QWidget {
 	profileSel = qt.NewQComboBox2()
 	profileSel.SetSizeAdjustPolicy(qt.QComboBox__AdjustToContents)
 	profileSel.SetMinimumContentsLength(12)
-	insecureChk := qt.NewQCheckBox3("Skip TLS verify")
+	insecureChk = qt.NewQCheckBox3("Skip TLS verify")
 	connectBtn = qt.NewQPushButton3("Connect")
 	connectBtn.SetDefault(true)
 	themed(func() {
@@ -562,6 +590,7 @@ func connect(insecure bool) {
 		err := meshcentral.StartSocketAs(p)
 		var id int
 		mainthread.Wait(func() {
+			pendingLink = "" // unused when the profile still had a login token
 			// Disabled only while connecting, once connected the profile bar is hidden.
 			connectBtn.SetEnabled(true)
 			profileSel.SetEnabled(true)
@@ -575,8 +604,12 @@ func connect(insecure bool) {
 			id = session.id
 			session.profile, session.insecure, session.loading = name, insecure, true
 			setPref("lastProfile", name)
-			statusLabel.SetText(fmt.Sprintf("Connected to %s as %s (profile %s)", p.Server, p.Username, name))
-			logf("Connected to %s as %s (profile %s), loading devices", p.Server, p.Username, name)
+			as := "as " + p.Username
+			if p.SSO {
+				as = "with single sign-on"
+			}
+			statusLabel.SetText(fmt.Sprintf("Connected to %s %s (profile %s)", p.Server, as, name))
+			logf("Connected to %s %s (profile %s), loading devices", p.Server, as, name)
 			restoreRoutes()
 			loadRecent()
 		})
@@ -1536,9 +1569,15 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 		return nil
 	}
 	server := f.entry("Server", "", "mesh.example.com", required)
+	sso := qt.NewQCheckBox3("Log in with single sign-on (OIDC) in the browser")
+	f.add("", sso.QWidget)
 	username := f.entry("Username", "", "", nil)
 	password := f.entry("Password", "", "", nil)
 	password.SetEchoMode(qt.QLineEdit__Password)
+	sso.OnToggled(func(on bool) {
+		f.fl.SetRowVisible2(username.QWidget, !on)
+		f.fl.SetRowVisible2(password.QWidget, !on)
+	})
 	makeDefault := qt.NewQCheckBox3("Use as default profile")
 	if !firstRun {
 		f.add("", makeDefault.QWidget)
@@ -1548,16 +1587,21 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 		server.SetText(edit.Server)
 		username.SetText(edit.Username)
 		password.SetPlaceholderText("unchanged")
+		sso.SetChecked(edit.SSO)
 		makeDefault.SetChecked(config.GetDefaultProfileName() == edit.Name)
 	}
 	f.show(460, func() {
 		var err error
+		if sso.IsChecked() { // logs in with a login token
+			username.SetText("")
+			password.SetText("")
+		}
 		if firstRun {
-			if err = config.CreateConfig(server.Text(), username.Text(), password.Text()); err == nil {
+			if err = config.CreateConfig(server.Text(), username.Text(), password.Text(), sso.IsChecked()); err == nil {
 				err = config.LoadConfig()
 			}
 		} else if edit != nil {
-			p := config.Profile{Name: name.Text(), Server: server.Text(), Username: username.Text()}
+			p := config.Profile{Name: name.Text(), Server: server.Text(), Username: username.Text(), SSO: sso.IsChecked()}
 			if err = config.UpdateProfile(edit.Name, p, password.Text(), makeDefault.IsChecked()); err == nil && p.Name != edit.Name {
 				// The GUI's own memory of the profile follows a rename.
 				setPref(routesKey(p.Name), pref(routesKey(edit.Name)))
@@ -1569,7 +1613,7 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 				}
 			}
 		} else {
-			_, err = config.AddProfile(name.Text(), makeDefault.IsChecked(), server.Text(), username.Text(), password.Text())
+			_, err = config.AddProfile(name.Text(), makeDefault.IsChecked(), server.Text(), username.Text(), password.Text(), sso.IsChecked())
 		}
 		if err != nil {
 			showError(err)

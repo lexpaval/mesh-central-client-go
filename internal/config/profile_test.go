@@ -12,11 +12,12 @@ func TestUpdateProfile(t *testing.T) {
 	keyring.MockInit()
 	viper.Reset()
 	viper.SetConfigFile(filepath.Join(t.TempDir(), "config.json"))
-	if err := CreateConfig("mesh.example.com", "alice", "pw1"); err != nil {
+	if err := CreateConfig("mesh.example.com", "alice", "pw1", false); err != nil {
 		t.Fatal(err)
 	}
 	def := Profile{Name: "default"}
 	def.SetTwoFactorCookie("cookie1")
+	def.SetLoginToken("~t:u", "tp")
 
 	// Rename with an empty password keeps the password and cookie, and the
 	// default follows.
@@ -29,6 +30,12 @@ func TestUpdateProfile(t *testing.T) {
 	}
 	if c, _ := work.GetTwoFactorCookie(); c != "cookie1" {
 		t.Errorf("2FA cookie after rename = %q, want cookie1", c)
+	}
+	if u, pw, _ := work.GetLoginToken(); u != "~t:u" || pw != "tp" {
+		t.Errorf("login token after rename = %q/%q, want ~t:u/tp", u, pw)
+	}
+	if _, _, err := def.GetLoginToken(); err == nil {
+		t.Error("old name still has a login token in the keyring")
 	}
 	if _, err := def.GetPassword(); err == nil {
 		t.Error("old name still has a password in the keyring")
@@ -43,6 +50,9 @@ func TestUpdateProfile(t *testing.T) {
 	}
 	if _, err := work.GetTwoFactorCookie(); err == nil {
 		t.Error("2FA cookie kept after the server changed")
+	}
+	if _, _, err := work.GetLoginToken(); err == nil {
+		t.Error("login token kept after the server changed")
 	}
 	if pw, _ := work.GetPassword(); pw != "pw2" {
 		t.Errorf("password = %q, want pw2", pw)

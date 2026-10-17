@@ -1,6 +1,7 @@
 package cmd
 
 import (
+	"errors"
 	"strconv"
 	"strings"
 
@@ -63,8 +64,12 @@ var profileAddCmd = &cobra.Command{
 		username, _ := cmd.Flags().GetString("username")
 		password, _ := cmd.Flags().GetString("password")
 		isDefault, _ := cmd.Flags().GetBool("default")
+		sso, _ := cmd.Flags().GetBool("sso")
+		if !sso && (username == "" || password == "") {
+			pExit("Failed to add profile:", errors.New("--username and --password are required without --sso"))
+		}
 
-		p, err := config.AddProfile(name, isDefault, server, username, password)
+		p, err := config.AddProfile(name, isDefault, server, username, password, sso)
 		pExit("Failed to add profile:", err)
 
 		printProfileTable([]config.Profile{*p})
@@ -84,10 +89,9 @@ func init() {
 	profileAddCmd.Flags().StringP("server", "s", "", "Mesh Central Server URL")
 	profileAddCmd.Flags().StringP("username", "u", "", "Mesh Central Username")
 	profileAddCmd.Flags().StringP("password", "p", "", "Mesh Central Password")
+	profileAddCmd.Flags().Bool("sso", false, "Log in through the web UI's single sign-on (OIDC) instead of a password")
 	profileAddCmd.MarkFlagRequired("name")
 	profileAddCmd.MarkFlagRequired("server")
-	profileAddCmd.MarkFlagRequired("username")
-	profileAddCmd.MarkFlagRequired("password")
 
 }
 
@@ -96,7 +100,7 @@ func printProfileTable(profiles []config.Profile) {
 	profileData := [][]string{}
 
 	// add header
-	profileData = append(profileData, []string{"Name", "Server", "Username", "IsDefault"})
+	profileData = append(profileData, []string{"Name", "Server", "Username", "SSO", "IsDefault"})
 
 	// add profile data
 	for _, p := range profiles {
@@ -112,6 +116,7 @@ func printProfileTable(profiles []config.Profile) {
 				p.Name,
 				p.Server,
 				p.Username,
+				strconv.FormatBool(p.SSO),
 				strconv.FormatBool((strings.Compare(p.Name, d) == 0)),
 			},
 		)

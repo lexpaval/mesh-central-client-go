@@ -50,8 +50,8 @@ type Settings struct {
 	groups                map[string]string // mesh ID -> device group name
 	groupChan             chan struct{}
 	Insecure              bool
-	profileName           string // profile StartSocket logged in with, for the 2FA cookie
-	cookieChan            chan struct{}
+	profileName           string // profile StartSocket logged in with, for the 2FA cookie and login token
+	replyChan             chan struct{}
 	debug                 bool
 	closing               bool
 	initialAuthDone       bool
@@ -74,6 +74,11 @@ func ApplyAuth(token string, emailToken bool, smsToken bool) {
 // returns the token, or "email"/"sms" to have one sent; ok=false aborts the
 // login. Defaults to prompting on the controlling terminal.
 var TokenPrompt func(email2fa, sms2fa, emailSent bool) (token string, ok bool) = promptForToken
+
+// SSOPrompt is asked for a Router link (see ParseRouterLink) when an SSO
+// profile has no valid login token; ok=false aborts the login. Defaults to
+// opening the browser and reading the link from the controlling terminal.
+var SSOPrompt func(server string) (link string, ok bool) = promptForSSOLink
 
 // OnConnectionLost is called when an authenticated session can't be kept
 // alive (reconnects exhausted, auth revoked). Defaults to exiting the process.

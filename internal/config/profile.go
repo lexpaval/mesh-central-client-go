@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strings"
 
 	"github.com/spf13/viper"
 	"github.com/zalando/go-keyring"
@@ -13,6 +14,7 @@ type Profile struct {
 	Server   string
 	Username string
 	Password string `json:"-"` // Don't serialize password
+	SSO      bool   // log in through the web UI's single sign-on, see GetLoginToken
 }
 
 // GetPassword retrieves password from system keyring
@@ -42,6 +44,25 @@ func (p *Profile) SetTwoFactorCookie(cookie string) error {
 
 func (p *Profile) DeleteTwoFactorCookie() error {
 	return keyring.Delete(keyringService, p.Name+"/2fa")
+}
+
+// SSO profiles log in with a MeshCentral login token minted from a browser
+// session, stored as "<token user> <token password>" (neither has spaces).
+func (p *Profile) GetLoginToken() (user, pass string, err error) {
+	t, err := keyring.Get(keyringService, p.Name+"/sso")
+	if err != nil {
+		return "", "", err
+	}
+	user, pass, _ = strings.Cut(t, " ")
+	return user, pass, nil
+}
+
+func (p *Profile) SetLoginToken(user, pass string) error {
+	return keyring.Set(keyringService, p.Name+"/sso", user+" "+pass)
+}
+
+func (p *Profile) DeleteLoginToken() error {
+	return keyring.Delete(keyringService, p.Name+"/sso")
 }
 
 func GetProfiles() []Profile {
@@ -103,7 +124,7 @@ func SetDefaultProfile(name string, commit bool) error {
 	return &ProfileNotFoundError{name}
 }
 
-func AddProfile(name string, isDefault bool, server string, username string, password string) (*Profile, error) {
+func AddProfile(name string, isDefault bool, server string, username string, password string, sso bool) (*Profile, error) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
 
@@ -111,10 +132,13 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 		Name:     name,
 		Server:   server,
 		Username: username,
+		SSO:      sso,
 	}
 
-	if err := newProfile.SetPassword(password); err != nil {
-		return nil, err
+	if password != "" {
+		if err := newProfile.SetPassword(password); err != nil {
+			return nil, err
+		}
 	}
 
 	profiles = append(profiles, newProfile)
@@ -133,9 +157,10 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 }
 
 // UpdateProfile replaces profile oldName with p. An empty password keeps the
-// stored one. On a rename the password and 2FA cookie move with the profile,
-// and the cookie is dropped when the server or username change, since it
-// belongs to that account. The default profile follows a rename.
+// stored one. On a rename the password, 2FA cookie and login token move with
+// the profile. The cookie and token are dropped when the server, username or
+// SSO setting change, since they belong to that account. The default profile
+// follows a rename.
 func UpdateProfile(oldName string, p Profile, password string, isDefault bool) error {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
@@ -154,20 +179,27 @@ func UpdateProfile(oldName string, p Profile, password string, isDefault bool) e
 			return err
 		}
 	}
-	if p.Server != old.Server || p.Username != old.Username {
+	if p.Server != old.Server || p.Username != old.Username || p.SSO != old.SSO {
 		old.DeleteTwoFactorCookie()
-	} else if c, err := old.GetTwoFactorCookie(); renamed && err == nil {
-		p.SetTwoFactorCookie(c)
+		old.DeleteLoginToken()
+	} else if renamed {
+		if c, err := old.GetTwoFactorCookie(); err == nil {
+			p.SetTwoFactorCookie(c)
+		}
+		if u, pw, err := old.GetLoginToken(); err == nil {
+			p.SetLoginToken(u, pw)
+		}
 	}
 	if renamed {
 		old.DeletePassword()
 		old.DeleteTwoFactorCookie()
+		old.DeleteLoginToken()
 	}
 
 	if isDefault || viper.GetString("default_profile") == oldName {
 		viper.Set("default_profile", p.Name)
 	}
-	profiles[i] = Profile{Name: p.Name, Server: p.Server, Username: p.Username}
+	profiles[i] = Profile{Name: p.Name, Server: p.Server, Username: p.Username, SSO: p.SSO}
 	viper.Set("profiles", profiles)
 	return viper.WriteConfig()
 }
@@ -178,9 +210,10 @@ func RemoveProfile(name string) {
 
 	for i, p := range profiles {
 		if p.Name == name {
-			// Delete password and 2FA cookie from keyring
+			// Delete password, 2FA cookie and login token from keyring
 			p.DeletePassword()
 			p.DeleteTwoFactorCookie()
+			p.DeleteLoginToken()
 			profiles = append(profiles[:i], profiles[i+1:]...)
 			break
 		}

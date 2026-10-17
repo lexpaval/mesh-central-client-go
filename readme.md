@@ -11,6 +11,7 @@ Simple client for [MeshCentral](https://github.com/Ylianst/MeshCentral) using th
 * Run a command on a node, fire and forget
 * File management: list, upload, download, copy, move, delete
 * Multi-profile management
+* Single sign-on (OIDC, or any other sign-in the web UI offers) through the browser
 * Secure password storage (OS keyring)
 * Cross-platform (Windows, Linux, macOS)
 * Optional desktop GUI (`mcc-gui`) with multiple simultaneous routes
@@ -29,7 +30,7 @@ go build -o mcc
 
 ### GUI
 
-`mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices. **Files** opens a tab browsing the device's files: upload (or drop files on the list), download, rename, delete and create folders, with transfers on a channel of their own so browsing never waits for them. Double-click a text file to edit it in its own window; saving writes it in place, so it keeps its owner and permissions, and asks first if the file changed on the device since it was opened. A route's **Open** starts the matching client: the browser for web ports, `ssh` in a terminal window for SSH, and for RDP `mstsc` on Windows or the app registered for `rdp://` links on macOS (Microsoft's Windows App) and Linux (Remmina, KRDC, GNOME Connections). **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH. Shell tabs and routes are marked when the server records the session. The GUI opens with the profile last connected to, leaving the CLI's default profile as it is, and routes still running at a disconnect or quit reopen on the next connect with that profile, on the same local ports.
+`mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices. **Files** opens a tab browsing the device's files: upload (or drop files on the list), download, rename, delete and create folders, with transfers on a channel of their own so browsing never waits for them. Double-click a text file to edit it in its own window; saving writes it in place, so it keeps its owner and permissions, and asks first if the file changed on the device since it was opened. A route's **Open** starts the matching client: the browser for web ports, `ssh` in a terminal window for SSH, and for RDP `mstsc` on Windows or the app registered for `rdp://` links on macOS (Microsoft's Windows App) and Linux (Remmina, KRDC, GNOME Connections). **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH. Shell tabs and routes are marked when the server records the session. Profiles can log in with [single sign-on](#single-sign-on-oidc) instead of a password. The GUI opens with the profile last connected to, leaving the CLI's default profile as it is, and routes still running at a disconnect or quit reopen on the next connect with that profile, on the same local ports.
 
 Devices and port routes, connected to the local dummy server with fictional data:
 
@@ -83,7 +84,7 @@ chmod +x mcc-gui-linux-amd64-<version>.AppImage
 
 The supported baseline is glibc 2.39+ (for example, Ubuntu 24.04 or Debian 13) with an X11 or Wayland desktop and the host's graphics drivers. Use the amd64 build on Steam Deck in Desktop Mode; device validation is still pending. Headless servers should use the CLI. Password storage uses the desktop's Secret Service keyring; external SSH, RDP, and browser clients remain system applications.
 
-The [current Type 2 runtime](https://github.com/AppImage/type2-runtime) embeds libfuse, so installing `libfuse2` is unnecessary. If FUSE mounting is unavailable, run `./mcc-gui-linux-amd64-<version>.AppImage --appimage-extract-and-run`. This extracts to a temporary directory and cleans it up on exit. Build tools and both architecture runtimes are checksum-pinned in `mcc-gui/package/linux.Dockerfile`; update the checksums when adopting newer upstream continuous releases.
+The [current Type 2 runtime](https://github.com/AppImage/type2-runtime) embeds libfuse, so installing `libfuse2` is unnecessary. If FUSE mounting is unavailable, run `./mcc-gui-linux-amd64-<version>.AppImage --appimage-extract-and-run`. This extracts to a temporary directory and cleans it up on exit. Each package run downloads the latest continuous appimagetool and runtime, so upstream fixes arrive without rebuilding the build image.
 
 Windows packages contain a static executable in a `.zip`. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
 
@@ -134,6 +135,7 @@ mcc files mkdir|rm [-r]|mv|cp -i <nodeid> ...  # cp copies files only, the agent
 
 # Profile management
 mcc profile add -n work -s mesh.company.com -u admin -p password
+mcc profile add -n sso -s mesh.company.com --sso  # Single sign-on, no password
 mcc profile list
 mcc profile default work
 mcc profile rm work
@@ -192,6 +194,7 @@ For a MeshCentral server specified by IPv6 address, use `[2001:db8::1]` or `[200
 - `--proxy` - SSH proxy mode for ProxyCommand (ssh)
 - `--powershell` - Use PowerShell instead of cmd.exe (shell)
 - `--as-user` - Run as the logged-in user instead of SYSTEM/root (run)
+- `--sso` - Log in with single sign-on instead of a username and password (profile add)
 
 ## 2FA Authentication
 
@@ -220,6 +223,28 @@ Enter 2FA token: 123456
 
 **Remembered login** - after a successful 2FA login, mcc (and mcc-gui) asks the server for its "remember this device" cookie and stores it in the OS keyring next to the profile's password. Later logins with that profile, and reconnects after a network drop, skip the token prompt until the cookie expires (the server's `twoFactorCookieDurationDays`, 30 days by default) or is rejected, then you're prompted again. The password is still required. `mcc profile rm` deletes the cookie with the profile.
 
+## Single sign-on (OIDC)
+
+For accounts that sign in to MeshCentral through OIDC (or SAML, Azure, Google and the other sign-in methods the web UI offers), create the profile with `--sso`, or tick **Log in with single sign-on** in the GUI's profile dialog. There is no password to store: MeshCentral only completes these sign-ins in a browser, so the client takes over the browser's session through the web UI's **Launch MeshCentral Router** link, then trades it for a MeshCentral login token. The token is valid for 30 days and stored in the OS keyring; until it expires or is revoked, logins and reconnects need no browser. The CLI and GUI share it through the profile.
+
+**Getting the link** - sign in to the web UI, click **Router** below the device list, then **Launch MeshCentral Router**. The link looks like `mcrouter://mesh.company.com/control.ashx?c=...`.
+
+> **Linux:** MeshCentral currently shows the Router link only to Windows and macOS browsers. On Linux, open the browser's developer console (F12, **Console** tab) on the MeshCentral page and run:
+> ```js
+> p10showMeshRouterDialog()
+> ```
+> This opens the same dialog with the **Launch MeshCentral Router** button.
+
+**CLI** - when a login is needed, mcc opens the web UI in the browser and asks for the link. Right-click **Launch MeshCentral Router**, copy the link and paste it; like a password, it isn't echoed:
+```
+INFO  Single sign-on: sign in at https://mesh.company.com/ (opened in your browser), click Router on the devices page and copy the link of the Launch MeshCentral Router button.
+Router link (hidden):
+```
+
+**GUI** - **Connect** opens the browser and a dialog that accepts the pasted link. For one click, press **Open Router links with this app** in that dialog once: clicking **Launch MeshCentral Router** then hands the sign-in to mcc-gui directly, starting it if needed and connecting the SSO profile for that server, or offering to add one. This registers mcc-gui for `mcrouter://` links for the current user (a desktop entry and `xdg-mime` on Linux, `HKCU\Software\Classes` on Windows), replacing MeshCentral Router if it is installed; register again after moving the executable. The macOS app and AppImages integrated by tools such as Gear Lever declare the link type themselves.
+
+A link is valid for an hour and only from the IP address of the browser it came from, so copy it on the same machine. If the server disables login tokens (`passwordRequirements.loginTokens: false`), the session still works but every login needs the browser. `mcc profile rm` deletes the token locally; it stays listed under the account's login tokens in the web UI, where it can be removed, until it expires.
+
 > **Note:** Node IDs containing special characters (e.g. `$`) must be wrapped in single quotes to prevent shell expansion:
 > ```bash
 > mcc ssh -i 'node//abc$def...'
@@ -242,7 +267,7 @@ Passwords now stored in OS-native secure storage:
 - **macOS**: Keychain
 - **Windows**: Credential Manager
 
-Existing plaintext passwords migrate automatically on first run. Config file only stores server/username.
+Existing plaintext passwords migrate automatically on first run. Config file only stores server/username. Single sign-on profiles keep their login token in the same keyring.
 
 **TLS Verification**
 

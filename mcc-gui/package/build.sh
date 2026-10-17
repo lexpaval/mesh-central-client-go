@@ -135,6 +135,11 @@ macos)
 			<key>LSMinimumSystemVersion</key><string>14.0</string>
 			<key>NSHighResolutionCapable</key><true/>
 			<key>NSPrincipalClass</key><string>NSApplication</string>
+			<!-- Router links from the web UI's single sign-on, see mcc-gui/sso.go -->
+			<key>CFBundleURLTypes</key><array><dict>
+				<key>CFBundleURLName</key><string>MeshCentral Router link</string>
+				<key>CFBundleURLSchemes</key><array><string>mcrouter</string></array>
+			</dict></array>
 		</dict>
 		</plist>
 	EOF
