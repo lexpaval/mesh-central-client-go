@@ -1530,6 +1530,67 @@ func showAbout() {
 	}
 	box := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Close)
 	box.OnRejected(d.Reject)
+	// The macOS bundle carries the mcc CLI. A link in /usr/local/bin, on
+	// PATH by default, puts it in terminals; it's removed here too, before
+	// the app goes to the Trash.
+	exe, _ := os.Executable()
+	cli := filepath.Join(filepath.Dir(exe), "mcc")
+	if _, err := os.Stat(cli); err == nil && runtime.GOOS == "darwin" {
+		const link = "/usr/local/bin/mcc"
+		btn := box.AddButton2("", qt.QDialogButtonBox__ActionRole)
+		installed := func() bool { t, err := os.Readlink(link); return err == nil && t == cli }
+		label := func() {
+			if installed() {
+				btn.SetText("Remove mcc command")
+			} else {
+				btn.SetText("Install mcc command")
+			}
+		}
+		label()
+		open := true // the password prompt can outlive the dialog
+		d.OnFinished(func(int) { open = false })
+		btn.OnClicked(func() {
+			// A link into a quarantined copy run from its random path, or into
+			// the mounted disk image, breaks once that goes away.
+			if strings.Contains(cli, "/AppTranslocation/") || strings.HasPrefix(cli, "/Volumes/") {
+				showInfo("mcc command", "Move MeshCentral Client to the Applications folder and open it from there first.")
+				return
+			}
+			q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+			sh, done := "mkdir -p /usr/local/bin && ln -sf "+q(cli)+" "+link, "Installed the mcc command, open a new terminal to use it."
+			if installed() {
+				sh, done = "rm -f "+link, "Removed the mcc command."
+			}
+			run := func() {
+				btn.SetEnabled(false)
+				script := `do shell script "` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(sh) + `" with administrator privileges`
+				go func() {
+					out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+					mainthread.Start(func() {
+						if open {
+							btn.SetEnabled(true)
+							label()
+						}
+						switch {
+						case err == nil:
+							logf("%s", done)
+							showInfo("mcc command", done)
+						case !bytes.Contains(out, []byte("-128")): // -128: the password prompt was cancelled
+							showError(fmt.Errorf("%s: %s", err, bytes.TrimSpace(out)))
+						}
+					})
+				}()
+			}
+			// One from a copy of this app elsewhere is replaced without asking.
+			if _, err := os.Lstat(link); err == nil && !installed() {
+				if t, _ := os.Readlink(link); !strings.HasSuffix(t, ".app/Contents/MacOS/mcc") {
+					confirm("mcc command", link+" is another mcc. Replace it with this app's?", run)
+					return
+				}
+			}
+			run()
+		})
+	}
 	v.AddWidget(box.QWidget)
 	d.Open()
 }

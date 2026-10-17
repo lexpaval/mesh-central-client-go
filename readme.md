@@ -69,7 +69,7 @@ Cross-platform builds use Podman images in `mcc-gui/package`. Images are built o
 ```bash
 make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>.AppImage
 make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.{msi,zip}
-make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.app.zip
+make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.dmg
 make gui-all      # All three platforms
 make gui-release  # GUI packages for all three platforms
 make release      # CLI binaries + GUI packages + sha256sums.txt
@@ -86,7 +86,9 @@ The supported baseline is glibc 2.39+ (for example, Ubuntu 24.04 or Debian 13) w
 
 The [current Type 2 runtime](https://github.com/AppImage/type2-runtime) embeds libfuse, so installing `libfuse2` is unnecessary. If FUSE mounting is unavailable, run `./mcc-gui-linux-amd64-<version>.AppImage --appimage-extract-and-run`. This extracts to a temporary directory and cleans it up on exit. Each package run downloads the latest continuous appimagetool and runtime, so upstream fixes arrive without rebuilding the build image.
 
-Windows packages come as a per-user `.msi` installer and as the same static executable in a `.zip`. The installer shows the license, installs without admin rights, and offers to start the app when done. It installs the GUI and the `mcc` CLI into `%LOCALAPPDATA%\Programs\MeshCentral Client`, adds that folder to the user's `PATH` (new terminals find `mcc`), adds a Start menu entry, and registers the app for the single sign-on `mcrouter://` links; installing a newer version replaces the old one, and uninstalling (Settings, Apps) removes all of it. The `.zip` is for running without installing. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
+Windows packages come as a per-user `.msi` installer and as the same static executable in a `.zip`. The installer shows the license, installs without admin rights, and offers to start the app when done. It installs the GUI and the `mcc` CLI into `%LOCALAPPDATA%\Programs\MeshCentral Client`, adds that folder to the user's `PATH` (new terminals find `mcc`), adds a Start menu entry, and registers the app for the single sign-on `mcrouter://` links; installing a newer version replaces the old one, and uninstalling (Settings, Apps) removes all of it. The `.zip` is for running without installing.
+
+macOS packages are `.dmg` disk images for macOS 14 or later: open it and drag MeshCentral Client to the Applications folder. The app bundles Qt and is ad-hoc signed but not notarized (that needs a paid Apple Developer ID), so the first launch is blocked; open **System Settings**, **Privacy & Security**, and click **Open Anyway** once. From then on it opens normally, and the web UI's single sign-on `mcrouter://` links open it. The app also carries the `mcc` CLI: **About**, **Install mcc command** links it into `/usr/local/bin` after asking for an admin password. To uninstall, use **Remove mcc command** there first (or `sudo rm /usr/local/bin/mcc`), then move the app to the Trash.
 
 On Linux, `make gui-bench` measures CPU and memory against the dummy MeshCentral server. `make gui-soak` runs a 30-minute test with 16,000 devices and two active shells in headless Mutter. Pass `BENCH_FLAGS` for benchmark options, `SOAK` for duration, and `HIDE=` to render the window during a soak.
 

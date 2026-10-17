@@ -4,7 +4,7 @@
 #
 #   build.sh linux amd64|arm64    dist/mcc-gui-linux-<arch>-<version>
 #   build.sh windows amd64|arm64  dist/mcc-gui-windows-<arch>-<version>.exe
-#   build.sh macos arm64|x86_64   dist/mcc-gui-darwin-amd64|arm64-<version>.app.zip
+#   build.sh macos arm64|x86_64   dist/mcc-gui-darwin-amd64|arm64-<version>.dmg
 #
 # With "package" after the arch, Linux builds an AppImage with Qt bundled,
 # and Windows a .zip of the exe and an .msi installer (mcc-gui.wxs) that
@@ -89,6 +89,10 @@ macos)
 	c="$app/Contents"
 	mkdir -p "$c/MacOS" "$c/Frameworks" "$c/PlugIns/platforms" "$c/PlugIns/styles" "$c/Resources"
 	GOARCH=$goarch go build -trimpath -ldflags "$ldflags" -o "$c/MacOS/mcc-gui" ./mcc-gui
+	# The CLI rides in the bundle, the About dialog links it onto PATH.
+	cli=github.com/lexpaval/mesh-central-client-go/cmd
+	CGO_ENABLED=0 GOARCH=$goarch go build -trimpath -ldflags "-s -w -X $cli.Version=$VERSION -X $cli.GitCommit=$COMMIT -X $cli.BuildDate=$DATE" \
+		-o "$c/MacOS/mcc" .
 	cp "$qt/plugins/platforms/libqcocoa.dylib" "$c/PlugIns/platforms/"
 	cp "$qt/plugins/styles/libqmacstyle.dylib" "$c/PlugIns/styles/" 2>/dev/null || true
 	printf '[Paths]\nPlugins = PlugIns\n' > "$c/Resources/qt.conf"
@@ -165,8 +169,20 @@ macos)
 	# install_name_tool voids the signatures, Apple silicon runs nothing unsigned.
 	mv "$app" "$work/$name.app"
 	rcodesign sign "$work/$name.app" > /dev/null
-	rm -f "dist/mcc-gui-darwin-$goarch-$VERSION.app.zip"
-	(cd "$work" && zip -qry "/src/dist/mcc-gui-darwin-$goarch-$VERSION.app.zip" "$name.app")
+
+	# Drag-to-Applications disk image: the app next to an Applications link.
+	# The HFS+ volume gets a fifth more than the files plus room for its
+	# catalog, the compression drops the unused space again.
+	root="$work/dmg"
+	mkdir "$root"
+	mv "$work/$name.app" "$root/"
+	size=$(du -sm "$root" | cut -f1)
+	dd if=/dev/zero of="$work/dmg.hfs" bs=1M count=$((size + size / 5 + 16)) status=none
+	mkfs.hfsplus -v "$name" "$work/dmg.hfs" > /dev/null
+	hfsplus "$work/dmg.hfs" addall "$root" --symlinks=clone_link > /dev/null
+	hfsplus "$work/dmg.hfs" symlink /Applications /Applications > /dev/null
+	rm -f "dist/mcc-gui-darwin-$goarch-$VERSION.dmg"
+	dmg build "$work/dmg.hfs" "dist/mcc-gui-darwin-$goarch-$VERSION.dmg" > /dev/null
 	;;
 
 *)

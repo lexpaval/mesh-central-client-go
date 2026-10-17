@@ -27,6 +27,18 @@ RUN DEBIAN_FRONTEND=noninteractive apt-get update && \
 		pkg-config wget nano procps make yasm unzip git file && \
     apt-get clean
 
+# The release .dmg: mkfs.hfsplus (hfsprogs, in non-free for Apple's license)
+# makes the HFS+ volume, Mozilla's libdmg-hfsplus fills and compresses it,
+# the way Firefox builds its disk images on Linux.
+RUN sed -i 's/^Components: main$/Components: main non-free/' /etc/apt/sources.list.d/debian.sources && \
+    apt-get update && DEBIAN_FRONTEND=noninteractive apt-get install --no-install-recommends -qyy \
+        hfsprogs cmake g++ zlib1g-dev libbz2-dev liblzma-dev && \
+    git clone -q --depth 1 https://github.com/mozilla/libdmg-hfsplus /tmp/libdmg && \
+    cmake -S /tmp/libdmg -B /tmp/libdmg/build -DCMAKE_BUILD_TYPE=Release > /dev/null && \
+    make -C /tmp/libdmg/build -j"$(nproc)" dmg-bin hfsplus > /dev/null && \
+    install -m755 /tmp/libdmg/build/dmg/dmg /tmp/libdmg/build/hfs/hfsplus /usr/local/bin/ && \
+    rm -rf /tmp/libdmg && apt-get clean
+
 ENV PATH="/osxcross/bin:$PATH"
 ENV LD_LIBRARY_PATH="/osxcross/lib"
 
