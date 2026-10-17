@@ -1,7 +1,7 @@
 #!/bin/sh
 # Bundle without executing target binaries, so arm64 stays a cross-build.
 set -eu
-bin=$1 arch=$2 app=$3
+bin=$1 arch=$2 app=$3 cli=$4
 case $arch in
 amd64) triplet=x86_64-linux-gnu runtime=x86_64 ;;
 arm64) triplet=aarch64-linux-gnu runtime=aarch64 ;;
@@ -10,6 +10,8 @@ esac
 id=com.github.lexpaval.mcc-gui
 qt=/opt/qt/$arch
 install -Dm755 "$bin" "$app/usr/bin/mcc-gui"
+# Static, the About dialog copies it to ~/.local/bin.
+install -Dm755 "$cli" "$app/usr/bin/mcc"
 install -Dm644 mcc-gui/Icon.png "$app/$id.png"
 install -Dm644 LICENSE "$app/usr/share/doc/mcc-gui/copyright"
 cat > "$app/$id.desktop" <<-EOF

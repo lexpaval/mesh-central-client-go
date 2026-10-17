@@ -19,6 +19,9 @@ cd /src
 name="MeshCentral Client"
 id=com.github.lexpaval.mcc-gui
 ldflags="-s -w -X main.version=$VERSION -X main.commit=$COMMIT -X main.buildDate=$DATE"
+# The mcc CLI the packages carry, cgo-free like the Makefile's build-all.
+cmd=github.com/lexpaval/mesh-central-client-go/cmd
+cliflags="-s -w -X $cmd.Version=$VERSION -X $cmd.GitCommit=$COMMIT -X $cmd.BuildDate=$DATE"
 mkdir -p dist
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
@@ -33,7 +36,8 @@ linux)
 	bin="dist/mcc-gui-linux-$arch-$VERSION"
 	go build -trimpath -ldflags "$ldflags" -o "$bin" ./mcc-gui
 	[ "$package" = package ] || exit 0
-	sh mcc-gui/package/appimage.sh "$bin" "$arch" "$work/AppDir"
+	CGO_ENABLED=0 go build -trimpath -ldflags "$cliflags" -o "$work/mcc" .
+	sh mcc-gui/package/appimage.sh "$bin" "$arch" "$work/AppDir" "$work/mcc"
 	rm "$bin"
 	;;
 
@@ -56,10 +60,7 @@ windows)
 	go build -trimpath -tags windowsqtstatic -ldflags "$ldflags -H windowsgui" -o "$exe" ./mcc-gui
 	if [ "$package" = package ]; then
 		cp "$exe" "$work/mcc-gui.exe"
-		# The CLI for the installer, cgo-free like the Makefile's build-all.
-		cli=github.com/lexpaval/mesh-central-client-go/cmd
-		CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X $cli.Version=$VERSION -X $cli.GitCommit=$COMMIT -X $cli.BuildDate=$DATE" \
-			-o "$work/mcc.exe" .
+		CGO_ENABLED=0 go build -trimpath -ldflags "$cliflags" -o "$work/mcc.exe" .
 		rm -f "${exe%.exe}.zip"
 		(cd "$work" && zip -q "/src/${exe%.exe}.zip" mcc-gui.exe)
 		# wixl 0.106 has no arm64 target. The x86 package type installs
@@ -90,9 +91,7 @@ macos)
 	mkdir -p "$c/MacOS" "$c/Frameworks" "$c/PlugIns/platforms" "$c/PlugIns/styles" "$c/Resources"
 	GOARCH=$goarch go build -trimpath -ldflags "$ldflags" -o "$c/MacOS/mcc-gui" ./mcc-gui
 	# The CLI rides in the bundle, the About dialog links it onto PATH.
-	cli=github.com/lexpaval/mesh-central-client-go/cmd
-	CGO_ENABLED=0 GOARCH=$goarch go build -trimpath -ldflags "-s -w -X $cli.Version=$VERSION -X $cli.GitCommit=$COMMIT -X $cli.BuildDate=$DATE" \
-		-o "$c/MacOS/mcc" .
+	CGO_ENABLED=0 GOARCH=$goarch go build -trimpath -ldflags "$cliflags" -o "$c/MacOS/mcc" .
 	cp "$qt/plugins/platforms/libqcocoa.dylib" "$c/PlugIns/platforms/"
 	cp "$qt/plugins/styles/libqmacstyle.dylib" "$c/PlugIns/styles/" 2>/dev/null || true
 	printf '[Paths]\nPlugins = PlugIns\n' > "$c/Resources/qt.conf"

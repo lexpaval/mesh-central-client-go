@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"net"
 	"net/url"
@@ -692,4 +693,84 @@ func TestRecentRouteReplay(t *testing.T) {
 			t.Errorf("%d routes after replay, recent %+v", len(routes), recent)
 		}
 	})
+}
+
+// The About dialog puts the bundled mcc on PATH: installs a copy into
+// ~/.local/bin, offers another build of it as an update, and removes it.
+func TestCLICommand(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("the Linux copy")
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	exe, _ := os.Executable()
+	// The test binary stands in for the bundled CLI, a Go binary of this module.
+	cli := filepath.Join(filepath.Dir(exe), "mcc")
+	self, _ := os.ReadFile(exe)
+	if err := os.WriteFile(cli, self, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Remove(cli) })
+	dest := filepath.Join(home, ".local", "bin", "mcc")
+
+	// button finds the dialog's mcc button, closing the messages before it.
+	button := func() (b *qt.QPushButton) {
+		for _, w := range qt.QApplication_AllWidgets() {
+			switch {
+			case w.WindowTitle() == "mcc command" && w.IsWindow():
+				w.Close()
+			case w.MetaObject().ClassName() == "QPushButton" && w.IsVisible():
+				if pb := qt.UnsafeNewQPushButton(w.UnsafePointer()); strings.HasSuffix(pb.Text(), "mcc command") {
+					b = pb
+				}
+			}
+		}
+		return b
+	}
+	// click presses it and waits for the label to change.
+	click := func(want string) {
+		t.Helper()
+		var before string
+		mainthread.Wait(func() { b := button(); before = b.Text(); b.Click() })
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+			var got string
+			mainthread.Wait(func() { settle(); got = button().Text() })
+			if got == want {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("after %q the button says %q, want %q", before, got, want)
+			}
+		}
+	}
+	label := func() (s string) { mainthread.Wait(func() { s = button().Text() }); return s }
+
+	closeAbout := func() {
+		for _, w := range qt.QApplication_TopLevelWidgets() {
+			if w.WindowTitle() == "About" {
+				w.Close()
+			}
+		}
+	}
+	ui(t, showAbout)
+	defer mainthread.Wait(closeAbout)
+	if got := label(); got != "Install mcc command" {
+		t.Fatalf("button says %q without a copy", got)
+	}
+	click("Remove mcc command")
+	if b, _ := os.ReadFile(dest); !bytes.Equal(b, self) {
+		t.Fatal("installed copy differs from the bundled mcc")
+	}
+
+	// Another build of the CLI, as left by an older AppImage.
+	os.WriteFile(dest, append(slices.Clone(self), 0), 0o755)
+	mainthread.Wait(func() { closeAbout(); settle(); showAbout() })
+	if got := label(); got != "Update mcc command" {
+		t.Fatalf("button says %q for another build", got)
+	}
+	click("Remove mcc command")
+	click("Install mcc command")
+	if _, err := os.Stat(dest); err == nil {
+		t.Fatal("remove left the copy")
+	}
 }

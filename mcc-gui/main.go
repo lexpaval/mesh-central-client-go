@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"cmp"
+	"debug/buildinfo"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -1530,21 +1531,42 @@ func showAbout() {
 	}
 	box := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Close)
 	box.OnRejected(d.Reject)
-	// The macOS bundle carries the mcc CLI. A link in /usr/local/bin, on
-	// PATH by default, puts it in terminals; it's removed here too, before
-	// the app goes to the Trash.
+	// The macOS bundle and the AppImage carry the mcc CLI, put on PATH here:
+	// on macOS a link in /usr/local/bin to the app in Applications, after an
+	// admin prompt; on Linux a copy in ~/.local/bin, since the AppImage is
+	// only mounted while it runs. One from another version or copy of the
+	// app is offered as an update. Remove takes it out again before the app
+	// goes to the Trash.
 	exe, _ := os.Executable()
 	cli := filepath.Join(filepath.Dir(exe), "mcc")
-	if _, err := os.Stat(cli); err == nil && runtime.GOOS == "darwin" {
-		const link = "/usr/local/bin/mcc"
+	home, _ := os.UserHomeDir()
+	dest := map[string]string{"darwin": "/usr/local/bin/mcc", "linux": filepath.Join(home, ".local", "bin", "mcc")}[runtime.GOOS]
+	if _, err := os.Stat(cli); err == nil && dest != "" {
 		btn := box.AddButton2("", qt.QDialogButtonBox__ActionRole)
-		installed := func() bool { t, err := os.Readlink(link); return err == nil && t == cli }
-		label := func() {
-			if installed() {
-				btn.SetText("Remove mcc command")
-			} else {
-				btn.SetText("Install mcc command")
+		// "remove" when dest is this app's mcc, "update" when it's another
+		// version or copy of it, "install" otherwise.
+		state := func() string {
+			if runtime.GOOS == "darwin" {
+				t, _ := os.Readlink(dest)
+				if t == cli {
+					return "remove"
+				}
+				if strings.HasSuffix(t, ".app/Contents/MacOS/mcc") { // possibly moved since
+					return "update"
+				}
+			} else if a, err := os.ReadFile(dest); err == nil {
+				if b, _ := os.ReadFile(cli); bytes.Equal(a, b) {
+					return "remove"
+				}
 			}
+			// Go's build info names the module, without running the file.
+			if bi, err := buildinfo.ReadFile(dest); err == nil && bi.Main.Path == "github.com/lexpaval/mesh-central-client-go" {
+				return "update"
+			}
+			return "install"
+		}
+		label := func() {
+			btn.SetText(map[string]string{"install": "Install", "update": "Update", "remove": "Remove"}[state()] + " mcc command")
 		}
 		label()
 		open := true // the password prompt can outlive the dialog
@@ -1552,41 +1574,77 @@ func showAbout() {
 		btn.OnClicked(func() {
 			// A link into a quarantined copy run from its random path, or into
 			// the mounted disk image, breaks once that goes away.
-			if strings.Contains(cli, "/AppTranslocation/") || strings.HasPrefix(cli, "/Volumes/") {
+			if runtime.GOOS == "darwin" && (strings.Contains(cli, "/AppTranslocation/") || strings.HasPrefix(cli, "/Volumes/")) {
 				showInfo("mcc command", "Move MeshCentral Client to the Applications folder and open it from there first.")
 				return
 			}
-			q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
-			sh, done := "mkdir -p /usr/local/bin && ln -sf "+q(cli)+" "+link, "Installed the mcc command, open a new terminal to use it."
-			if installed() {
-				sh, done = "rm -f "+link, "Removed the mcc command."
+			st := state()
+			done := map[string]string{"install": "Installed", "update": "Updated", "remove": "Removed"}[st] + " the mcc command."
+			if st != "remove" {
+				done += " Open a new terminal to use it."
+				if dir := filepath.Dir(dest); !slices.Contains(filepath.SplitList(os.Getenv("PATH")), dir) {
+					done += " " + dir + " isn't on your PATH yet, add it in your shell's profile."
+				}
+			}
+			var do func() error
+			if runtime.GOOS == "darwin" {
+				q := func(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
+				sh := "mkdir -p /usr/local/bin && ln -sf " + q(cli) + " " + dest
+				if st == "remove" {
+					sh = "rm -f " + dest
+				}
+				script := `do shell script "` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(sh) + `" with administrator privileges`
+				do = func() error {
+					out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+					if bytes.Contains(out, []byte("-128")) { // the password prompt was cancelled
+						return nil
+					}
+					if err != nil {
+						return fmt.Errorf("%s: %s", err, bytes.TrimSpace(out))
+					}
+					return nil
+				}
+			} else {
+				do = func() error {
+					if st == "remove" {
+						return os.Remove(dest)
+					}
+					b, err := os.ReadFile(cli)
+					if err == nil {
+						err = os.MkdirAll(filepath.Dir(dest), 0o755)
+					}
+					// Through a rename, a running mcc keeps its old file.
+					if err == nil {
+						err = os.WriteFile(dest+".new", b, 0o755)
+					}
+					if err == nil {
+						err = os.Rename(dest+".new", dest)
+					}
+					return err
+				}
 			}
 			run := func() {
 				btn.SetEnabled(false)
-				script := `do shell script "` + strings.NewReplacer(`\`, `\\`, `"`, `\"`).Replace(sh) + `" with administrator privileges`
 				go func() {
-					out, err := exec.Command("osascript", "-e", script).CombinedOutput()
+					err := do()
 					mainthread.Start(func() {
 						if open {
 							btn.SetEnabled(true)
 							label()
 						}
 						switch {
-						case err == nil:
+						case err != nil:
+							showError(err)
+						case state() != st: // not cancelled
 							logf("%s", done)
 							showInfo("mcc command", done)
-						case !bytes.Contains(out, []byte("-128")): // -128: the password prompt was cancelled
-							showError(fmt.Errorf("%s: %s", err, bytes.TrimSpace(out)))
 						}
 					})
 				}()
 			}
-			// One from a copy of this app elsewhere is replaced without asking.
-			if _, err := os.Lstat(link); err == nil && !installed() {
-				if t, _ := os.Readlink(link); !strings.HasSuffix(t, ".app/Contents/MacOS/mcc") {
-					confirm("mcc command", link+" is another mcc. Replace it with this app's?", run)
-					return
-				}
+			if _, err := os.Lstat(dest); err == nil && st == "install" {
+				confirm("mcc command", dest+" is another program called mcc. Replace it with this app's?", run)
+				return
 			}
 			run()
 		})
