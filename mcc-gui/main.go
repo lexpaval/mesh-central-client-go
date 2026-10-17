@@ -1522,7 +1522,7 @@ func showAbout() {
 		cmp.Or(version, "dev"), cmp.Or(commit, "unknown"), cmp.Or(buildDate, "unknown"), runtime.Version(), qt.QLibraryInfo_Version().ToString()))
 	info.SetTextInteractionFlags(qt.TextSelectableByMouse)
 	desc := qt.NewQLabel3("Desktop client for MeshCentral: devices, port routes and remote commands,\nsharing profiles and 2FA login with the mcc CLI. Not affiliated with MeshCentral.")
-	link := qt.NewQLabel3(`<a href="https://github.com/alexpaval/mesh-central-client-go">github.com/alexpaval/mesh-central-client-go</a>`)
+	link := qt.NewQLabel3(`<a href="https://github.com/lexpaval/mesh-central-client-go">github.com/lexpaval/mesh-central-client-go</a>`)
 	link.SetOpenExternalLinks(true)
 	credits := qt.NewQLabel3("MIT License. Icons by Font Awesome Free (CC BY 4.0), UI by Qt (LGPLv3) through miqt (MIT).")
 	credits.SetForegroundRole(qt.QPalette__PlaceholderText)
