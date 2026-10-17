@@ -1,0 +1,80 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Windows installer, built by wixl (msitools) in build.sh. Per user, without
+     admin rights, into %LOCALAPPDATA%\Programs like the app's config and
+     keyring entries. Registers mcc-gui for mcrouter:// links, the web UI's
+     single sign-on handoff (mcc-gui/sso.go), replacing MeshCentral Router's
+     registration while installed, and puts the mcc CLI on the user's PATH. -->
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <!-- UpgradeCode never changes, it ties every version to the same install. -->
+  <Product Id="*" Name="MeshCentral Client" Language="1033" Version="$(var.Version)"
+           Manufacturer="Alexandru Paval" UpgradeCode="5A6B0F88-6A54-4C90-BE76-34B8E01ADF30">
+    <Package InstallerVersion="500" Compressed="yes" InstallScope="perUser"
+             Description="MeshCentral Client" Comments="Devices, port routes and shells on a MeshCentral server"/>
+    <!-- Builds between tags share a version, they replace each other too. -->
+    <MajorUpgrade AllowSameVersionUpgrades="yes"
+                  DowngradeErrorMessage="A newer version of MeshCentral Client is already installed."/>
+    <Media Id="1" Cabinet="mcc.cab" EmbedCab="yes"/>
+    <!-- Nothing to choose or repair, Apps & features offers only uninstall
+         (WixUI_Minimal sets ARPNOMODIFY). -->
+    <Property Id="ARPNOREPAIR" Value="1"/>
+    <Property Id="ARPURLINFOABOUT" Value="https://github.com/lexpaval/mesh-central-client-go"/>
+
+    <Directory Id="TARGETDIR" Name="SourceDir">
+      <Directory Id="LocalAppDataFolder">
+        <Directory Id="ProgramsDir" Name="Programs">
+          <Directory Id="INSTALLDIR" Name="MeshCentral Client">
+            <!-- Per-user components keep their key path in HKCU. -->
+            <Component Id="App" Guid="*">
+              <File Id="MccGuiExe" Name="mcc-gui.exe" Source="$(var.Exe)"/>
+              <RemoveFolder Id="RemoveInstallDir" On="uninstall"/>
+              <RegistryValue Root="HKCU" Key="Software\MeshCentral Client" Name="Installed" Type="integer" Value="1" KeyPath="yes"/>
+            </Component>
+            <!-- New terminals find mcc, the uninstall takes the entry out. -->
+            <Component Id="Cli" Guid="*">
+              <File Id="MccExe" Name="mcc.exe" Source="$(var.Cli)"/>
+              <Environment Id="UserPath" Name="PATH" Value="[INSTALLDIR]" Part="last" Action="set" System="no" Permanent="no"/>
+              <RegistryValue Root="HKCU" Key="Software\MeshCentral Client" Name="Cli" Type="integer" Value="1" KeyPath="yes"/>
+            </Component>
+            <Component Id="RouterLinks" Guid="*">
+              <RegistryValue Root="HKCU" Key="Software\Classes\mcrouter" Type="string" Value="URL:MeshCentral Router"/>
+              <RegistryValue Root="HKCU" Key="Software\Classes\mcrouter" Name="URL Protocol" Type="string" Value=""/>
+              <RegistryValue Root="HKCU" Key="Software\Classes\mcrouter\shell\open\command" Type="string"
+                             Value="&quot;[#MccGuiExe]&quot; &quot;%1&quot;" KeyPath="yes"/>
+            </Component>
+          </Directory>
+        </Directory>
+      </Directory>
+      <Directory Id="ProgramMenuFolder">
+        <Component Id="StartMenu" Guid="*">
+          <Shortcut Id="StartMenuShortcut" Name="MeshCentral Client" Target="[#MccGuiExe]" WorkingDirectory="INSTALLDIR"/>
+          <RegistryValue Root="HKCU" Key="Software\MeshCentral Client" Name="StartMenu" Type="integer" Value="1" KeyPath="yes"/>
+        </Component>
+      </Directory>
+    </Directory>
+
+    <!-- WixUI_Minimal (wixl's ui extension): license and Install, progress,
+         then Finish with a note and an option to start the app. License.rtf
+         is made from LICENSE by build.sh. -->
+    <UIRef Id="WixUI_Minimal"/>
+    <UIRef Id="LaunchOnFinish"/>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALTEXT"
+              Value="MeshCentral Client is in the Start menu, and new terminals have the mcc command. Launch MeshCentral Router links in the MeshCentral web UI now open the app for single sign-on."/>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOXTEXT" Value="Launch MeshCentral Client"/>
+    <Property Id="WIXUI_EXITDIALOGOPTIONALCHECKBOX" Value="1"/>
+    <CustomAction Id="LaunchApp" FileKey="MccGuiExe" ExeCommand="" Return="asyncNoWait" Impersonate="yes"/>
+
+    <Feature Id="Main" Level="1">
+      <ComponentRef Id="App"/>
+      <ComponentRef Id="Cli"/>
+      <ComponentRef Id="RouterLinks"/>
+      <ComponentRef Id="StartMenu"/>
+    </Feature>
+  </Product>
+
+  <Fragment>
+    <UI Id="LaunchOnFinish">
+      <Publish Dialog="ExitDialog" Control="Finish" Event="DoAction" Value="LaunchApp"
+               Condition="WIXUI_EXITDIALOGOPTIONALCHECKBOX = 1 AND NOT Installed"/>
+    </UI>
+  </Fragment>
+</Wix>

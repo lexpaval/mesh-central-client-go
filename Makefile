@@ -21,10 +21,10 @@ APP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 # and gui-macos cross-build in podman images from mcc-gui/package, built on
 # first use: Linux amd64/arm64 AppImages with Qt 6.11 (glibc 2.39+), packed
 # with the latest continuous appimagetool and runtime, downloaded per build,
-# Windows amd64/arm64 as static exes (Qt 6.11), macOS 14+ arm64/x86_64
-# as zipped .app bundles with Qt inside, ad-hoc signed. gui-all builds all of
-# them, gui-release packages Windows as .zip, keeping Linux .AppImage and
-# macOS .app.zip.
+# Windows amd64/arm64 static exes (Qt 6.11) as a .zip and a per-user .msi
+# installer that also puts the mcc CLI on PATH, macOS 14+ arm64/x86_64 as
+# zipped .app bundles with Qt inside, ad-hoc signed. gui-all and
+# gui-release build all of them.
 # The build cache is per image: cgo caches by flags, not Qt's headers, so a
 # rebuilt image with another Qt starts over. Old ones: podman volume prune.
 GUI_LDFLAGS := -ldflags "-s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buildDate=$(DATE)"
@@ -60,8 +60,8 @@ gui-linux:
 
 gui-windows:
 	$(call GUI_IMAGE,windows,,windows)
-	$(call GUI_RUN,windows) windows amd64
-	$(call GUI_RUN,windows) windows arm64
+	$(call GUI_RUN,windows) windows amd64 package
+	$(call GUI_RUN,windows) windows arm64 package
 
 gui-macos:
 	$(call GUI_IMAGE,macos-arm64,--build-arg TARGET_ARCH=arm64,macos)
@@ -105,7 +105,7 @@ build-all:
 
 release: build-all gui-release
 	cd dist && sha256sum $(foreach os,linux darwin windows,$(foreach arch,amd64 arm64,mcc-$(os)-$(arch)-$(VERSION)$(if $(filter windows,$(os)),.exe))) \
-		$(foreach arch,amd64 arm64,mcc-gui-linux-$(arch)-$(VERSION).AppImage mcc-gui-windows-$(arch)-$(VERSION).zip mcc-gui-darwin-$(arch)-$(VERSION).app.zip) > sha256sums.txt
+		$(foreach arch,amd64 arm64,mcc-gui-linux-$(arch)-$(VERSION).AppImage mcc-gui-windows-$(arch)-$(VERSION).zip mcc-gui-windows-$(arch)-$(VERSION).msi mcc-gui-darwin-$(arch)-$(VERSION).app.zip) > sha256sums.txt
 
 version:
 	@echo "Version:    $(VERSION)"

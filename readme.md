@@ -68,7 +68,7 @@ Cross-platform builds use Podman images in `mcc-gui/package`. Images are built o
 
 ```bash
 make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>.AppImage
-make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.exe
+make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.{msi,zip}
 make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.app.zip
 make gui-all      # All three platforms
 make gui-release  # GUI packages for all three platforms
@@ -86,7 +86,7 @@ The supported baseline is glibc 2.39+ (for example, Ubuntu 24.04 or Debian 13) w
 
 The [current Type 2 runtime](https://github.com/AppImage/type2-runtime) embeds libfuse, so installing `libfuse2` is unnecessary. If FUSE mounting is unavailable, run `./mcc-gui-linux-amd64-<version>.AppImage --appimage-extract-and-run`. This extracts to a temporary directory and cleans it up on exit. Each package run downloads the latest continuous appimagetool and runtime, so upstream fixes arrive without rebuilding the build image.
 
-Windows packages contain a static executable in a `.zip`. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
+Windows packages come as a per-user `.msi` installer and as the same static executable in a `.zip`. The installer shows the license, installs without admin rights, and offers to start the app when done. It installs the GUI and the `mcc` CLI into `%LOCALAPPDATA%\Programs\MeshCentral Client`, adds that folder to the user's `PATH` (new terminals find `mcc`), adds a Start menu entry, and registers the app for the single sign-on `mcrouter://` links; installing a newer version replaces the old one, and uninstalling (Settings, Apps) removes all of it. The `.zip` is for running without installing. macOS packages bundle Qt in an ad-hoc signed `.app.zip` and require macOS 14 or later.
 
 On Linux, `make gui-bench` measures CPU and memory against the dummy MeshCentral server. `make gui-soak` runs a 30-minute test with 16,000 devices and two active shells in headless Mutter. Pass `BENCH_FLAGS` for benchmark options, `SOAK` for duration, and `HIDE=` to render the window during a soak.
 
@@ -241,7 +241,7 @@ INFO  Single sign-on: sign in at https://mesh.company.com/ (opened in your brows
 Router link (hidden):
 ```
 
-**GUI** - **Connect** opens the browser and a dialog that accepts the pasted link. For one click, press **Open Router links with this app** in that dialog once: clicking **Launch MeshCentral Router** then hands the sign-in to mcc-gui directly, starting it if needed and connecting the SSO profile for that server, or offering to add one. This registers mcc-gui for `mcrouter://` links for the current user (a desktop entry and `xdg-mime` on Linux, `HKCU\Software\Classes` on Windows), replacing MeshCentral Router if it is installed; register again after moving the executable. The macOS app and AppImages integrated by tools such as Gear Lever declare the link type themselves.
+**GUI** - **Connect** opens the browser and a dialog that accepts the pasted link. For one click, press **Open Router links with this app** in that dialog once: clicking **Launch MeshCentral Router** then hands the sign-in to mcc-gui directly, starting it if needed and connecting the SSO profile for that server, or offering to add one. This registers mcc-gui for `mcrouter://` links for the current user (a desktop entry and `xdg-mime` on Linux, `HKCU\Software\Classes` on Windows), replacing MeshCentral Router if it is installed; register again after moving the executable. The Windows installer, the macOS app and AppImages integrated by tools such as Gear Lever register the link type themselves.
 
 A link is valid for an hour and only from the IP address of the browser it came from, so copy it on the same machine. If the server disables login tokens (`passwordRequirements.loginTokens: false`), the session still works but every login needs the browser. `mcc profile rm` deletes the token locally; it stays listed under the account's login tokens in the web UI, where it can be removed, until it expires.
 

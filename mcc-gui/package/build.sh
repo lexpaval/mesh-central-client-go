@@ -7,7 +7,8 @@
 #   build.sh macos arm64|x86_64   dist/mcc-gui-darwin-amd64|arm64-<version>.app.zip
 #
 # With "package" after the arch, Linux builds an AppImage with Qt bundled,
-# and Windows a .zip of the exe.
+# and Windows a .zip of the exe and an .msi installer (mcc-gui.wxs) that
+# also carries the mcc CLI.
 # macOS always builds the .app, the binary doesn't run without its Qt.
 #
 # The repository is at /src, VERSION, COMMIT, DATE, APP_VERSION and
@@ -55,8 +56,26 @@ windows)
 	go build -trimpath -tags windowsqtstatic -ldflags "$ldflags -H windowsgui" -o "$exe" ./mcc-gui
 	if [ "$package" = package ]; then
 		cp "$exe" "$work/mcc-gui.exe"
+		# The CLI for the installer, cgo-free like the Makefile's build-all.
+		cli=github.com/lexpaval/mesh-central-client-go/cmd
+		CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X $cli.Version=$VERSION -X $cli.GitCommit=$COMMIT -X $cli.BuildDate=$DATE" \
+			-o "$work/mcc.exe" .
 		rm -f "${exe%.exe}.zip"
 		(cd "$work" && zip -q "/src/${exe%.exe}.zip" mcc-gui.exe)
+		# wixl 0.106 has no arm64 target. The x86 package type installs
+		# natively on Windows on ARM, and this one only writes HKCU and
+		# %LOCALAPPDATA%, which aren't redirected for it.
+		msiarch=x64
+		[ "$arch" = arm64 ] && msiarch=x86
+		# The license page's text, wixl reads License.rtf from the current
+		# directory. LICENSE is ASCII with one line per paragraph.
+		{
+			printf '{\\rtf1\\ansi\\deff0{\\fonttbl{\\f0 Tahoma;}}\\f0\\fs16\n'
+			sed -e 's/\\/\\\\/g' -e 's/[{}]/\\&/g' -e 's/$/\\par/' LICENSE
+			printf '}\n'
+		} > "$work/License.rtf"
+		(cd "$work" && wixl --ext ui -a "$msiarch" -D Version="$APP_VERSION" -D Exe="$work/mcc-gui.exe" -D Cli="$work/mcc.exe" \
+			-o "/src/${exe%.exe}.msi" /src/mcc-gui/package/mcc-gui.wxs)
 		rm "$exe"
 	fi
 	;;

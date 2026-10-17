@@ -6,7 +6,7 @@
 
 FROM docker.io/library/archlinux:latest
 
-RUN pacman -Syu --noconfirm --needed base-devel pkgconf wget ca-certificates zip && pacman -Scc --noconfirm
+RUN pacman -Syu --noconfirm --needed base-devel pkgconf wget ca-certificates zip msitools && pacman -Scc --noconfirm
 
 ARG LLVM_MINGW=20260922
 RUN wget -q "https://github.com/mstorsjo/llvm-mingw/releases/download/${LLVM_MINGW}/llvm-mingw-${LLVM_MINGW}-ucrt-ubuntu-22.04-x86_64.tar.xz" && \
