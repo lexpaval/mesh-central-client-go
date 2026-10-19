@@ -105,7 +105,7 @@ build-all:
 
 release: build-all gui-release
 	cd dist && sha256sum $(foreach os,linux darwin windows,$(foreach arch,amd64 arm64,mcc-$(os)-$(arch)-$(VERSION)$(if $(filter windows,$(os)),.exe))) \
-		$(foreach arch,amd64 arm64,mcc-gui-linux-$(arch)-$(VERSION).AppImage mcc-gui-windows-$(arch)-$(VERSION).zip mcc-gui-windows-$(arch)-$(VERSION).msi mcc-gui-darwin-$(arch)-$(VERSION).dmg) > sha256sums.txt
+		$(foreach arch,amd64 arm64,mcc-gui-linux-$(arch)-$(VERSION).AppImage mcc-gui-linux-$(arch)-$(VERSION).AppImage.zsync mcc-gui-windows-$(arch)-$(VERSION).zip mcc-gui-windows-$(arch)-$(VERSION).msi mcc-gui-darwin-$(arch)-$(VERSION).dmg) > sha256sums.txt
 
 version:
 	@echo "Version:    $(VERSION)"

@@ -112,12 +112,19 @@ chmod +x "$app/AppRun"
 # statically), fetched per build so their fixes arrive without rebuilding the
 # image, which would also drop its Go build cache.
 tools=$(mktemp -d)
-output=$(mktemp "$bin.AppImage.XXXXXX")
+# Packed under its final name, the .zsync records it as the download.
+output=$(mktemp -d "$bin.XXXXXX")
+image=$(basename "$bin").AppImage
 trap 'rm -rf "$tools" "$output"' EXIT
 wget -q -O "$tools/appimagetool" https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage
 wget -q -O "$tools/runtime" "https://github.com/AppImage/type2-runtime/releases/download/continuous/runtime-$runtime"
 chmod +x "$tools/appimagetool"
 (cd "$tools" && ./appimagetool --appimage-extract > /dev/null)
-ARCH=$runtime "$tools/squashfs-root/AppRun" --no-appstream \
-	--runtime-file "$tools/runtime" "$app" "$output"
-mv "$output" "$bin.AppImage"
+# Update information for Gear Lever and AppImageUpdate: the newest GitHub
+# release's .zsync for this architecture, which the bundled zsyncmake
+# writes to the current directory.
+(cd "$output" && ARCH=$runtime "$tools/squashfs-root/AppRun" --no-appstream \
+	-u "gh-releases-zsync|lexpaval|mesh-central-client-go|latest|mcc-gui-linux-$arch-*.AppImage.zsync" \
+	--runtime-file "$tools/runtime" "$app" "$image")
+mv "$output/$image.zsync" "$bin.AppImage.zsync"
+mv "$output/$image" "$bin.AppImage"

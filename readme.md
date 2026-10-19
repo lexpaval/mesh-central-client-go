@@ -67,7 +67,7 @@ Screenshot generation runs offscreen on Linux using the GUI test binary and `too
 Cross-platform builds use Podman images in `mcc-gui/package`. Images are built on first use; Windows resource generation uses `go-winres`, pinned in `tools.mod`.
 
 ```bash
-make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>.AppImage
+make gui-linux    # dist/mcc-gui-linux-{amd64,arm64}-<version>.AppImage{,.zsync}
 make gui-windows  # dist/mcc-gui-windows-{amd64,arm64}-<version>.{msi,zip}
 make gui-macos    # dist/mcc-gui-darwin-{amd64,arm64}-<version>.dmg
 make gui-all      # All three platforms
@@ -83,6 +83,8 @@ chmod +x mcc-gui-linux-amd64-<version>.AppImage
 ```
 
 The AppImage also carries the `mcc` CLI. Since an AppImage has no installer, **About**, **Install mcc command** copies it to `~/.local/bin`, which most distributions have on `PATH` (the dialog says so if yours doesn't). After a newer AppImage is started, the button offers **Update mcc command** for a copy from another version, and **Remove mcc command** deletes it.
+
+Each AppImage embeds update information pointing at the latest GitHub release, so Gear Lever and AppImageUpdate find new versions without setup. Publish the `.AppImage.zsync` files next to the AppImages in every release; the updaters look them up by name and AppImageUpdate downloads only the changed blocks.
 
 The supported baseline is glibc 2.39+ (for example, Ubuntu 24.04 or Debian 13) with an X11 or Wayland desktop and the host's graphics drivers. Use the amd64 build on Steam Deck in Desktop Mode; device validation is still pending. Headless servers should use the CLI. Password storage uses the desktop's Secret Service keyring; external SSH, RDP, and browser clients remain system applications.
 
