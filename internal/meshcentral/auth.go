@@ -361,6 +361,8 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			handleNodesCommand(command)
 		case "event":
 			handleEventCommand(command)
+		case "msg":
+			handleClipboardCommand(command)
 		}
 	}
 }

@@ -26,6 +26,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"image"
 	"log"
 	"math/big"
 	mrand "math/rand/v2"
@@ -680,10 +681,14 @@ const demoNotes = `# Bench 1
 
 // relay is a shell tunnel: after the handshake it redraws a top-like screen
 // fps times a second at the size the client asked for, echoing input. Files
-// channels browse demoFiles.
+// channels browse demoFiles, desktops show a drawn screen.
 func relay(w http.ResponseWriter, r *http.Request) {
-	if r.URL.Query().Get("p") == "5" {
+	switch r.URL.Query().Get("p") {
+	case "5":
 		fakeagent.Files(demoFiles)(w, r)
+		return
+	case "2":
+		(&fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(1280, 800), 2: fakeagent.DemoScreen(1024, 768)}}).ServeHTTP(w, r)
 		return
 	}
 	if r.URL.Query().Get("p") != "1" { // port routes aren't benchmarked

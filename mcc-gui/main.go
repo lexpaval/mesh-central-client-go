@@ -237,7 +237,7 @@ func buildUI() *qt.QWidget {
 	clear(treeChildren)
 	treeDirty = false
 	clear(collapsed)
-	routeRows, recentRows, shells, filesTabs = nil, nil, nil, nil
+	routeRows, recentRows, shells, filesTabs, desktopTabs = nil, nil, nil, nil, nil
 	root := qt.NewQWidget2()
 
 	statusLabel = newElidedLabel("Disconnected")
@@ -318,12 +318,13 @@ func buildUI() *qt.QWidget {
 	deviceBtns = []*qt.QPushButton{
 		iconButton("Shell", "terminal", "Open a shell on the device"),
 		iconButton("Files", "folder", "Browse, transfer and edit the device's files"),
+		iconButton("Desktop", "display", "Show and control the device's screen"),
 		iconButton("Add route", "plus", "Forward a local port to the device"),
 		iconButton("Run command", "play", "Run a command on the device"),
 		iconButton("Copy", "copy", ""),
 		iconButton("", "rotate", "Reload the device list"),
 	}
-	shellBtn, copyBtn := deviceBtns[0], deviceBtns[4]
+	shellBtn, copyBtn := deviceBtns[0], deviceBtns[5]
 	shellBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			if menu := shellMenu(d); menu != nil {
@@ -338,8 +339,13 @@ func buildUI() *qt.QWidget {
 			openFilesTab(d)
 		}
 	})
-	deviceBtns[2].OnClicked(showAddRoute)
-	deviceBtns[3].OnClicked(showRunCommand)
+	deviceBtns[2].OnClicked(func() {
+		if d, ok := selectedDevice(); ok {
+			openDesktop(d)
+		}
+	})
+	deviceBtns[3].OnClicked(showAddRoute)
+	deviceBtns[4].OnClicked(showRunCommand)
 	copyBtn.OnClicked(func() {
 		m := qt.NewQMenu(copyBtn.QWidget)
 		m.SetAttribute(qt.WA_DeleteOnClose)
@@ -347,7 +353,7 @@ func buildUI() *qt.QWidget {
 		m.AddActionWithText("SSH config…").OnTriggered(showSSHConfig)
 		popupBelow(m, copyBtn.QWidget)
 	})
-	deviceBtns[5].OnClicked(refreshDevices)
+	deviceBtns[6].OnClicked(refreshDevices)
 	btnRow := hbox(false)
 	for _, b := range deviceBtns {
 		btnRow.AddWidget(b.QWidget)
@@ -391,6 +397,14 @@ func buildUI() *qt.QWidget {
 	recentScroll.SetFrameShape(qt.QFrame__NoFrame)
 
 	tabs = qt.NewQTabWidget2()
+	tabs.OnCurrentChanged(func(int) {
+		if fullscreenDesktop != nil && desktopAt(tabs.CurrentIndex()) != fullscreenDesktop {
+			fullscreenDesktop.fullBtn.SetChecked(false)
+		}
+		for _, dt := range desktopTabs {
+			dt.cancelClipboard()
+		}
+	})
 	tabs.SetTabsClosable(true)
 	tabs.SetUsesScrollButtons(true)
 	tabs.SetElideMode(qt.ElideRight)
@@ -406,6 +420,10 @@ func buildUI() *qt.QWidget {
 			tabs.SetTabIcon(tabs.IndexOf(ft.w), icon("folder"))
 			ft.retheme()
 		}
+		for _, dt := range desktopTabs {
+			tabs.SetTabIcon(tabs.IndexOf(dt.w), icon("display"))
+			dt.retheme()
+		}
 	})
 	for i := range 2 {
 		tabs.TabBar().SetTabButton(i, qt.QTabBar__RightSide, nil)
@@ -416,6 +434,8 @@ func buildUI() *qt.QWidget {
 			closeShell(st)
 		} else if ft := filesAt(i); ft != nil {
 			ft.requestClose()
+		} else if dt := desktopAt(i); dt != nil {
+			dt.close()
 		}
 	})
 
@@ -443,8 +463,12 @@ func buildUI() *qt.QWidget {
 	vsplit.SetChildrenCollapsible(false)
 
 	rl := qt.NewQVBoxLayout(root)
-	rl.AddLayout(top.QLayout)
+	topPane := qt.NewQWidget2()
+	topPane.SetLayout(top.QLayout)
+	rl.AddWidget(topPane)
 	rl.AddWidget2(vsplit.QWidget, 1)
+	desktopChrome = []*qt.QWidget{topPane, left, logView.QWidget, tabs.TabBar().QWidget}
+	fullscreenDesktop = nil
 	setConnected(false)
 	recent = nil
 	rebuildRecent()
@@ -535,6 +559,7 @@ func buildTree() {
 			m.AddAction2(icon("terminal"), "Shell").OnTriggered(func() { openShell(d, 1) })
 		}
 		m.AddAction2(icon("folder"), "Files").OnTriggered(func() { openFilesTab(d) })
+		m.AddAction2(icon("display"), "Desktop").OnTriggered(func() { openDesktop(d) })
 		m.AddAction2(icon("plus"), "Add route…").OnTriggered(showAddRoute)
 		m.AddAction2(icon("play"), "Run command…").OnTriggered(showRunCommand)
 		m.AddSeparator()
@@ -655,6 +680,9 @@ func disconnect() {
 	}
 	for _, ft := range slices.Clone(filesTabs) {
 		ft.close()
+	}
+	for _, dt := range slices.Clone(desktopTabs) {
+		dt.close()
 	}
 	routes = nil
 	rebuildRoutes()

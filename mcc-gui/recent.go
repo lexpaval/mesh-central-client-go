@@ -13,13 +13,15 @@ import (
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
 
-// The Recent tab lists the shells, files, routes and commands used before, per
-// profile, most used and most recent first, to do again in one click. On a
-// large server most devices are someone else's, this keeps one's own close.
+// The Recent tab lists the shells, files, desktops, routes and commands used
+// before, per profile, most used and most recent first, to do again in one
+// click. On a large server most devices are someone else's, this keeps one's
+// own close.
 
-// recentAction is a shell, files tab, route or command used on a device.
+// recentAction is a shell, files or desktop tab, route or command used on a
+// device.
 type recentAction struct {
-	Kind        string // "shell", "files", "route" or "command"
+	Kind        string // "shell", "files", "desktop", "route" or "command"
 	NodeID      string
 	Device      string // its name when last used, for devices not loaded
 	Protocol    int    `json:",omitempty"` // shell: 1 default, 6 PowerShell
@@ -215,6 +217,8 @@ func recentRowData(a *recentAction) rowData {
 		}
 	case "files":
 		what, ic = "Files", "folder"
+	case "desktop":
+		what, ic = "Desktop", "display"
 	case "route":
 		what, ic = service(a.RemotePort)
 		detail = fmt.Sprintf("port %d", a.RemotePort)
@@ -267,6 +271,8 @@ func replayRecent(a *recentAction) {
 		openShell(d, a.Protocol)
 	case "files":
 		openFilesTab(d)
+	case "desktop":
+		openDesktop(d)
 	case "route":
 		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, BindAddress: a.BindAddress, LocalPort: a.LocalPort, Target: a.Target, RemotePort: a.RemotePort}, true)
 	case "command":

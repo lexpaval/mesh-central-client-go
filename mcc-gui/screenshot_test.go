@@ -113,6 +113,18 @@ func TestScreenshot(t *testing.T) {
 		save(t, editors[0].w, filepath.Join(dir, variant+"-editor.png"))
 		closeEditors()
 		filesTabs[0].close()
+		openDesktop(devices[deviceIdx["1"]])
+	})
+	waitFor("the desktop", func() bool {
+		return len(desktopTabs) == 1 && desktopTabs[0].live && desktopTabs[0].displaySel.Count() == 2
+	})
+	mainthread.Wait(func() {
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+"-desktop.png"))
+		desktopTabs[0].fullBtn.Click()
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+"-desktop-fullscreen.png"))
+		desktopTabs[0].close()
 		for _, ar := range routes {
 			ar.route.Close()
 		}
