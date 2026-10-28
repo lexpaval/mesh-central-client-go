@@ -278,6 +278,34 @@ func TestSearchKeepsCollapsedGroups(t *testing.T) {
 	})
 }
 
+func TestExpandCollapseAll(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		var devs []meshcentral.Device
+		for i := range 9 {
+			devs = append(devs, meshcentral.Device{Id: fmt.Sprintf("node//%d", i), MeshID: fmt.Sprintf("mesh//%d", i%3), Group: fmt.Sprintf("G%d", i%3), Name: fmt.Sprintf("host-%d", i%3), Pwr: 1})
+		}
+		setDevices(devs)
+		searchEntry.SetText("host-0") // hides mesh//1 and mesh//2
+		expandGroups(false)
+		if treeItems["mesh//0"].IsExpanded() {
+			t.Error("collapse all left a group open")
+		}
+		searchEntry.SetText("")
+		for _, id := range []string{"mesh//0", "mesh//1", "mesh//2"} {
+			if treeItems[id].IsExpanded() {
+				t.Errorf("%s open after collapse all and clearing the search", id)
+			}
+		}
+		expandGroups(true)
+		for _, id := range []string{"mesh//0", "mesh//1", "mesh//2"} {
+			if !treeItems[id].IsExpanded() {
+				t.Errorf("%s closed after expand all", id)
+			}
+		}
+	})
+}
+
 func TestProfileSelection(t *testing.T) {
 	keyring.MockInit()
 	viper.Set("profiles", []map[string]any{{"name": "cli"}, {"name": "gui"}})

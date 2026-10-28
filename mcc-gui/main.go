@@ -313,6 +313,16 @@ func buildUI() *qt.QWidget {
 	})
 	offlineChk = qt.NewQCheckBox3("Show offline")
 	offlineChk.OnToggled(func(bool) { applyFilter() })
+	expandBtn := iconButton("", "angles-down", "Expand all groups")
+	expandBtn.SetFlat(true)
+	expandBtn.OnClicked(func() { expandGroups(true) })
+	collapseBtn := iconButton("", "angles-up", "Collapse all groups")
+	collapseBtn.SetFlat(true)
+	collapseBtn.OnClicked(func() { expandGroups(false) })
+	filterRow := hbox(false, offlineChk.QWidget)
+	filterRow.AddStretch()
+	filterRow.AddWidget(expandBtn.QWidget)
+	filterRow.AddWidget(collapseBtn.QWidget)
 	buildTree()
 
 	deviceBtns = []*qt.QPushButton{
@@ -364,7 +374,7 @@ func buildUI() *qt.QWidget {
 	ll := qt.NewQVBoxLayout(left)
 	ll.SetContentsMargins(0, 0, 0, 0)
 	ll.AddWidget(searchEntry.QWidget)
-	ll.AddWidget(offlineChk.QWidget)
+	ll.AddLayout(filterRow.QLayout)
 	ll.AddWidget2(deviceTree.QWidget, 1)
 	ll.AddLayout(btnRow.QLayout)
 
@@ -1186,6 +1196,21 @@ func rebuildTree() {
 	deviceTree.SetUpdatesEnabled(true)
 	sb.SetValue(pos)
 	deviceTree.Viewport().Update()
+}
+
+// expandGroups opens or closes every group. Closing covers the groups the
+// filter hides too, so they don't reappear open.
+func expandGroups(open bool) {
+	clear(collapsed)
+	if !open {
+		for id := range groups {
+			collapsed[id] = true
+		}
+	}
+	rebuildTree()
+	if !open {
+		deviceTree.ScrollToTop()
+	}
 }
 
 // selectDevice selects a device row, as a click would.
