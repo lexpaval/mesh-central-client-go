@@ -34,6 +34,8 @@ go build -o mcc
 
 **Desktop** opens the device's screen with mouse and keyboard control, display selection, image quality, and fit or actual-size viewing. The clipboard toggle enables automatic bidirectional text sync while that tab and the client window are active; it starts off in each tab, and turning it on sends the local text to the device. Images and files are not transferred. **Type clipboard** remains available for typing text as keystrokes. The fullscreen button (Ctrl+Alt+Enter) hides the client panels and keeps the Desktop toolbar visible; use it again to restore the client. Esc still goes to the remote device. Clipboard support depends on the agent and remote desktop session; some agents do not report an empty remote clipboard.
 
+Right-click a device or group for **Notes**, the free-text notes MeshCentral keeps for it and shows in the web UI. Device notes can be read by anyone who sees the device and edited with the *Edit notes* right; group notes need the *Edit group* right for both. The server silently ignores requests without the right, so the dialog says when it got no answer or a change wasn't kept. The buttons beside **Show offline** expand or collapse every group in the device list.
+
 Devices and port routes, connected to the local dummy server with fictional data:
 
 <picture>
@@ -64,7 +66,7 @@ make gui-shots    # Start a dummy server and capture both themes in dist/shots
 make gui-readme-shots # Regenerate the README images in docs/screenshots
 ```
 
-Screenshot generation runs offscreen on Linux using the GUI test binary and `tools/guibench`'s local dummy server. It uses temporary preferences and a mock keyring, exercises login, device queries, a shell relay and a files channel, and waits for the device list, terminal output and file listing before saving PNGs. No real MeshCentral account, credentials, or desktop session is needed. The images show fictional devices and documentation IP addresses; local server and route ports are assigned automatically.
+Screenshot generation runs offscreen on Linux using the GUI test binary and `tools/guibench`'s local dummy server. It uses temporary preferences and a mock keyring, exercises login, device queries, notes, a shell relay and a files channel, and waits for the device list, terminal output and file listing before saving PNGs. No real MeshCentral account, credentials, or desktop session is needed. The images show fictional devices and documentation IP addresses; local server and route ports are assigned automatically.
 
 Cross-platform builds use Podman images in `mcc-gui/package`. Images are built on first use; Windows resource generation uses `go-winres`, pinned in `tools.mod`.
 
