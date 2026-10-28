@@ -33,7 +33,11 @@ GUI_RUN = podman run --rm --security-opt label=disable -v $(CURDIR):/src -w /src
 	-e GOTOOLCHAIN=auto -e GOFLAGS=-buildvcs=false \
 	-e VERSION=$(VERSION) -e COMMIT=$(COMMIT) -e DATE=$(DATE) -e APP_VERSION=$(APP_VERSION) -e APP_BUILD=$(APP_BUILD) \
 	mcc-gui-build:$(1) sh mcc-gui/package/build.sh
-GUI_IMAGE = podman image exists mcc-gui-build:$(1) || podman build $(2) -t mcc-gui-build:$(1) -f mcc-gui/package/$(3).Dockerfile mcc-gui/package
+# An image is rebuilt when its Dockerfile (or a file it copies) changed since,
+# the hash is kept as a label: a stale one lacks newer packaging tools.
+GUI_IMAGE = h=$$(cat mcc-gui/package/$(3).Dockerfile $(if $(filter windows,$(3)),mcc-gui/package/msys-pc.sh) | sha256sum | cut -c1-12); \
+	[ "$$(podman image inspect -f '{{index .Labels "mcc.src"}}' mcc-gui-build:$(1) 2>/dev/null)" = "$$h" ] || \
+	podman build $(2) --label mcc.src=$$h -t mcc-gui-build:$(1) -f mcc-gui/package/$(3).Dockerfile mcc-gui/package
 
 gui:
 	mkdir -p dist
