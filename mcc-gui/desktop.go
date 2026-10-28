@@ -189,9 +189,10 @@ func (dt *desktopTab) build() {
 		dt.relayout()
 		dt.view.SetFocus()
 	})
+	// Off until asked for: on, the local clipboard goes to the device right
+	// away, and whatever the device copies replaces it.
 	dt.clipBtn = button("Clipboard sync", "clipboard", "Automatically sync text with this device while its Desktop tab is active")
 	dt.clipBtn.SetCheckable(true)
-	dt.clipBtn.SetChecked(true)
 	dt.clipBtn.OnToggled(func(bool) {
 		dt.cancelClipboard()
 		dt.clipKnown, dt.clipRemoteKnown = false, false
@@ -451,7 +452,7 @@ func (dt *desktopTab) setLive(live bool) {
 
 func (dt *desktopTab) setStatus(text string, isErr bool) {
 	dt.status.SetText(text)
-	dt.status.SetToolTip(text)
+	setPlainToolTip(dt.status.QWidget, text)
 	if isErr {
 		dt.status.SetStyleSheet("color: #e5534b")
 	} else {

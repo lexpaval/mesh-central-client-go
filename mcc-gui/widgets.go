@@ -1,6 +1,7 @@
 package main
 
 import (
+	"html"
 	"math"
 
 	qt "github.com/mappu/miqt/qt6"
@@ -187,6 +188,15 @@ func newElidedLabel(text string) *qt.QLabel {
 	return l
 }
 
+// setPlainToolTip sets a tooltip of remote text, escaped since Qt renders
+// tooltips that look like HTML.
+func setPlainToolTip(w *qt.QWidget, text string) {
+	if text != "" {
+		text = "<p>" + html.EscapeString(text) + "</p>"
+	}
+	w.SetToolTip(text)
+}
+
 // parent is the window dialogs belong to, nil before it exists (tests).
 func parent() *qt.QWidget {
 	if win == nil {
@@ -195,8 +205,11 @@ func parent() *qt.QWidget {
 	return win.QWidget
 }
 
+// msgBox shows text as is, it often carries the server's or a device's
+// words, which Qt would render as HTML if they looked like it.
 func msgBox(ic qt.QMessageBox__Icon, title, text string, buttons qt.QMessageBox__StandardButton) *qt.QMessageBox {
 	b := qt.NewQMessageBox6(ic, title, text, buttons, parent())
+	b.SetTextFormat(qt.PlainText)
 	b.SetAttribute(qt.WA_DeleteOnClose)
 	b.Open()
 	return b

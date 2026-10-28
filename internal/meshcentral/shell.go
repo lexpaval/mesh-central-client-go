@@ -29,6 +29,10 @@ func randomHex() (string, error) {
 	return hex.EncodeToString(bytes), nil
 }
 
+// maxTunnelMessage bounds a relay tunnel's messages, the device sends them.
+// Desktop commands are the largest, a jumbo header ahead of one.
+const maxTunnelMessage = maxDesktopCommand + 8
+
 // dialTunnel asks the agent on nodeID to join a relay tunnel for protocol p
 // (1 terminal, 5 files) and dials our side of it.
 func dialTunnel(nodeID string, p int) (*websocket.Conn, error) {
@@ -50,7 +54,11 @@ func dialTunnel(nodeID string, p int) (*websocket.Conn, error) {
 		TLSClientConfig: &tls.Config{InsecureSkipVerify: settings.Insecure},
 	}
 	conn, _, err := dialer.Dial(wsUrl.String(), http.Header{})
-	return conn, err
+	if err != nil {
+		return nil, err
+	}
+	conn.SetReadLimit(maxTunnelMessage)
+	return conn, nil
 }
 
 // runShellSession pipes one tunnel session between input and out. Returns

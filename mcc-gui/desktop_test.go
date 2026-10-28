@@ -237,7 +237,20 @@ func TestDesktopClipboardSync(t *testing.T) {
 		dt.clipTimer.Stop()
 	})
 	t.Cleanup(func() { mainthread.Wait(func() { dt.close(); tabs.Window().Hide() }) })
-	waitFor(t, "active desktop", func() bool { return dt.live && dt.clipboardActive() })
+	waitFor(t, "live desktop", func() bool { return dt.live })
+	// Off by default, nothing local goes to the device until asked.
+	mainthread.Wait(func() {
+		qt.QGuiApplication_Clipboard().SetText("secret")
+		dt.syncClipboard()
+		if dt.clipboardActive() || dt.clipCancel != nil {
+			t.Error("clipboard sync started without being enabled")
+		}
+		dt.clipBtn.SetChecked(true)
+	})
+	if got := <-sent; got != "secret" {
+		t.Fatalf("enabling sync sent %q", got)
+	}
+	waitFor(t, "active desktop", func() bool { return dt.live && dt.clipboardActive() && dt.clipCancel == nil })
 	idle := func() { waitFor(t, "clipboard request completed", func() bool { return dt.clipCancel == nil }) }
 	request := func() chan string {
 		mainthread.Wait(dt.syncClipboard)

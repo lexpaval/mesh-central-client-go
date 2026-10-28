@@ -106,6 +106,15 @@ type Desktop struct {
 // desktopJoinTimeout bounds the wait for the device to join the tunnel.
 const desktopJoinTimeout = 90 * time.Second
 
+// The device controls what it sends, these bound what that may cost here: a
+// command (a JPEG tile mostly), the screen (64 Mpx is four 4K displays) and
+// the displays listed.
+const (
+	maxDesktopCommand  = 16 << 20
+	maxDesktopPixels   = 64 << 20
+	maxDesktopDisplays = 64
+)
+
 // OpenDesktop opens a remote desktop session to nodeID.
 func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 	conn, err := dialTunnel(nodeID, 2)
@@ -124,6 +133,7 @@ func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 // dialed, waiting for the device to join it.
 func NewDesktop(conn *websocket.Conn, ev DesktopEvents) (*Desktop, error) {
 	d := &Desktop{conn: conn, ev: ev, out: make(chan []byte, 1024), done: make(chan struct{}), quality: 50, frameMs: 100}
+	conn.SetReadLimit(maxTunnelMessage) // dialTunnel's, for conns dialed elsewhere (tests)
 	for {
 		conn.SetReadDeadline(time.Now().Add(desktopJoinTimeout))
 		_, b, err := conn.ReadMessage()
@@ -236,6 +246,7 @@ func be16(v int) []byte { return []byte{byte(v >> 8), byte(v)} }
 
 func (d *Desktop) read() {
 	defer close(d.done)
+	defer d.conn.Close()
 	for {
 		mt, b, err := d.conn.ReadMessage()
 		if err != nil {
@@ -248,7 +259,10 @@ func (d *Desktop) read() {
 			d.control(b)
 			continue
 		}
-		d.data(b)
+		if err := d.data(b); err != nil {
+			d.err = err
+			return
+		}
 	}
 }
 
@@ -272,48 +286,55 @@ func (d *Desktop) control(b []byte) {
 	}
 }
 
-// data handles one binary message, as the web UI's viewer does.
-func (d *Desktop) data(b []byte) {
+// data handles one binary message, as the web UI's viewer does. An error
+// ends the session.
+func (d *Desktop) data(b []byte) error {
 	if d.acc != nil {
 		d.acc = append(d.acc, b...)
 		if len(d.acc) >= d.accSize {
 			cmd, v := d.accCmd, d.acc[:d.accSize]
 			d.acc = nil
-			d.command(cmd, v)
+			return d.command(cmd, v)
 		}
-		return
+		return nil
 	}
 	if len(b) < 4 {
-		return
+		return nil
 	}
 	cmd, size := int(binary.BigEndian.Uint16(b)), int(binary.BigEndian.Uint16(b[2:]))
 	if cmd == kvmJumbo && size == 8 {
 		if len(b) < 12 {
-			return
+			return nil
 		}
 		size = int(binary.BigEndian.Uint32(b[4:]))
 		b = b[8:]
 		cmd = int(binary.BigEndian.Uint16(b))
 	}
 	if size < 4 {
-		return
+		return nil
+	}
+	if size > maxDesktopCommand {
+		return fmt.Errorf("the device sent a %d MB command, over the %d MB limit", size>>20, maxDesktopCommand>>20)
 	}
 	if size > len(b) {
 		d.acc, d.accSize, d.accCmd = append([]byte(nil), b...), size, cmd
-		return
+		return nil
 	}
-	d.command(cmd, b[:size])
+	return d.command(cmd, b[:size])
 }
 
 // command handles a whole command v, its header included.
-func (d *Desktop) command(cmd int, v []byte) {
+func (d *Desktop) command(cmd int, v []byte) error {
 	xy := func() (int, int) { return int(binary.BigEndian.Uint16(v[4:])), int(binary.BigEndian.Uint16(v[6:])) }
 	switch cmd {
 	case kvmScreen:
 		if len(v) < 8 {
-			return
+			return nil
 		}
 		w, h := xy()
+		if w*h > maxDesktopPixels {
+			return fmt.Errorf("the device's %d × %d screen is over the %d megapixel limit", w, h, maxDesktopPixels>>20)
+		}
 		d.mu.Lock()
 		changed := w != d.w || h != d.h
 		if changed {
@@ -345,12 +366,18 @@ func (d *Desktop) command(cmd int, v []byte) {
 		}
 	case kvmTile:
 		if len(v) < 8 {
-			return
+			return nil
 		}
 		x, y := xy()
+		// The header's size is what decoding allocates, a tile can't be
+		// larger than the screen.
+		cfg, err := jpeg.DecodeConfig(bytes.NewReader(v[8:]))
+		if w, h := d.Size(); err != nil || cfg.Width > w || cfg.Height > h {
+			return nil
+		}
 		img, err := jpeg.Decode(bytes.NewReader(v[8:]))
 		if err != nil {
-			return
+			return nil
 		}
 		d.mu.Lock()
 		r := blit(d.pix, d.w, d.h, img, x, y)
@@ -360,11 +387,11 @@ func (d *Desktop) command(cmd int, v []byte) {
 		}
 	case kvmGetDisplays:
 		if len(v) < 6 {
-			return
+			return nil
 		}
 		n := int(binary.BigEndian.Uint16(v[4:]))
-		if len(v) < 8+2*n {
-			return
+		if n > maxDesktopDisplays || len(v) < 8+2*n {
+			return nil
 		}
 		ids := make([]int, n)
 		for i := range ids {
@@ -392,6 +419,7 @@ func (d *Desktop) command(cmd int, v []byte) {
 			d.ev.Cursor(c)
 		}
 	}
+	return nil
 }
 
 func compression(quality, frameMs int) []byte {

@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"image"
+	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -324,5 +325,47 @@ func TestDesktopDropped(t *testing.T) {
 	}
 	if d.Err() == nil {
 		t.Fatal("a dropped tunnel reported no error")
+	}
+}
+
+// A device's commands can't make the viewer allocate without bound.
+func TestDesktopLimits(t *testing.T) {
+	d := &Desktop{out: make(chan []byte, 1024), done: make(chan struct{})}
+	cmd := func(c int, payload ...byte) []byte { return kvmCmd(c, payload...) }
+	jumbo := func(size uint32) []byte {
+		return append(cmd(kvmJumbo, byte(size>>24), byte(size>>16), byte(size>>8), byte(size)), cmd(kvmTile, 0, 0, 0, 0)...)
+	}
+	if err := d.data(jumbo(1 << 30)); err == nil || d.acc != nil {
+		t.Error("a 1 GB command was accepted")
+	}
+	if err := d.data(cmd(kvmScreen, be16(65535)...)); err != nil {
+		t.Fatal(err) // too short, ignored
+	}
+	if err := d.data(cmd(kvmScreen, append(be16(65535), be16(65535)...)...)); err == nil || d.pix != nil {
+		t.Error("a 65535 × 65535 screen was allocated")
+	}
+	if err := d.data(cmd(kvmScreen, append(be16(64), be16(48)...)...)); err != nil {
+		t.Fatal(err)
+	}
+
+	// A tile whose header claims more than the screen isn't decoded.
+	var buf bytes.Buffer
+	jpeg.Encode(&buf, image.NewGray(image.Rect(0, 0, 8, 8)), nil)
+	huge := buf.Bytes()
+	sof := bytes.Index(huge, []byte{0xff, 0xc0})
+	copy(huge[sof+5:], append(be16(60000), be16(60000)...))
+	painted := false
+	d.ev.Frame = func(image.Rectangle) { painted = true }
+	if err := d.data(cmd(kvmTile, append([]byte{0, 0, 0, 0}, huge...)...)); err != nil || painted {
+		t.Errorf("oversized tile: %v, painted %v", err, painted)
+	}
+
+	listed := false
+	d.ev.Displays = func([]int, int) { listed = true }
+	if err := d.data(cmd(kvmGetDisplays, append(be16(100), make([]byte, 2*100+2)...)...)); err != nil || listed {
+		t.Errorf("100 displays: %v, listed %v", err, listed)
+	}
+	if err := d.data(cmd(kvmGetDisplays, append(be16(2), make([]byte, 2*2+2)...)...)); err != nil || !listed {
+		t.Errorf("2 displays: %v, listed %v", err, listed)
 	}
 }

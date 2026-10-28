@@ -373,7 +373,7 @@ func (ft *filesTab) notice(msg string) {
 
 func (ft *filesTab) setStatus(text string, isErr bool) {
 	ft.status.SetText(text)
-	ft.status.SetToolTip(text)
+	setPlainToolTip(ft.status.QWidget, text)
 	if isErr {
 		ft.status.SetStyleSheet("color: #e5534b")
 	} else {
