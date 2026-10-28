@@ -555,13 +555,21 @@ func buildTree() {
 		if item == nil || !connected {
 			return
 		}
-		d, ok := shownDevice(item.Data(0, int(qt.UserRole)).ToString())
-		if !ok {
+		id := item.Data(0, int(qt.UserRole)).ToString()
+		l, group := groupLabels[id]
+		d, device := shownDevice(id)
+		if !group && !device {
+			return
+		}
+		m := qt.NewQMenu(deviceTree.QWidget)
+		m.SetAttribute(qt.WA_DeleteOnClose)
+		gp := deviceTree.Viewport().MapToGlobalWithQPoint(pos)
+		if group {
+			m.AddAction2(icon("note-sticky"), "Notes…").OnTriggered(func() { showNotes(id, l[0], true) })
+			m.Popup(gp)
 			return
 		}
 		deviceTree.SetCurrentItem(item)
-		m := qt.NewQMenu(deviceTree.QWidget)
-		m.SetAttribute(qt.WA_DeleteOnClose)
 		if strings.Contains(strings.ToLower(d.OS), "windows") {
 			m.AddAction2(icon("terminal"), "Command prompt").OnTriggered(func() { openShell(d, 1) })
 			m.AddAction2(icon("terminal"), "PowerShell").OnTriggered(func() { openShell(d, 6) })
@@ -572,10 +580,10 @@ func buildTree() {
 		m.AddAction2(icon("display"), "Desktop").OnTriggered(func() { openDesktop(d) })
 		m.AddAction2(icon("plus"), "Add route…").OnTriggered(showAddRoute)
 		m.AddAction2(icon("play"), "Run command…").OnTriggered(showRunCommand)
+		m.AddAction2(icon("note-sticky"), "Notes…").OnTriggered(func() { showNotes(d.Id, deviceName(d), false) })
 		m.AddSeparator()
 		m.AddAction2(icon("copy"), "Copy node ID").OnTriggered(copyNodeID)
 		m.AddActionWithText("Copy SSH config…").OnTriggered(showSSHConfig)
-		gp := deviceTree.Viewport().MapToGlobalWithQPoint(pos)
 		m.Popup(gp)
 	})
 }

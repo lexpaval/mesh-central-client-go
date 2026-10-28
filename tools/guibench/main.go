@@ -530,6 +530,16 @@ const demoShell = "\x1b[1;32malice@lab-bench-1\x1b[0m:\x1b[1;34m~\x1b[0m$ uname 
 
 func deviceID(i int) string { return fmt.Sprintf("node//bench%05d", i) }
 
+// notes are the device and group notes the GUIs saved, by ID.
+var (
+	notesMu sync.Mutex
+	notes   = map[string]string{}
+)
+
+const demoDeviceNotes = "Bench PSU on outlet 3, power cycle from the PDU if the agent stops answering.\n" +
+	"Serial console: /dev/ttyUSB0 at 115200 on build-01.\n\n" +
+	"Reserved for firmware tests until the end of the month."
+
 // control is the session's control socket: login, device list, events.
 func control(w http.ResponseWriter, r *http.Request) {
 	// The user names the run, and the auth cookie the relay sees.
@@ -593,9 +603,21 @@ func control(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		var cmd struct{ Action string }
+		var cmd struct{ Action, ID, Notes string }
 		json.Unmarshal(msg, &cmd)
 		switch cmd.Action {
+		case "getNotes":
+			notesMu.Lock()
+			n, ok := notes[cmd.ID]
+			notesMu.Unlock()
+			if !ok && *shots != "" && cmd.ID == "1" {
+				n = demoDeviceNotes
+			}
+			send(map[string]string{"action": "getNotes", "id": cmd.ID, "notes": n})
+		case "setNotes":
+			notesMu.Lock()
+			notes[cmd.ID] = cmd.Notes
+			notesMu.Unlock()
 		case "authcookie":
 			send(map[string]string{"action": "authcookie", "cookie": user, "rcookie": user})
 		case "meshes":

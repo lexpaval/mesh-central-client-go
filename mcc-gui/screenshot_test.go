@@ -79,6 +79,22 @@ func TestScreenshot(t *testing.T) {
 		showAbout()
 		saveDialog(t, filepath.Join(dir, variant+"-about.png"))
 		selectDevice("1")
+		showNotes("1", deviceName(devices[deviceIdx["1"]]), false)
+	})
+	waitFor("notes", func() bool {
+		for _, w := range qt.QApplication_TopLevelWidgets() {
+			if w.IsVisible() && strings.HasPrefix(w.WindowTitle(), "Notes") {
+				for _, c := range w.Children() {
+					if c.Inherits("QPlainTextEdit") && !qt.UnsafeNewQPlainTextEdit(c.UnsafePointer()).IsReadOnly() {
+						return true
+					}
+				}
+			}
+		}
+		return false
+	})
+	mainthread.Wait(func() {
+		saveDialog(t, filepath.Join(dir, variant+"-notes.png"))
 		openShell(devices[deviceIdx["1"]], 1)
 	})
 	waitFor("shell output", func() bool {
