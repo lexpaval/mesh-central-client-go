@@ -325,16 +325,14 @@ func buildUI() *qt.QWidget {
 	filterRow.AddWidget(collapseBtn.QWidget)
 	buildTree()
 
-	deviceBtns = []*qt.QPushButton{
-		iconButton("Shell", "terminal", "Open a shell on the device"),
-		iconButton("Files", "folder", "Browse, transfer and edit the device's files"),
-		iconButton("Desktop", "display", "Show and control the device's screen"),
-		iconButton("Add route", "plus", "Forward a local port to the device"),
-		iconButton("Run command", "play", "Run a command on the device"),
-		iconButton("Copy", "copy", ""),
-		iconButton("", "rotate", "Reload the device list"),
-	}
-	shellBtn, copyBtn := deviceBtns[0], deviceBtns[5]
+	shellBtn := iconButton("Shell", "terminal", "Open a shell on the device")
+	filesBtn := iconButton("Files", "folder", "Browse, transfer and edit the device's files")
+	desktopBtn := iconButton("Desktop", "display", "Show and control the device's screen")
+	routeBtn := iconButton("Add route", "plus", "Forward a local port to the device")
+	runBtn := iconButton("Run command", "play", "Run a command on the device")
+	copyBtn := iconButton("Copy", "copy", "")
+	reloadBtn := iconButton("", "rotate", "Reload the device list")
+	deviceBtns = []*qt.QPushButton{shellBtn, filesBtn, desktopBtn, routeBtn, runBtn, copyBtn, reloadBtn}
 	shellBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			if menu := shellMenu(d); menu != nil {
@@ -344,18 +342,18 @@ func buildUI() *qt.QWidget {
 			}
 		}
 	})
-	deviceBtns[1].OnClicked(func() {
+	filesBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			openFilesTab(d)
 		}
 	})
-	deviceBtns[2].OnClicked(func() {
+	desktopBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			openDesktop(d)
 		}
 	})
-	deviceBtns[3].OnClicked(showAddRoute)
-	deviceBtns[4].OnClicked(showRunCommand)
+	routeBtn.OnClicked(showAddRoute)
+	runBtn.OnClicked(showRunCommand)
 	copyBtn.OnClicked(func() {
 		m := qt.NewQMenu(copyBtn.QWidget)
 		m.SetAttribute(qt.WA_DeleteOnClose)
@@ -363,7 +361,7 @@ func buildUI() *qt.QWidget {
 		m.AddActionWithText("SSH config…").OnTriggered(showSSHConfig)
 		popupBelow(m, copyBtn.QWidget)
 	})
-	deviceBtns[6].OnClicked(refreshDevices)
+	reloadBtn.OnClicked(refreshDevices)
 	btnRow := hbox(false)
 	for _, b := range deviceBtns {
 		btnRow.AddWidget(b.QWidget)

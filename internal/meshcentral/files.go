@@ -103,24 +103,10 @@ func NewFileSession(conn *websocket.Conn, notice func(string)) (*FileSession, er
 	if notice == nil {
 		notice = func(string) {}
 	}
-	s := &FileSession{conn: conn, notice: notice}
-	for {
-		conn.SetReadDeadline(time.Now().Add(fileReplyTimeout))
-		_, b, err := conn.ReadMessage()
-		if err != nil {
-			return nil, fmt.Errorf("the device did not answer (offline, or no file access): %w", err)
-		}
-		if string(b) == "c" || string(b) == "cr" { // "cr" when the session is recorded
-			if string(b) == "cr" {
-				notice("The server records this session")
-			}
-			break
-		}
-	}
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("5")); err != nil {
+	if err := joinTunnel(conn, 5, fileReplyTimeout, "file", notice); err != nil {
 		return nil, err
 	}
-	return s, nil
+	return &FileSession{conn: conn, notice: notice}, nil
 }
 
 // Broken reports that the channel failed, every call fails from then on

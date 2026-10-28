@@ -3,9 +3,6 @@ package meshcentral
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -19,12 +16,7 @@ func notesServer(t *testing.T, hidden, readOnly string) {
 	t.Helper()
 	var mu sync.Mutex
 	notes := map[string]string{}
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer ws.Close()
+	controlServer(t, func(ws *websocket.Conn) {
 		for {
 			var req struct{ Action, ID, Notes string }
 			if ws.ReadJSON(&req) != nil {
@@ -44,34 +36,10 @@ func notesServer(t *testing.T, hidden, readOnly string) {
 			}
 			mu.Unlock()
 		}
-	}))
-	t.Cleanup(server.Close)
-	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings.wsMu.Lock()
-	settings.WebSocket = ws
-	settings.wsMu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			var m map[string]interface{}
-			if ws.ReadJSON(&m) != nil {
-				return
-			}
-			if m["action"] == "getNotes" {
-				handleNotesCommand(m)
-			}
+	}, func(m map[string]interface{}) {
+		if m["action"] == "getNotes" {
+			handleNotesCommand(m)
 		}
-	}()
-	t.Cleanup(func() {
-		ws.Close()
-		<-done
-		settings.wsMu.Lock()
-		settings.WebSocket = nil
-		settings.wsMu.Unlock()
 	})
 }
 

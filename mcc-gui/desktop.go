@@ -138,17 +138,7 @@ func (dt *desktopTab) close() {
 
 func (dt *desktopTab) build() {
 	dt.w = qt.NewQWidget2()
-	button := func(text, iconName, tip string) *qt.QPushButton {
-		b := qt.NewQPushButton3(text)
-		b.SetToolTip(tip)
-		b.SetAccessibleName(text)
-		if iconName != "" {
-			set := func() { b.SetIcon(icon(iconName)) }
-			set()
-			dt.icons = append(dt.icons, set)
-		}
-		return b
-	}
+	button := func(text, iconName, tip string) *qt.QPushButton { return tabButton(&dt.icons, text, iconName, tip) }
 	dt.status = newElidedLabel("Connecting…")
 	dt.displaySel = qt.NewQComboBox2()
 	dt.displaySel.SetToolTip("The display shown")
@@ -191,12 +181,10 @@ func (dt *desktopTab) build() {
 	})
 	// Off until asked for: on, the local clipboard goes to the device right
 	// away, and whatever the device copies replaces it.
-	dt.clipBtn = button("Clipboard sync", "clipboard", "Automatically sync text with this device while its Desktop tab is active")
+	dt.clipBtn = button("Clipboard sync", "clipboard", clipTip)
 	dt.clipBtn.SetCheckable(true)
 	dt.clipBtn.OnToggled(func(bool) {
-		dt.cancelClipboard()
-		dt.clipKnown, dt.clipRemoteKnown = false, false
-		dt.clipSendError = ""
+		dt.resetClipboard()
 		dt.showSize()
 		dt.syncClipboard()
 		dt.view.SetFocus()
@@ -348,6 +336,15 @@ func (dt *desktopTab) cancelClipboard() {
 	}
 }
 
+// resetClipboard forgets both clipboards, the next sync starts over.
+func (dt *desktopTab) resetClipboard() {
+	dt.cancelClipboard()
+	dt.clipKnown, dt.clipRemoteKnown = false, false
+	dt.clipSendError = ""
+}
+
+const clipTip = "Automatically sync text with this device while its Desktop tab is active"
+
 func (dt *desktopTab) syncClipboard() {
 	if !dt.clipboardActive() {
 		dt.cancelClipboard()
@@ -416,13 +413,12 @@ func (dt *desktopTab) syncClipboard() {
 			if sending {
 				dt.clipSendError = ""
 				dt.clipRemote, dt.clipRemoteKnown = local, true
+				dt.clipBtn.SetToolTip(clipTip)
 				dt.showSize()
+				return
 			}
 			if dt.clipSendError == "" {
-				dt.clipBtn.SetToolTip("Automatically sync text with this device while its Desktop tab is active")
-			}
-			if sending {
-				return
+				dt.clipBtn.SetToolTip(clipTip)
 			}
 			// A remote reply must not replace text copied while it was in flight.
 			if clipboard.Text() != local || clipboard.MimeData().HasText() != hasText {
@@ -439,26 +435,13 @@ func (dt *desktopTab) syncClipboard() {
 
 func (dt *desktopTab) setLive(live bool) {
 	if !live {
-		dt.cancelClipboard()
-		dt.clipKnown, dt.clipRemoteKnown = false, false
-		dt.clipSendError = ""
+		dt.resetClipboard()
 	}
 	dt.live = live
 	dt.reconnect.SetVisible(!live)
 	for _, w := range []*qt.QWidget{dt.clipBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.displaySel.QWidget} {
 		w.SetEnabled(live)
 	}
-}
-
-func (dt *desktopTab) setStatus(text string, isErr bool) {
-	dt.status.SetText(text)
-	setPlainToolTip(dt.status.QWidget, text)
-	if isErr {
-		dt.status.SetStyleSheet("color: #e5534b")
-	} else {
-		dt.status.SetStyleSheet("")
-	}
-	dt.status.Update()
 }
 
 // showSize puts the screen size in the status, after the agent's notice.
@@ -468,7 +451,7 @@ func (dt *desktopTab) showSize() {
 	}
 	w, h := dt.sess.Size()
 	if w == 0 {
-		dt.setStatus(cmp.Or(dt.notice, "Waiting for the screen…"), false)
+		setStatus(dt.status, cmp.Or(dt.notice, "Waiting for the screen…"), false)
 		return
 	}
 	s := fmt.Sprintf("%d × %d", w, h)
@@ -478,7 +461,7 @@ func (dt *desktopTab) showSize() {
 	if dt.clipSendError != "" {
 		s += " · " + dt.clipSendError
 	}
-	dt.setStatus(s, false)
+	setStatus(dt.status, s, false)
 }
 
 // connect opens a session, replacing an ended one.
@@ -492,7 +475,7 @@ func (dt *desktopTab) connect() {
 	dt.displaySel.Clear()
 	dt.displaySel.SetVisible(false)
 	dt.reconnect.SetVisible(false)
-	dt.setStatus("Connecting…", false)
+	setStatus(dt.status, "Connecting…", false)
 	q := desktopQualities[dt.qualitySel.CurrentIndex()]
 	// Events of this attempt, on the Qt thread while it's the tab's latest.
 	later := func(f func()) {
@@ -542,7 +525,7 @@ func (dt *desktopTab) connect() {
 				return
 			}
 			if err != nil {
-				dt.setStatus(err.Error(), true)
+				setStatus(dt.status, err.Error(), true)
 				dt.setLive(false)
 				logf("%s: desktop failed: %v", dt.name, err)
 				return
@@ -557,10 +540,10 @@ func (dt *desktopTab) connect() {
 					dt.releaseKeysLocal()
 					dt.setLive(false)
 					if err != nil {
-						dt.setStatus(fmt.Sprintf("Session lost: %v", err), true)
+						setStatus(dt.status, fmt.Sprintf("Session lost: %v", err), true)
 						logf("%s: desktop lost: %v", dt.name, err)
 					} else {
-						dt.setStatus(cmp.Or(dt.notice, "The device closed the session"), false)
+						setStatus(dt.status, cmp.Or(dt.notice, "The device closed the session"), false)
 					}
 				})
 			}()
@@ -585,13 +568,13 @@ func (dt *desktopTab) queueFrame(r image.Rectangle) {
 		if dt.closed {
 			return
 		}
-		tr, sx, sy, ok := dt.target()
+		tr, scale, ok := dt.target()
 		if !ok {
 			return
 		}
 		defer tr.Delete()
-		rect := qt.NewQRect4(int(tr.X()+float64(r.Min.X)*sx)-1, int(tr.Y()+float64(r.Min.Y)*sy)-1,
-			int(float64(r.Dx())*sx)+3, int(float64(r.Dy())*sy)+3)
+		rect := qt.NewQRect4(int(tr.X()+float64(r.Min.X)*scale)-1, int(tr.Y()+float64(r.Min.Y)*scale)-1,
+			int(float64(r.Dx())*scale)+3, int(float64(r.Dy())*scale)+3)
 		dt.view.UpdateWithQRect(rect)
 		rect.Delete()
 	})
@@ -599,22 +582,22 @@ func (dt *desktopTab) queueFrame(r image.Rectangle) {
 
 // target is where the screen is drawn in the view, and the view pixels per
 // screen pixel.
-func (dt *desktopTab) target() (r *qt.QRectF, sx, sy float64, ok bool) {
+func (dt *desktopTab) target() (r *qt.QRectF, scale float64, ok bool) {
 	if dt.sess == nil {
-		return nil, 0, 0, false
+		return nil, 0, false
 	}
 	w, h := dt.sess.Size()
 	if w == 0 || h == 0 {
-		return nil, 0, 0, false
+		return nil, 0, false
 	}
 	dpr := dt.view.DevicePixelRatioF()
-	scale := 1 / dpr // a screen pixel to a device pixel
+	scale = 1 / dpr // a screen pixel to a device pixel
 	vw, vh := float64(dt.view.Width()), float64(dt.view.Height())
 	if dt.fitBtn.IsChecked() {
 		scale = min(vw/float64(w), vh/float64(h), scale)
 	}
 	tw, th := float64(w)*scale, float64(h)*scale
-	return qt.NewQRectF4((vw-tw)/2, (vh-th)/2, tw, th), scale, scale, true
+	return qt.NewQRectF4((vw-tw)/2, (vh-th)/2, tw, th), scale, true
 }
 
 // relayout sizes the view: the scroll area's viewport when fitting, the
@@ -634,14 +617,21 @@ func (dt *desktopTab) relayout() {
 func (dt *desktopTab) paint(e *qt.QPaintEvent) {
 	p := qt.NewQPainter2(dt.view.QPaintDevice)
 	defer p.Delete()
-	bg := qt.NewQColor3(0, 0, 0)
-	defer bg.Delete()
-	p.FillRect6(e.Rect(), bg)
-	tr, scale, _, ok := dt.target()
+	tr, scale, ok := dt.target()
+	if ok {
+		defer tr.Delete()
+	}
+	// The frame is opaque, only what it doesn't cover needs the background.
+	area := qt.NewQRectF5(e.Rect())
+	defer area.Delete()
+	if !ok || !tr.Contains(area) {
+		bg := qt.NewQColor3(0, 0, 0)
+		p.FillRect6(e.Rect(), bg)
+		bg.Delete()
+	}
 	if !ok {
 		return
 	}
-	defer tr.Delete()
 	if scale*dt.view.DevicePixelRatioF() != 1 {
 		p.SetRenderHint2(qt.QPainter__SmoothPixmapTransform, true)
 	}
@@ -666,13 +656,13 @@ func (dt *desktopTab) paint(e *qt.QPaintEvent) {
 
 // toRemote maps a view position to screen pixels, ok while on the screen.
 func (dt *desktopTab) toRemote(pos *qt.QPointF) (x, y int, ok bool) {
-	tr, sx, sy, ok := dt.target()
+	tr, scale, ok := dt.target()
 	if !ok {
 		return 0, 0, false
 	}
 	defer tr.Delete()
 	w, h := dt.sess.Size()
-	fx, fy := (pos.X()-tr.X())/sx, (pos.Y()-tr.Y())/sy
+	fx, fy := (pos.X()-tr.X())/scale, (pos.Y()-tr.Y())/scale
 	if fx < 0 || fy < 0 || fx >= float64(w) || fy >= float64(h) {
 		return min(max(int(fx), 0), w-1), min(max(int(fy), 0), h-1), false
 	}
@@ -833,20 +823,11 @@ var navKeys = map[qt.Key]int{
 	qt.Key_Insert: 0x2d, qt.Key_Delete: 0x2e,
 }
 
-var otherKeys = func() map[qt.Key]struct {
-	vk  int
-	ext bool
-} {
-	m := map[qt.Key]struct {
-		vk  int
-		ext bool
-	}{}
+var otherKeys = func() map[qt.Key]sentKey {
+	m := map[qt.Key]sentKey{}
 	add := func(vk int, ext bool, keys ...qt.Key) {
 		for _, k := range keys {
-			m[k] = struct {
-				vk  int
-				ext bool
-			}{vk, ext}
+			m[k] = sentKey{vk: vk, ext: ext}
 		}
 	}
 	add(0x08, false, qt.Key_Backspace)

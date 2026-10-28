@@ -53,7 +53,7 @@ func openEditor(ft *filesTab, path string) {
 	_, name := meshcentral.SplitPath(path)
 	ch := ft.browse
 	ch.retain()
-	ft.setStatus("Opening "+name+"…", false)
+	setStatus(ft.status, "Opening "+name+"…", false)
 	var data []byte
 	ch.do(func(s *meshcentral.FileSession) error {
 		var buf bytes.Buffer
@@ -67,7 +67,7 @@ func openEditor(ft *filesTab, path string) {
 		return nil
 	}, func(err error) {
 		if !ft.closed {
-			ft.setStatus("", false)
+			setStatus(ft.status, "", false)
 		}
 		if err != nil {
 			ch.release()
@@ -184,7 +184,7 @@ func (ed *editor) save(force bool, then func()) {
 	}
 	ed.saving = true
 	ed.saveBtn.SetEnabled(false)
-	ed.setStatus("Saving…", false)
+	setStatus(ed.status, "Saving…", false)
 	plain := ed.text.ToPlainText()
 	data := []byte(plain)
 	if ed.crlf {
@@ -212,10 +212,10 @@ func (ed *editor) save(force bool, then func()) {
 		_, name := meshcentral.SplitPath(ed.path)
 		switch {
 		case err != nil:
-			ed.setStatus("Not saved: "+err.Error(), true)
+			setStatus(ed.status, "Not saved: "+err.Error(), true)
 			showError(err)
 		case changed:
-			ed.setStatus("Not saved", true)
+			setStatus(ed.status, "Not saved", true)
 			b := qt.NewQMessageBox6(qt.QMessageBox__Warning, "Changed on the device",
 				name+" changed on "+ed.device+" since you opened it. Overwrite it with your version?",
 				qt.QMessageBox__Yes|qt.QMessageBox__No, ed.w)
@@ -233,7 +233,7 @@ func (ed *editor) save(force bool, then func()) {
 			if ed.text.ToPlainText() == plain {
 				ed.text.Document().SetModifiedWithBool(false)
 			}
-			ed.setStatus("Saved "+time.Now().Format("15:04:05"), false)
+			setStatus(ed.status, "Saved "+time.Now().Format("15:04:05"), false)
 			logf("%s: saved %s", ed.device, ed.path)
 			dir, _ := meshcentral.SplitPath(ed.path)
 			refreshFolder(ed.nodeID, dir)
@@ -242,16 +242,6 @@ func (ed *editor) save(force bool, then func()) {
 			}
 		}
 	})
-}
-
-func (ed *editor) setStatus(text string, isErr bool) {
-	ed.status.SetText(text)
-	if isErr {
-		ed.status.SetStyleSheet("color: #e5534b")
-	} else {
-		ed.status.SetStyleSheet("")
-	}
-	ed.status.Update()
 }
 
 // unsavedEditors counts the editors with changes not saved.

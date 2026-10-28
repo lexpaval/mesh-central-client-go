@@ -20,12 +20,7 @@ import (
 
 func TestDesktopClipboard(t *testing.T) {
 	var clipboard string
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
-		if err != nil {
-			return
-		}
-		defer ws.Close()
+	controlServer(t, func(ws *websocket.Conn) {
 		for {
 			var m map[string]interface{}
 			if ws.ReadJSON(&m) != nil {
@@ -47,33 +42,7 @@ func TestDesktopClipboard(t *testing.T) {
 				ws.WriteJSON(map[string]any{"action": "msg", "nodeid": m["nodeid"], "type": "getclip", "tag": m["tag"], "data": clipboard})
 			}
 		}
-	}))
-	defer srv.Close()
-	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings.wsMu.Lock()
-	settings.WebSocket = ws
-	settings.wsMu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			var m map[string]interface{}
-			if ws.ReadJSON(&m) != nil {
-				return
-			}
-			handleClipboardCommand(m)
-		}
-	}()
-	defer func() {
-		ws.Close()
-		<-done
-		settings.wsMu.Lock()
-		settings.WebSocket = nil
-		settings.wsMu.Unlock()
-	}()
+	}, handleClipboardCommand)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	for _, text := range []string{"héllo \"remote\"\n世界 👋", ""} {
@@ -341,10 +310,10 @@ func TestDesktopLimits(t *testing.T) {
 	if err := d.data(cmd(kvmScreen, be16(65535)...)); err != nil {
 		t.Fatal(err) // too short, ignored
 	}
-	if err := d.data(cmd(kvmScreen, append(be16(65535), be16(65535)...)...)); err == nil || d.pix != nil {
+	if err := d.data(cmd(kvmScreen, be16(65535, 65535)...)); err == nil || d.pix != nil {
 		t.Error("a 65535 × 65535 screen was allocated")
 	}
-	if err := d.data(cmd(kvmScreen, append(be16(64), be16(48)...)...)); err != nil {
+	if err := d.data(cmd(kvmScreen, be16(64, 48)...)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -353,7 +322,7 @@ func TestDesktopLimits(t *testing.T) {
 	jpeg.Encode(&buf, image.NewGray(image.Rect(0, 0, 8, 8)), nil)
 	huge := buf.Bytes()
 	sof := bytes.Index(huge, []byte{0xff, 0xc0})
-	copy(huge[sof+5:], append(be16(60000), be16(60000)...))
+	copy(huge[sof+5:], be16(60000, 60000))
 	painted := false
 	d.ev.Frame = func(image.Rectangle) { painted = true }
 	if err := d.data(cmd(kvmTile, append([]byte{0, 0, 0, 0}, huge...)...)); err != nil || painted {
@@ -367,5 +336,26 @@ func TestDesktopLimits(t *testing.T) {
 	}
 	if err := d.data(cmd(kvmGetDisplays, append(be16(2), make([]byte, 2*2+2)...)...)); err != nil || !listed {
 		t.Errorf("2 displays: %v, listed %v", err, listed)
+	}
+}
+
+// blit's YCbCr path matches image.YCbCr.At for every subsampling.
+func TestBlitYCbCr(t *testing.T) {
+	for ratio := image.YCbCrSubsampleRatio444; ratio <= image.YCbCrSubsampleRatio410; ratio++ {
+		src := image.NewYCbCr(image.Rect(0, 0, 13, 9), ratio)
+		for i := range src.Y {
+			src.Y[i] = byte(i * 7)
+		}
+		for i := range src.Cb {
+			src.Cb[i], src.Cr[i] = byte(i*13), byte(255-i*5)
+		}
+		const w, h = 20, 12
+		got := make([]byte, w*h*4)
+		blit(got, w, h, src, 9, 5) // clipped on the right and bottom
+		want := make([]byte, w*h*4)
+		blit(want, w, h, struct{ image.Image }{src}, 9, 5) // the generic path
+		if !bytes.Equal(got, want) {
+			t.Errorf("subsampling %v differs", ratio)
+		}
 	}
 }

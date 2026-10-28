@@ -12,16 +12,51 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-func deviceQueryServer(t *testing.T, empty bool) *atomic.Bool {
+// controlServer serves handle as the control socket for the rest of the
+// test, the client's reader passing what it sends to dispatch.
+func controlServer(t *testing.T, handle func(ws *websocket.Conn), dispatch func(map[string]interface{})) {
 	t.Helper()
-	answerNodes := new(atomic.Bool)
-	answerNodes.Store(true)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
 		if err != nil {
 			return
 		}
 		defer ws.Close()
+		handle(ws)
+	}))
+	t.Cleanup(server.Close)
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings.wsMu.Lock()
+	settings.WebSocket = ws
+	settings.wsMu.Unlock()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			var m map[string]interface{}
+			if ws.ReadJSON(&m) != nil {
+				return
+			}
+			dispatch(m)
+		}
+	}()
+	t.Cleanup(func() {
+		ws.Close()
+		<-done
+		settings.wsMu.Lock()
+		settings.WebSocket = nil
+		settings.wsMu.Unlock()
+	})
+}
+
+func deviceQueryServer(t *testing.T, empty bool) *atomic.Bool {
+	t.Helper()
+	answerNodes := new(atomic.Bool)
+	answerNodes.Store(true)
+	controlServer(t, func(ws *websocket.Conn) {
 		for {
 			var request map[string]interface{}
 			if ws.ReadJSON(&request) != nil {
@@ -40,37 +75,15 @@ func deviceQueryServer(t *testing.T, empty bool) *atomic.Bool {
 				}
 			}
 		}
-	}))
-	t.Cleanup(server.Close)
-	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(server.URL, "http"), nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	settings.wsMu.Lock()
-	settings.WebSocket = ws
-	settings.wsMu.Unlock()
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		for {
-			var response map[string]interface{}
-			if ws.ReadJSON(&response) != nil {
-				return
-			}
-			switch response["action"] {
-			case "meshes":
-				handleMeshesCommand(response)
-			case "nodes":
-				handleNodesCommand(response)
-			}
+	}, func(m map[string]interface{}) {
+		switch m["action"] {
+		case "meshes":
+			handleMeshesCommand(m)
+		case "nodes":
+			handleNodesCommand(m)
 		}
-	}()
+	})
 	t.Cleanup(func() {
-		ws.Close()
-		<-done
-		settings.wsMu.Lock()
-		settings.WebSocket = nil
-		settings.wsMu.Unlock()
 		settings.deviceMu.Lock()
 		settings.Devices, settings.groups = nil, nil
 		settings.deviceMu.Unlock()

@@ -178,14 +178,7 @@ func (ft *filesTab) close() {
 
 func (ft *filesTab) build() {
 	ft.w = qt.NewQWidget2()
-	button := func(text, iconName, tip string) *qt.QPushButton {
-		b := qt.NewQPushButton3(text)
-		b.SetToolTip(tip)
-		set := func() { b.SetIcon(icon(iconName)) }
-		set()
-		ft.icons = append(ft.icons, set)
-		return b
-	}
+	button := func(text, iconName, tip string) *qt.QPushButton { return tabButton(&ft.icons, text, iconName, tip) }
 	ft.upBtn = button("", "arrow-up", "Parent folder (Backspace)")
 	ft.upBtn.OnClicked(ft.goUp)
 	ft.pathEdit = qt.NewQLineEdit2()
@@ -366,20 +359,9 @@ func (ft *filesTab) retheme() {
 func (ft *filesTab) notice(msg string) {
 	mainthread.Start(func() {
 		if !ft.closed {
-			ft.setStatus(msg, false)
+			setStatus(ft.status, msg, false)
 		}
 	})
-}
-
-func (ft *filesTab) setStatus(text string, isErr bool) {
-	ft.status.SetText(text)
-	setPlainToolTip(ft.status.QWidget, text)
-	if isErr {
-		ft.status.SetStyleSheet("color: #e5534b")
-	} else {
-		ft.status.SetStyleSheet("")
-	}
-	ft.status.Update()
 }
 
 // navigate lists path, "" for the root, and shows it once listed.
@@ -390,7 +372,7 @@ func (ft *filesTab) navigate(path string) {
 	ft.loads++
 	load := ft.loads
 	var entries []meshcentral.FileEntry
-	ft.setStatus("Loading…", false)
+	setStatus(ft.status, "Loading…", false)
 	ft.browse.do(func(s *meshcentral.FileSession) (err error) {
 		entries, err = s.List(path)
 		return err
@@ -399,7 +381,7 @@ func (ft *filesTab) navigate(path string) {
 			return
 		}
 		if err != nil {
-			ft.setStatus(err.Error(), true)
+			setStatus(ft.status, err.Error(), true)
 			ft.pathEdit.SetText(ft.cur)
 			return
 		}
@@ -519,11 +501,11 @@ func (ft *filesTab) applyFilter() {
 	}
 	switch {
 	case q == "":
-		ft.setStatus(ft.counts, false)
+		setStatus(ft.status, ft.counts, false)
 	case shown == 0:
-		ft.setStatus("Nothing here matches "+ft.filter.Text(), false)
+		setStatus(ft.status, "Nothing here matches "+ft.filter.Text(), false)
 	default:
-		ft.setStatus(fmt.Sprintf("%d of %d match", shown, len(ft.entries)), false)
+		setStatus(ft.status, fmt.Sprintf("%d of %d match", shown, len(ft.entries)), false)
 	}
 	ft.updateButtons()
 }
@@ -652,7 +634,7 @@ func (ft *filesTab) contextMenu(pos *qt.QPoint) {
 // selecting selectName. Errors show in a dialog.
 func (ft *filesTab) change(f func(*meshcentral.FileSession) error, selectName string) {
 	dir := ft.cur
-	ft.setStatus("Working…", false)
+	setStatus(ft.status, "Working…", false)
 	ft.browse.do(f, func(err error) {
 		if err != nil {
 			showError(err)
@@ -888,7 +870,7 @@ func (ft *filesTab) startNext() {
 		case err != nil:
 			logf("%s: %v", ft.name, err)
 			if !ft.closed {
-				ft.setStatus(err.Error(), true)
+				setStatus(ft.status, err.Error(), true)
 				showError(err)
 			}
 		case t.upload:
@@ -903,7 +885,7 @@ func (ft *filesTab) startNext() {
 			ft.selectAfter = name
 			ft.navigate(ft.cur)
 		} else if err == nil {
-			ft.setStatus("Done", false)
+			setStatus(ft.status, "Done", false)
 		}
 		ft.startNext()
 	})
@@ -980,7 +962,7 @@ func (ft *filesTab) showProgress() {
 	if len(ft.queue) > 0 {
 		text += fmt.Sprintf(" · %d more queued", len(ft.queue))
 	}
-	ft.setStatus(text, false)
+	setStatus(ft.status, text, false)
 	if t.size > 0 {
 		ft.progress.SetValue(int(min(n*1000/t.size, 1000)))
 	}

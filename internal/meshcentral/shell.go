@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -34,7 +35,7 @@ func randomHex() (string, error) {
 const maxTunnelMessage = maxDesktopCommand + 8
 
 // dialTunnel asks the agent on nodeID to join a relay tunnel for protocol p
-// (1 terminal, 5 files) and dials our side of it.
+// (1 terminal, 2 desktop, 5 files) and dials our side of it.
 func dialTunnel(nodeID string, p int) (*websocket.Conn, error) {
 	id, _ := randomHex()
 
@@ -59,6 +60,25 @@ func dialTunnel(nodeID string, p int) (*websocket.Conn, error) {
 	}
 	conn.SetReadLimit(maxTunnelMessage)
 	return conn, nil
+}
+
+// joinTunnel waits up to timeout for the device to join a tunnel conn just
+// dialed, then starts protocol p on it. what names the access it needs.
+func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string, notice func(string)) error {
+	for {
+		conn.SetReadDeadline(time.Now().Add(timeout))
+		_, b, err := conn.ReadMessage()
+		if err != nil {
+			return fmt.Errorf("the device did not answer (offline, or no %s access): %w", what, err)
+		}
+		if string(b) == "c" || string(b) == "cr" { // "cr" when the session is recorded
+			if string(b) == "cr" {
+				notice("The server records this session")
+			}
+			break
+		}
+	}
+	return conn.WriteMessage(websocket.TextMessage, []byte(strconv.Itoa(p)))
 }
 
 // runShellSession pipes one tunnel session between input and out. Returns

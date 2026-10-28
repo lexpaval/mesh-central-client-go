@@ -188,6 +188,38 @@ func newElidedLabel(text string) *qt.QLabel {
 	return l
 }
 
+// errorStyle colors error text.
+const errorStyle = "color: #e5534b"
+
+// setStatus shows a status line, red for an error, with the whole text in
+// its tooltip since status labels elide.
+func setStatus(l *qt.QLabel, text string, isErr bool) {
+	l.SetText(text)
+	setPlainToolTip(l.QWidget, text)
+	if isErr {
+		l.SetStyleSheet(errorStyle)
+	} else {
+		l.SetStyleSheet("")
+	}
+	l.Update()
+}
+
+// tabButton is iconButton for a tab's widgets, its icon setter kept in
+// icons for retheming since the tab may close. iconName may be empty.
+func tabButton(icons *[]func(), text, iconName, tip string) *qt.QPushButton {
+	b := qt.NewQPushButton3(text)
+	b.SetToolTip(tip)
+	if text != "" {
+		b.SetAccessibleName(text)
+	}
+	if iconName != "" {
+		set := func() { b.SetIcon(icon(iconName)) }
+		set()
+		*icons = append(*icons, set)
+	}
+	return b
+}
+
 // setPlainToolTip sets a tooltip of remote text, escaped since Qt renders
 // tooltips that look like HTML.
 func setPlainToolTip(w *qt.QWidget, text string) {
@@ -251,7 +283,7 @@ func newForm(title, okText string) *form {
 	f.fl.SetFieldGrowthPolicy(qt.QFormLayout__AllNonFixedFieldsGrow)
 	v.AddLayout(f.fl.QLayout)
 	f.errLbl = qt.NewQLabel2()
-	f.errLbl.SetStyleSheet("color: #e5534b")
+	f.errLbl.SetStyleSheet(errorStyle)
 	f.errLbl.SetVisible(false)
 	v.AddWidget(f.errLbl.QWidget)
 	box := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Ok | qt.QDialogButtonBox__Cancel)

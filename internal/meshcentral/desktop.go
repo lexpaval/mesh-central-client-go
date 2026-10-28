@@ -31,7 +31,6 @@ const (
 	kvmMouse       = 2
 	kvmTile        = 3
 	kvmCompression = 5
-	kvmRefresh     = 6
 	kvmScreen      = 7
 	kvmPause       = 8
 	kvmCtrlAltDel  = 10
@@ -70,15 +69,12 @@ type DesktopEvents struct {
 	// Notice gets the agent's status messages, such as waiting for the
 	// local user to allow access.
 	Notice func(string)
-	// Cursor is the remote mouse cursor's shape, an index into
-	// DesktopCursors.
+	// Cursor is the remote mouse cursor's shape, the agent's index: default,
+	// progress, crosshair, pointer, help, text, no-drop, move, nesw-resize,
+	// ns-resize, nwse-resize, w-resize, alias, wait, none, not-allowed,
+	// col-resize, row-resize, copy, zoom-in, zoom-out as CSS names them.
 	Cursor func(int)
 }
-
-// DesktopCursors names the agent's cursor shapes by index, as CSS cursors.
-var DesktopCursors = []string{"default", "progress", "crosshair", "pointer", "help", "text", "no-drop", "move",
-	"nesw-resize", "ns-resize", "nwse-resize", "w-resize", "alias", "wait", "none", "not-allowed",
-	"col-resize", "row-resize", "copy", "zoom-in", "zoom-out"}
 
 // Desktop is one remote desktop session. Input methods may be called from
 // any goroutine and don't block on the network.
@@ -134,23 +130,10 @@ func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 func NewDesktop(conn *websocket.Conn, ev DesktopEvents) (*Desktop, error) {
 	d := &Desktop{conn: conn, ev: ev, out: make(chan []byte, 1024), done: make(chan struct{}), quality: 50, frameMs: 100}
 	conn.SetReadLimit(maxTunnelMessage) // dialTunnel's, for conns dialed elsewhere (tests)
-	for {
-		conn.SetReadDeadline(time.Now().Add(desktopJoinTimeout))
-		_, b, err := conn.ReadMessage()
-		if err != nil {
-			return nil, fmt.Errorf("the device did not answer (offline, or no desktop access): %w", err)
-		}
-		if string(b) == "c" || string(b) == "cr" { // "cr" when the session is recorded
-			if string(b) == "cr" {
-				d.notice("The server records this session")
-			}
-			break
-		}
-	}
-	conn.SetReadDeadline(time.Time{})
-	if err := conn.WriteMessage(websocket.TextMessage, []byte("2")); err != nil {
+	if err := joinTunnel(conn, 2, desktopJoinTimeout, "desktop", d.notice); err != nil {
 		return nil, err
 	}
+	conn.SetReadDeadline(time.Time{})
 	go d.write()
 	go d.read()
 	return d, nil
@@ -242,7 +225,14 @@ func kvmCmd(cmd int, payload ...byte) []byte {
 	return append(b, payload...)
 }
 
-func be16(v int) []byte { return []byte{byte(v >> 8), byte(v)} }
+// be16 is vs as big-endian 16-bit values.
+func be16(vs ...int) []byte {
+	b := make([]byte, 0, 2*len(vs))
+	for _, v := range vs {
+		b = binary.BigEndian.AppendUint16(b, uint16(v))
+	}
+	return b
+}
 
 func (d *Desktop) read() {
 	defer close(d.done)
@@ -317,7 +307,7 @@ func (d *Desktop) data(b []byte) error {
 		return fmt.Errorf("the device sent a %d MB command, over the %d MB limit", size>>20, maxDesktopCommand>>20)
 	}
 	if size > len(b) {
-		d.acc, d.accSize, d.accCmd = append([]byte(nil), b...), size, cmd
+		d.acc, d.accSize, d.accCmd = append(make([]byte, 0, size), b...), size, cmd
 		return nil
 	}
 	return d.command(cmd, b[:size])
@@ -412,11 +402,7 @@ func (d *Desktop) command(cmd int, v []byte) error {
 		}
 	case kvmCursor:
 		if len(v) == 5 && d.ev.Cursor != nil {
-			c := int(v[4])
-			if c >= len(DesktopCursors) {
-				c = 0
-			}
-			d.ev.Cursor(c)
+			d.ev.Cursor(int(v[4]))
 		}
 	}
 	return nil
@@ -424,7 +410,7 @@ func (d *Desktop) command(cmd int, v []byte) error {
 
 func compression(quality, frameMs int) []byte {
 	// JPEG at quality, no scaling (1024 is 100 %), a frame every frameMs.
-	return kvmCmd(kvmCompression, append([]byte{1, byte(quality)}, append(be16(1024), be16(frameMs)...)...)...)
+	return kvmCmd(kvmCompression, append([]byte{1, byte(quality)}, be16(1024, frameMs)...)...)
 }
 
 // blit copies img to (x, y) of the w*h frame pix, returning the rectangle
@@ -437,15 +423,33 @@ func blit(pix []byte, w, h int, img image.Image, x, y int) image.Rectangle {
 	}
 	switch src := img.(type) {
 	case *image.YCbCr:
+		// COffset with the subsampling worked out once, not per pixel.
+		hs, vs := 0, 0
+		switch src.SubsampleRatio {
+		case image.YCbCrSubsampleRatio422:
+			hs = 1
+		case image.YCbCrSubsampleRatio420:
+			hs, vs = 1, 1
+		case image.YCbCrSubsampleRatio440:
+			vs = 1
+		case image.YCbCrSubsampleRatio411:
+			hs = 2
+		case image.YCbCrSubsampleRatio410:
+			hs, vs = 2, 1
+		}
+		m := src.Rect.Min
 		for py := r.Min.Y; py < r.Max.Y; py++ {
 			sy := b.Min.Y + py - y
+			sx := b.Min.X + r.Min.X - x
+			yi := src.YOffset(sx, sy)
+			crow := (sy>>vs-m.Y>>vs)*src.CStride - m.X>>hs
 			o := (py*w + r.Min.X) * 4
-			for px := r.Min.X; px < r.Max.X; px++ {
-				sx := b.Min.X + px - x
-				yi, ci := src.YOffset(sx, sy), src.COffset(sx, sy)
+			for ; o < (py*w+r.Max.X)*4; o += 4 {
+				ci := crow + sx>>hs
 				cr, cg, cb := ycbcr(src.Y[yi], src.Cb[ci], src.Cr[ci])
 				pix[o], pix[o+1], pix[o+2] = cb, cg, cr
-				o += 4
+				yi++
+				sx++
 			}
 		}
 	case *image.Gray:
@@ -495,7 +499,7 @@ func (d *Desktop) ready() bool {
 // MouseMove moves the remote pointer to (x, y) in screen pixels.
 func (d *Desktop) MouseMove(x, y int) {
 	if d.ready() {
-		d.send(kvmCmd(kvmMouse, append([]byte{0, 0}, append(be16(x), be16(y)...)...)...), true)
+		d.send(kvmCmd(kvmMouse, append([]byte{0, 0}, be16(x, y)...)...), true)
 	}
 }
 
@@ -508,7 +512,7 @@ func (d *Desktop) MouseButton(button int, down bool, x, y int) {
 	if !down {
 		button *= 2
 	}
-	d.send(kvmCmd(kvmMouse, append([]byte{0, byte(button)}, append(be16(x), be16(y)...)...)...), false)
+	d.send(kvmCmd(kvmMouse, append([]byte{0, byte(button)}, be16(x, y)...)...), false)
 }
 
 // MouseWheel scrolls at (x, y), delta in 1/120 notches as Qt and Windows
@@ -526,7 +530,7 @@ func (d *Desktop) MouseWheel(delta, x, y int) {
 	} else {
 		dv = uint16(v)
 	}
-	d.send(kvmCmd(kvmMouse, append([]byte{0, 0}, append(append(be16(x), be16(y)...), be16(int(dv))...)...)...), false)
+	d.send(kvmCmd(kvmMouse, append([]byte{0, 0}, be16(x, y, int(dv))...)...), false)
 }
 
 // Key presses or releases the key with Windows virtual-key code vk.
@@ -570,9 +574,6 @@ func (d *Desktop) Unicode(r rune, down bool) {
 
 // CtrlAltDel sends Ctrl+Alt+Del, which a local keyboard can't pass on.
 func (d *Desktop) CtrlAltDel() { d.send(kvmCmd(kvmCtrlAltDel), false) }
-
-// Refresh asks for the whole screen again.
-func (d *Desktop) Refresh() { d.send(kvmCmd(kvmRefresh), false) }
 
 // GetDisplays asks for the device's displays, answered through
 // DesktopEvents.Displays.

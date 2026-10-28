@@ -180,7 +180,7 @@ func promptSSO(server string) (string, bool) {
 		entry.SetPlaceholderText("mcrouter://" + server + "/control.ashx?c=...")
 		v.AddWidget(entry.QWidget)
 		errLbl := qt.NewQLabel2()
-		errLbl.SetStyleSheet("color: #e5534b")
+		errLbl.SetStyleSheet(errorStyle)
 		errLbl.SetVisible(false)
 		v.AddWidget(errLbl.QWidget)
 		openBtn := qt.NewQPushButton3("Open sign-in page")

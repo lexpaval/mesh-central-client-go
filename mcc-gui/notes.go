@@ -28,7 +28,7 @@ func showNotes(id, name string, group bool) {
 	edit.SetReadOnly(true)
 	v.AddWidget(edit.QWidget)
 	errLbl := qt.NewQLabel2()
-	errLbl.SetStyleSheet("color: #e5534b")
+	errLbl.SetStyleSheet(errorStyle)
 	errLbl.SetWordWrap(true)
 	errLbl.SetVisible(false)
 	v.AddWidget(errLbl.QWidget)

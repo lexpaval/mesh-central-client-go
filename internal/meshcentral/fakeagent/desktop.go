@@ -7,6 +7,7 @@ import (
 	"image/color"
 	"image/draw"
 	"image/jpeg"
+	"maps"
 	"net/http"
 	"slices"
 	"sync"
@@ -68,13 +69,7 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":"`+msg+`","msgid":`+string(rune('1'+i))+`}`))
 	}
 
-	ids := slices.Sorted(func(yield func(int) bool) {
-		for id := range a.Screens {
-			if !yield(id) {
-				return
-			}
-		}
-	})
+	ids := slices.Sorted(maps.Keys(a.Screens))
 	display := ids[0]
 	screen := func() *image.RGBA { return a.Screens[display] }
 	sendSize := func() {
