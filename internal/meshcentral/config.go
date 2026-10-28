@@ -1,10 +1,12 @@
 package meshcentral
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/gorilla/websocket"
@@ -51,10 +53,16 @@ type Settings struct {
 	groupChan             chan struct{}
 	Insecure              bool
 	profileName           string // profile StartSocket logged in with, for the 2FA cookie and login token
-	replyChan             chan struct{}
+	replyMu               sync.Mutex
+	replyChan             chan struct{} // closed by replied, guarded by replyMu
 	debug                 bool
-	closing               bool
-	initialAuthDone       bool
+	closing               atomic.Bool // set by StopSocket, read by the socket reader
+	// The running socket reader's end and a cancel for its reconnect dials,
+	// guarded by wsMu. StopSocket waits for the reader so it can't outlive
+	// its session and act on the next one.
+	readerDone      chan struct{}
+	cancelDial      context.CancelFunc
+	initialAuthDone bool
 }
 
 var settings Settings

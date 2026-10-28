@@ -82,7 +82,7 @@ func TestLoginClearsReadDeadline(t *testing.T) {
 	OnConnectionLost = func(err error) { lost = err }
 	onServerWebSocket(ws, func() (*websocket.Conn, error) {
 		t.Error("authenticated socket reached its login deadline")
-		settings.closing = true
+		settings.closing.Store(true)
 		return nil, errors.New("test stopped reconnecting")
 	})
 	if !settings.initialAuthDone || len(settings.AuthErrChannel) != 0 {
@@ -126,20 +126,22 @@ func TestControlSocketCloseNotification(t *testing.T) {
 			defer ws.Close()
 
 			lostHook, authErrors := OnConnectionLost, settings.AuthErrChannel
-			authenticated, closing := settings.initialAuthDone, settings.closing
+			authenticated, closing := settings.initialAuthDone, settings.closing.Load()
 			defer func() {
 				OnConnectionLost, settings.AuthErrChannel = lostHook, authErrors
-				settings.initialAuthDone, settings.closing = authenticated, closing
+				settings.initialAuthDone = authenticated
+				settings.closing.Store(closing)
 			}()
 			var lost []error
 			OnConnectionLost = func(err error) { lost = append(lost, err) }
 			settings.AuthErrChannel = make(chan error, 1)
-			settings.initialAuthDone, settings.closing = tc.authenticated, tc.stopped
+			settings.initialAuthDone = tc.authenticated
+			settings.closing.Store(tc.stopped)
 			retries := 0
 			onServerWebSocket(ws, func() (*websocket.Conn, error) {
 				retries++
 				// Stop after the first retry so this test doesn't wait through backoff.
-				settings.closing = true
+				settings.closing.Store(true)
 				return nil, errors.New("test stopped reconnecting")
 			})
 			wantLost, wantAuth, wantRetries := 0, 0, 0

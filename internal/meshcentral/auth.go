@@ -1,6 +1,7 @@
 package meshcentral
 
 import (
+	"context"
 	"crypto/tls"
 	"encoding/base64"
 	"encoding/json"
@@ -84,6 +85,7 @@ func StartSocketAs(p config.Profile) error {
 
 	urlStr := strings.Replace(settings.ServerURL, "meshrelay.ashx", "control.ashx", 1)
 
+	var dialCtx context.Context
 	dial := func() (*websocket.Conn, error) {
 		options, err := url.Parse(urlStr)
 		if err != nil {
@@ -122,7 +124,7 @@ func StartSocketAs(p config.Profile) error {
 			HandshakeTimeout: 10 * time.Second,
 			TLSClientConfig:  &tls.Config{InsecureSkipVerify: settings.Insecure},
 		}
-		conn, _, err := dialer.Dial(options.String(), headers)
+		conn, _, err := dialer.DialContext(dialCtx, options.String(), headers)
 		return conn, err
 	}
 
@@ -131,11 +133,14 @@ func StartSocketAs(p config.Profile) error {
 		// always takes the first-time branch and closes WebChannel
 		settings.ACookie = ""
 		settings.RCookie = ""
-		settings.closing = false
+		settings.closing.Store(false)
 		settings.AuthErrChannel = make(chan error, 1)
+		var cancel context.CancelFunc
+		dialCtx, cancel = context.WithCancel(context.Background())
 
 		conn, err := dial()
 		if err != nil {
+			cancel()
 			return fmt.Errorf("unable to connect to server: %w", err)
 		}
 		conn.SetReadDeadline(time.Now().Add(controlAuthTimeout))
@@ -145,10 +150,15 @@ func StartSocketAs(p config.Profile) error {
 		}
 
 		settings.WebChannel = make(chan struct{})
+		done := make(chan struct{})
 		settings.wsMu.Lock()
 		settings.WebSocket = conn
+		settings.readerDone, settings.cancelDial = done, cancel
 		settings.wsMu.Unlock()
-		go onServerWebSocket(conn, dial)
+		go func() {
+			defer close(done)
+			onServerWebSocket(conn, dial)
+		}()
 
 		select {
 		case <-settings.WebChannel:
@@ -166,10 +176,13 @@ func StartSocketAs(p config.Profile) error {
 				req = []byte(`{"action":"twoFactorCookie"}`)
 			}
 			if req != nil {
-				settings.replyChan = make(chan struct{})
+				reply := make(chan struct{})
+				settings.replyMu.Lock()
+				settings.replyChan = reply
+				settings.replyMu.Unlock()
 				if send(req) == nil {
 					select {
-					case <-settings.replyChan:
+					case <-reply:
 					case <-time.After(5 * time.Second):
 					}
 				}
@@ -215,22 +228,43 @@ func StartSocketAs(p config.Profile) error {
 	}
 }
 
+// StopSocket closes the control socket and returns once its reader has
+// ended, so the next StartSocketAs starts clean.
 func StopSocket() {
-	settings.closing = true
+	settings.closing.Store(true)
 
+	settings.wsMu.Lock()
+	ws := settings.WebSocket
+	if ws != nil {
+		ws.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(1000, "all done"))
+		settings.WebSocket = nil
+	}
+	done, cancel := settings.readerDone, settings.cancelDial
+	settings.readerDone, settings.cancelDial = nil, nil
+	settings.wsMu.Unlock()
+	// Not under wsMu, the reader may be waiting for it in send.
+	if cancel != nil {
+		cancel()
+	}
+	// The server's answering close ends the reader, the connection is only
+	// cut if it takes long.
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+	if ws != nil {
+		ws.Close()
+	}
+	if done != nil {
+		<-done
+	}
+
+	// The reader renews it, it's done now.
 	if settings.RenewCookieTimer != nil {
 		settings.RenewCookieTimer.Stop()
 		settings.RenewCookieTimer = nil
-	}
-
-	settings.wsMu.Lock()
-	defer settings.wsMu.Unlock()
-	if settings.WebSocket != nil {
-		settings.WebSocket.WriteMessage(websocket.CloseMessage,
-			websocket.FormatCloseMessage(1000, "all done"))
-		time.Sleep(100 * time.Millisecond)
-		settings.WebSocket.Close()
-		settings.WebSocket = nil
 	}
 }
 
@@ -240,7 +274,7 @@ func StopSocket() {
 func sleepUnlessClosing(d time.Duration) bool {
 	const tick = 200 * time.Millisecond
 	for remaining := d; remaining > 0; remaining -= tick {
-		if settings.closing {
+		if settings.closing.Load() {
 			return false
 		}
 		step := tick
@@ -249,7 +283,7 @@ func sleepUnlessClosing(d time.Duration) bool {
 		}
 		time.Sleep(step)
 	}
-	return !settings.closing
+	return !settings.closing.Load()
 }
 
 // reconnectControlSocket redials the control socket with capped exponential
@@ -268,6 +302,11 @@ func reconnectControlSocket(cause error, dial func() (*websocket.Conn, error)) (
 		conn, err := dial()
 		if err == nil {
 			settings.wsMu.Lock()
+			if settings.closing.Load() { // stopped while dialing
+				settings.wsMu.Unlock()
+				conn.Close()
+				return nil, false
+			}
 			settings.WebSocket = conn
 			settings.wsMu.Unlock()
 			fmt.Fprintln(os.Stderr, "Control connection restored.")
@@ -280,7 +319,7 @@ func reconnectControlSocket(cause error, dial func() (*websocket.Conn, error)) (
 		}
 	}
 
-	settings.closing = true
+	settings.closing.Store(true)
 	OnConnectionLost(errors.New("unable to restore connection to MeshCentral server, giving up"))
 	return nil, false
 }
@@ -290,7 +329,7 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 		_, message, err := conn.ReadMessage()
 		if err != nil {
 			conn.Close()
-			if settings.closing {
+			if settings.closing.Load() {
 				return
 			}
 			if !settings.initialAuthDone {
@@ -301,7 +340,7 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 				if settings.debug {
 					fmt.Fprintln(os.Stderr, "Server closed connection")
 				}
-				settings.closing = true
+				settings.closing.Store(true)
 				OnConnectionLost(fmt.Errorf("server closed the control connection: %w", err))
 				return
 			}
@@ -399,7 +438,7 @@ func handleCloseCommand(command map[string]interface{}) {
 		// Auth was rejected on a reconnect (e.g. a one-time 2FA token was
 		// already consumed, or credentials were revoked). Retrying with the
 		// same credentials would just loop forever, so fail loudly instead.
-		settings.closing = true
+		settings.closing.Store(true)
 		OnConnectionLost(fmt.Errorf("lost authentication with MeshCentral server: %s", ae.message))
 	} else {
 		if settings.debug {
@@ -411,6 +450,8 @@ func handleCloseCommand(command map[string]interface{}) {
 // replied releases StartSocketAs waiting for a twoFactorCookie or
 // createLoginToken reply.
 func replied() {
+	settings.replyMu.Lock()
+	defer settings.replyMu.Unlock()
 	if settings.replyChan != nil {
 		close(settings.replyChan)
 		settings.replyChan = nil
