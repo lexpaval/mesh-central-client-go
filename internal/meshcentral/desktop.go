@@ -111,6 +111,11 @@ const (
 	maxDesktopDisplays = 64
 )
 
+// desktopTileSlack is how far a tile may reach past the screen. Agents
+// capture into a frame padded to their 32 pixel tile grid and send whole
+// tiles, so edge tiles cover some padding, which blit leaves out.
+const desktopTileSlack = 256
+
 // OpenDesktop opens a remote desktop session to nodeID.
 func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 	conn, err := dialTunnel(nodeID, 2)
@@ -360,9 +365,9 @@ func (d *Desktop) command(cmd int, v []byte) error {
 		}
 		x, y := xy()
 		// The header's size is what decoding allocates, a tile can't be
-		// larger than the screen.
+		// much larger than the screen.
 		cfg, err := jpeg.DecodeConfig(bytes.NewReader(v[8:]))
-		if w, h := d.Size(); err != nil || cfg.Width > w || cfg.Height > h {
+		if w, h := d.Size(); err != nil || cfg.Width > w+desktopTileSlack || cfg.Height > h+desktopTileSlack {
 			return nil
 		}
 		img, err := jpeg.Decode(bytes.NewReader(v[8:]))

@@ -317,7 +317,16 @@ func TestDesktopLimits(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A tile whose header claims more than the screen isn't decoded.
+	// An edge tile reaching into the agent's tile padding is drawn, clipped.
+	var edge bytes.Buffer
+	jpeg.Encode(&edge, image.NewGray(image.Rect(0, 0, 32, 64)), nil)
+	var drawn image.Rectangle
+	d.ev.Frame = func(r image.Rectangle) { drawn = r }
+	if err := d.data(cmd(kvmTile, append(be16(48, 0), edge.Bytes()...)...)); err != nil || drawn != image.Rect(48, 0, 64, 48) {
+		t.Errorf("padded edge tile: %v, drew %v", err, drawn)
+	}
+
+	// A tile whose header claims far more than the screen isn't decoded.
 	var buf bytes.Buffer
 	jpeg.Encode(&buf, image.NewGray(image.Rect(0, 0, 8, 8)), nil)
 	huge := buf.Bytes()
