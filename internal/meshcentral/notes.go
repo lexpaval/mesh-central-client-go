@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -56,7 +59,7 @@ func GetNotes(ctx context.Context, id string) (string, error) {
 	case <-ctx.Done():
 		return "", ctx.Err()
 	case notes := <-reply:
-		return notes, nil
+		return decodeNotes(notes), nil
 	}
 }
 
@@ -68,7 +71,7 @@ const notesSettle = 300 * time.Millisecond
 // The server doesn't confirm or refuse a change, they're read back instead,
 // returning ErrNotesNotSaved if it didn't keep them.
 func SetNotes(ctx context.Context, id, notes string) error {
-	b, _ := json.Marshal(map[string]string{"action": "setNotes", "id": id, "notes": notes})
+	b, _ := json.Marshal(map[string]string{"action": "setNotes", "id": id, "notes": encodeNotes(notes)})
 	if err := send(b); err != nil {
 		return err
 	}
@@ -89,4 +92,29 @@ func SetNotes(ctx context.Context, id, notes string) error {
 		}
 	}
 	return ErrNotesNotSaved
+}
+
+// encodeNotes encodes notes the way the web UI stores them, with
+// encodeURIComponent and ' as %27. The server keeps them as sent, the web UI
+// decodes them to show them.
+func encodeNotes(s string) string {
+	var b strings.Builder
+	for _, c := range []byte(s) {
+		if 'a' <= c && c <= 'z' || 'A' <= c && c <= 'Z' || '0' <= c && c <= '9' || strings.IndexByte("-_.!~*()", c) >= 0 {
+			b.WriteByte(c)
+		} else {
+			fmt.Fprintf(&b, "%%%02X", c)
+		}
+	}
+	return b.String()
+}
+
+// decodeNotes undoes encodeNotes (decodeURIComponent, + stays a +). Notes
+// that don't decode, such as ones earlier versions of mcc saved unencoded,
+// are returned as they are.
+func decodeNotes(s string) string {
+	if d, err := url.PathUnescape(s); err == nil {
+		return d
+	}
+	return s
 }

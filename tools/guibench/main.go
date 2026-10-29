@@ -32,6 +32,7 @@ import (
 	mrand "math/rand/v2"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -611,7 +612,8 @@ func control(w http.ResponseWriter, r *http.Request) {
 			n, ok := notes[cmd.ID]
 			notesMu.Unlock()
 			if !ok && *shots != "" && cmd.ID == "1" {
-				n = demoDeviceNotes
+				// URL-encoded, as the web UI stores notes.
+				n = strings.ReplaceAll(url.QueryEscape(demoDeviceNotes), "+", "%20")
 			}
 			send(map[string]string{"action": "getNotes", "id": cmd.ID, "notes": n})
 		case "setNotes":

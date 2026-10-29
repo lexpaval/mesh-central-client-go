@@ -86,3 +86,22 @@ func TestNotes(t *testing.T) {
 		t.Errorf("requests left pending: %v", notesRequests.pending)
 	}
 }
+
+// Notes go over the wire as the web UI stores them, URL-encoded.
+func TestNotesEncoding(t *testing.T) {
+	plain := "# Rack 4\n- UPS's port = 2 · [docs](https://x.example/a?b=c&d)\n*ok* (yes) ~!"
+	// encodeURIComponent(plain).replace(/'/g, '%27') in a browser.
+	wire := "%23%20Rack%204%0A-%20UPS%27s%20port%20%3D%202%20%C2%B7%20%5Bdocs%5D(https%3A%2F%2Fx.example%2Fa%3Fb%3Dc%26d)%0A*ok*%20(yes)%20~!"
+	if got := encodeNotes(plain); got != wire {
+		t.Errorf("encoded %q", got)
+	}
+	for in, want := range map[string]string{
+		wire:        plain,
+		"a+b%20c":   "a+b c",     // decodeURIComponent keeps +
+		"100% done": "100% done", // saved unencoded, not valid encoding
+	} {
+		if got := decodeNotes(in); got != want {
+			t.Errorf("decodeNotes(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
