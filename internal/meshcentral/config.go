@@ -95,6 +95,11 @@ var OnConnectionLost = func(err error) {
 	os.Exit(1)
 }
 
+// OnStatus gets the control connection's status messages: a lost connection
+// being redialed or restored, a login token that couldn't be kept. Defaults
+// to printing them; the GUI logs them.
+var OnStatus = func(msg string) { fmt.Fprintln(os.Stderr, msg) }
+
 // NodeEvent is a device event the server pushed. "nodeconnect" carries the
 // new Conn/Pwr state. "addnode" and "changenode" usually carry the device in
 // Device, whose Conn/Pwr are then not the live state (nodeconnect tracks it).

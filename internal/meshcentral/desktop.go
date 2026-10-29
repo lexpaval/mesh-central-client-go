@@ -67,8 +67,11 @@ type DesktopEvents struct {
 	// asked for with GetDisplays.
 	Displays func(ids []int, selected int)
 	// Notice gets the agent's status messages, such as waiting for the
-	// local user to allow access.
+	// local user to allow access, and "" once it took the message back,
+	// which it does when access was allowed.
 	Notice func(string)
+	// Recorded is called when the server says it records the session.
+	Recorded func()
 	// Cursor is the remote mouse cursor's shape, the agent's index: default,
 	// progress, crosshair, pointer, help, text, no-drop, move, nesw-resize,
 	// ns-resize, nwse-resize, w-resize, alias, wait, none, not-allowed,
@@ -135,7 +138,11 @@ func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 func NewDesktop(conn *websocket.Conn, ev DesktopEvents) (*Desktop, error) {
 	d := &Desktop{conn: conn, ev: ev, out: make(chan []byte, 1024), done: make(chan struct{}), quality: 50, frameMs: 100}
 	conn.SetReadLimit(maxTunnelMessage) // dialTunnel's, for conns dialed elsewhere (tests)
-	if err := joinTunnel(conn, 2, desktopJoinTimeout, "desktop", d.notice); err != nil {
+	if err := joinTunnel(conn, 2, desktopJoinTimeout, "desktop", func() {
+		if ev.Recorded != nil {
+			ev.Recorded()
+		}
+	}); err != nil {
 		return nil, err
 	}
 	conn.SetReadDeadline(time.Time{})
@@ -263,19 +270,18 @@ func (d *Desktop) read() {
 
 // control handles the tunnel's JSON messages.
 func (d *Desktop) control(b []byte) {
+	if msg, _, ok := agentConsole(b); ok {
+		d.notice(msg) // the agent ends the session itself after a failure
+		return
+	}
 	var m struct {
-		CtrlChannel any     `json:"ctrlChannel"`
-		Type        string  `json:"type"`
-		Msg         *string `json:"msg"`
+		CtrlChannel any    `json:"ctrlChannel"`
+		Type        string `json:"type"`
 	}
 	if json.Unmarshal(b, &m) != nil || fmt.Sprint(m.CtrlChannel) != "102938" {
 		return
 	}
 	switch m.Type {
-	case "console":
-		if m.Msg != nil {
-			d.notice(*m.Msg)
-		}
 	case "ping":
 		d.send([]byte(`{"ctrlChannel":"102938","type":"pong"}`), false)
 	}

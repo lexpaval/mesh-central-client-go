@@ -41,7 +41,7 @@ func (e FileEntry) IsDir() bool { return e.Type != FileFile }
 // FileSession is one files channel to a device. Calls must not overlap.
 type FileSession struct {
 	conn   *websocket.Conn
-	notice func(string)
+	ev     SessionEvents
 	reqid  int
 	broken bool
 }
@@ -82,14 +82,13 @@ type fileMsg struct {
 	MsgID       int     `json:"msgid"`
 }
 
-// OpenFiles opens a files channel to nodeID. notice (may be nil) gets the
-// agent's status messages, such as waiting for the local user to allow access.
-func OpenFiles(nodeID string, notice func(string)) (*FileSession, error) {
+// OpenFiles opens a files channel to nodeID, ev reporting its state.
+func OpenFiles(nodeID string, ev SessionEvents) (*FileSession, error) {
 	conn, err := dialTunnel(nodeID, 5)
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to server: %w", err)
 	}
-	s, err := NewFileSession(conn, notice)
+	s, err := NewFileSession(conn, ev)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -99,14 +98,11 @@ func OpenFiles(nodeID string, notice func(string)) (*FileSession, error) {
 
 // NewFileSession starts a files channel on a relay tunnel conn that was
 // just dialed, waiting for the device to join it.
-func NewFileSession(conn *websocket.Conn, notice func(string)) (*FileSession, error) {
-	if notice == nil {
-		notice = func(string) {}
-	}
-	if err := joinTunnel(conn, 5, fileReplyTimeout, "file", notice); err != nil {
+func NewFileSession(conn *websocket.Conn, ev SessionEvents) (*FileSession, error) {
+	if err := joinTunnel(conn, 5, fileReplyTimeout, "file", ev.recorded); err != nil {
 		return nil, err
 	}
-	return &FileSession{conn: conn, notice: notice}, nil
+	return &FileSession{conn: conn, ev: ev}, nil
 }
 
 // Broken reports that the channel failed, every call fails from then on
@@ -152,18 +148,16 @@ func (s *FileSession) read() (*fileMsg, []byte, error) {
 		if len(b) == 0 || b[0] != '{' {
 			return nil, b, nil
 		}
-		var m fileMsg
-		if json.Unmarshal(b, &m) != nil {
+		if msg, failed, ok := agentConsole(b); ok {
+			if failed {
+				s.broken = true
+				return nil, nil, fmt.Errorf("file access refused on the device: %s", msg)
+			}
+			s.ev.notice(msg)
 			continue
 		}
-		if m.CtrlChannel != nil {
-			if m.Type == "console" && m.Msg != nil {
-				if m.MsgID == 2 {
-					s.broken = true
-					return nil, nil, fmt.Errorf("file access refused on the device: %s", *m.Msg)
-				}
-				s.notice(*m.Msg)
-			}
+		var m fileMsg
+		if json.Unmarshal(b, &m) != nil || m.CtrlChannel != nil {
 			continue
 		}
 		return &m, nil, nil

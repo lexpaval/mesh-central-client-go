@@ -105,6 +105,9 @@ func (dv *detailsTab) load() {
 			if dv.closed || n != dv.loads {
 				return
 			}
+			if err != nil {
+				logf("%s: unable to read the details: %v", dv.name, err)
+			}
 			switch {
 			case errors.Is(err, context.DeadlineExceeded):
 				setStatus(dv.status, "The server didn't answer, it may not support device details", true)

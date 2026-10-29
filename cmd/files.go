@@ -339,7 +339,20 @@ func openFiles(cmd *cobra.Command, toStdout bool) *meshcentral.FileSession {
 	}
 
 	nodeID = resolveNodeID(nodeID, insecure, debug)
-	s, err := meshcentral.OpenFiles(nodeID, func(msg string) { fmt.Fprintln(os.Stderr, msg) })
+	waiting := false
+	s, err := meshcentral.OpenFiles(nodeID, meshcentral.SessionEvents{
+		Recorded: func() { fmt.Fprintln(os.Stderr, "The server records this session") },
+		Notice: func(msg string) {
+			switch {
+			case msg != "":
+				waiting = true
+				fmt.Fprintln(os.Stderr, msg)
+			case waiting:
+				waiting = false
+				fmt.Fprintln(os.Stderr, "Access granted")
+			}
+		},
+	})
 	if err != nil {
 		filesFail(err)
 	}

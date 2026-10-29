@@ -291,7 +291,7 @@ func sleepUnlessClosing(d time.Duration) bool {
 // It gives up (OnConnectionLost) after maxControlReconnectAttempts so a server that
 // is permanently unreachable doesn't retry forever in silence.
 func reconnectControlSocket(cause error, dial func() (*websocket.Conn, error)) (*websocket.Conn, bool) {
-	fmt.Fprintf(os.Stderr, "\nControl connection lost: %v, reconnecting...\n", cause)
+	OnStatus(fmt.Sprintf("Control connection lost: %v, reconnecting...", cause))
 
 	backoff := time.Second
 	for attempt := 1; attempt <= maxControlReconnectAttempts; attempt++ {
@@ -309,11 +309,11 @@ func reconnectControlSocket(cause error, dial func() (*websocket.Conn, error)) (
 			}
 			settings.WebSocket = conn
 			settings.wsMu.Unlock()
-			fmt.Fprintln(os.Stderr, "Control connection restored.")
+			OnStatus("Control connection restored")
 			return conn, true
 		}
 
-		fmt.Fprintf(os.Stderr, "Reconnect attempt %d/%d failed: %v\n", attempt, maxControlReconnectAttempts, err)
+		OnStatus(fmt.Sprintf("Reconnect attempt %d/%d failed: %v", attempt, maxControlReconnectAttempts, err))
 		if backoff < 30*time.Second {
 			backoff *= 2
 		}
@@ -386,9 +386,9 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			if user == "" || pass == "" {
 				// Disabled on the server or for this user. The renewed auth
 				// cookie keeps this session going, the next one signs in again.
-				fmt.Fprintf(os.Stderr, "Unable to create a login token (%v), the next login will need the browser again.\n", command["result"])
+				OnStatus(fmt.Sprintf("Unable to create a login token (%v), the next login will need the browser again", command["result"]))
 			} else if err := p.SetLoginToken(user, pass); err != nil {
-				fmt.Fprintln(os.Stderr, "Unable to store login token:", err)
+				OnStatus(fmt.Sprintf("Unable to store the login token: %v", err))
 			} else {
 				// Reconnects use the token, the auth cookie expires.
 				settings.Username, settings.Password, settings.AuthCookie = user, pass, ""

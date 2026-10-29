@@ -77,7 +77,7 @@ func BenchmarkFilesOverRelay(b *testing.B) {
 		if err != nil {
 			b.Fatal(err)
 		}
-		s, err := NewFileSession(ws, nil)
+		s, err := NewFileSession(ws, SessionEvents{})
 		if err != nil {
 			b.Fatal(err)
 		}

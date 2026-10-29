@@ -24,12 +24,12 @@ func fakeFiles(t *testing.T) string {
 	srv := httptest.NewServer(fakeagent.Files(root))
 	t.Cleanup(srv.Close)
 	open := openFileSession
-	openFileSession = func(_ string, notice func(string)) (*meshcentral.FileSession, error) {
+	openFileSession = func(_ string, ev meshcentral.SessionEvents) (*meshcentral.FileSession, error) {
 		ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 		if err != nil {
 			return nil, err
 		}
-		return meshcentral.NewFileSession(ws, notice)
+		return meshcentral.NewFileSession(ws, ev)
 	}
 	t.Cleanup(func() { openFileSession = open })
 	return root

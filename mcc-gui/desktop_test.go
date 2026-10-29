@@ -5,6 +5,7 @@ import (
 	"context"
 	"image"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -410,6 +411,34 @@ func TestDesktopKeys(t *testing.T) {
 				t.Errorf("key %x mods %x %q: %+v %v, want %+v", c.key, c.mods, c.text, got, ok, c.want)
 			}
 			e.Delete()
+		}
+	})
+}
+
+// Once the local user allowed access the agent takes its message back, the
+// status then shows the screen alone and the log says so.
+func TestDesktopConsentClears(t *testing.T) {
+	fakeDesktop(t, &fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(64, 48)},
+		Consent: []string{"Waiting for user to grant access..."}})
+	var dt *desktopTab
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		openDesktop(devices[0])
+		dt = desktopTabs[0]
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { dt.close() }) })
+	waitFor(t, "the screen", func() bool { return dt.status.Text() == "64 × 48" })
+	settle()
+	mainthread.Wait(func() {
+		var got []string
+		for _, l := range logLines {
+			if strings.Contains(l, "dev: desktop: ") {
+				got = append(got, l[strings.Index(l, "dev: "):])
+			}
+		}
+		if want := []string{"dev: desktop: Waiting for user to grant access...", "dev: desktop: access allowed"}; !slices.Equal(got, want) {
+			t.Errorf("logged %q", got)
 		}
 	})
 }

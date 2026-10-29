@@ -8,6 +8,7 @@ import (
 	"image/jpeg"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -259,7 +260,10 @@ func TestDesktopInput(t *testing.T) {
 
 func TestDesktopConsentAndClose(t *testing.T) {
 	d, ev := desktopSession(t, &fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(64, 48)}, Consent: []string{"Waiting for user to grant access..."}})
-	ev.wait(t, "the notice", func() bool { return len(ev.notices) == 1 && ev.notices[0] == "Waiting for user to grant access..." })
+	// The agent takes its message back once the user allowed access.
+	ev.wait(t, "the notice and its end", func() bool {
+		return slices.Equal(ev.notices, []string{"Waiting for user to grant access...", ""})
+	})
 	ev.wait(t, "the screen", func() bool { return ev.painted == image.Rect(0, 0, 64, 48) })
 	d.Close()
 	if err := d.Err(); err != nil {

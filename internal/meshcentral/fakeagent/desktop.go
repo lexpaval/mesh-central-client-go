@@ -68,6 +68,9 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	for i, msg := range a.Consent {
 		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":"`+msg+`","msgid":`+string(rune('1'+i))+`}`))
 	}
+	if len(a.Consent) == 1 { // allowed: the agent takes its message back, as meshcore.js does
+		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":null,"msgid":0}`))
+	}
 
 	ids := slices.Sorted(maps.Keys(a.Screens))
 	display := ids[0]

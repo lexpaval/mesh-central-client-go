@@ -31,7 +31,7 @@ func fakeFilesAgent(t *testing.T, root string, consent ...string) *websocket.Con
 
 func filesSession(t *testing.T) (*FileSession, string) {
 	root := t.TempDir()
-	s, err := NewFileSession(fakeFilesAgent(t, root), nil)
+	s, err := NewFileSession(fakeFilesAgent(t, root), SessionEvents{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +187,7 @@ func TestFilesManage(t *testing.T) {
 
 func TestFilesConsentRefused(t *testing.T) {
 	var notices []string
-	s, err := NewFileSession(fakeFilesAgent(t, t.TempDir(), "Waiting for user to grant access...", "Denied"), func(m string) { notices = append(notices, m) })
+	s, err := NewFileSession(fakeFilesAgent(t, t.TempDir(), "Waiting for user to grant access...", "Denied"), SessionEvents{Notice: func(m string) { notices = append(notices, m) }})
 	if err != nil {
 		t.Fatal(err) // the refusal comes after the handshake
 	}

@@ -62,7 +62,9 @@ type desktopTab struct {
 	sess            *meshcentral.Desktop // the latest, kept after it ends to show its last frame
 	attempt         int                  // sessions opened, results of older ones are dropped
 	live            bool                 // sess is open
-	notice          string
+	notice          string               // the agent's, until it takes it back
+	notices         agentNotices
+	recorded        bool
 	displays        []int
 	down            map[uint64]sentKey // keys pressed here, released the way they were sent
 	closed          bool
@@ -97,6 +99,7 @@ var fullscreenDesktop *desktopTab
 // openDesktop opens a tab with d's screen.
 func openDesktop(d meshcentral.Device) {
 	dt := &desktopTab{d: d, name: deviceName(d), down: map[uint64]sentKey{}}
+	dt.notices = agentNotices{device: dt.name, kind: "desktop"}
 	dt.build()
 	desktopTabs = append(desktopTabs, dt)
 	tabs.SetCurrentIndex(tabs.AddTab2(dt.w, icon("display"), dt.name+" · Desktop"))
@@ -503,7 +506,22 @@ func (dt *desktopTab) connect() {
 				dt.displaySel.SetVisible(len(ids) > 1)
 			})
 		},
-		Notice: func(s string) { later(func() { dt.notice = s; dt.showSize() }) },
+		Notice: func(s string) {
+			later(func() {
+				dt.notices.log(s)
+				dt.notice = s
+				dt.showSize()
+			})
+		},
+		Recorded: func() {
+			later(func() {
+				if !dt.recorded {
+					dt.recorded = true
+					tabs.SetTabText(tabs.IndexOf(dt.w), dt.name+" · Desktop · recorded")
+					logf("%s: the server records this desktop session", dt.name)
+				}
+			})
+		},
 		Cursor: func(c int) {
 			later(func() {
 				cur := qt.NewQCursor2(desktopCursor(c))
@@ -544,6 +562,7 @@ func (dt *desktopTab) connect() {
 						logf("%s: desktop lost: %v", dt.name, err)
 					} else {
 						setStatus(dt.status, cmp.Or(dt.notice, "The device closed the session"), false)
+						logf("%s: the device ended the desktop session", dt.name)
 					}
 				})
 			}()

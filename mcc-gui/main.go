@@ -134,10 +134,12 @@ func main() {
 	meshcentral.OnNodeEvent = onNodeEvent
 	meshcentral.OnConnectionLost = func(err error) {
 		mainthread.Start(func() {
+			logf("Connection lost: %v", err)
 			disconnect()
 			showError(err)
 		})
 	}
+	meshcentral.OnStatus = func(msg string) { logf("%s", msg) }
 
 	win = qt.NewQMainWindow2()
 	win.SetWindowTitle("MeshCentral Client")
@@ -656,6 +658,7 @@ func connect(insecure bool) {
 			profileSel.SetEnabled(true)
 			if err != nil {
 				statusLabel.SetText("Disconnected")
+				logf("Unable to connect with profile %s: %v", name, err)
 				showError(err)
 				return
 			}
@@ -1308,17 +1311,27 @@ func openShell(d meshcentral.Device, protocol int) {
 		title += " · PowerShell"
 	}
 	st := &shellTab{t: t, title: title}
-	onRecorded := func() {
-		mainthread.Start(func() {
-			if !st.recorded && !t.closed {
-				st.recorded = true
-				tabs.SetTabText(tabs.IndexOf(t.w), title+" · recorded")
-				logf("%s: the server records this shell", name)
+	notices := &agentNotices{device: name, kind: "shell"}
+	ev := meshcentral.SessionEvents{
+		Recorded: func() {
+			mainthread.Start(func() {
+				if !st.recorded && !t.closed {
+					st.recorded = true
+					tabs.SetTabText(tabs.IndexOf(t.w), title+" · recorded")
+					logf("%s: the server records this shell", name)
+				}
+			})
+		},
+		// In the terminal too, as the CLI shows them.
+		Notice: func(msg string) {
+			if msg != "" {
+				t.Write([]byte("\r\n[" + msg + "]\r\n"))
 			}
-		})
+			mainthread.Start(func() { notices.log(msg) })
+		},
 	}
 	go func() {
-		err := meshcentral.RunShell(d.Id, protocol, t.in, t, t.Size, resize, onRecorded)
+		err := meshcentral.RunShell(d.Id, protocol, t.in, t, t.Size, resize, ev)
 		msg := "\r\n[session closed]\r\n"
 		if err != nil {
 			msg = fmt.Sprintf("\r\n[%v]\r\n", err)
@@ -1334,7 +1347,11 @@ func openShell(d meshcentral.Device, protocol int) {
 				tabs.SetTabText(tabs.IndexOf(t.w), closedTitle+" · closed")
 			}
 		})
-		logf("%s: shell closed", name)
+		if err != nil {
+			logf("%s: shell ended: %v", name, err)
+		} else {
+			logf("%s: shell closed", name)
+		}
 	}()
 
 	shells = append(shells, st)
@@ -1342,6 +1359,24 @@ func openShell(d meshcentral.Device, protocol int) {
 	t.w.SetFocus()
 	logf("%s: shell opened", name)
 	recordRecent(recentAction{Kind: "shell", NodeID: d.Id, Device: name, Protocol: protocol})
+}
+
+// agentNotices logs the agent's status messages on a session, and that
+// access was allowed when it takes its message back. On the Qt thread.
+type agentNotices struct {
+	device, kind string
+	waiting      bool
+}
+
+func (a *agentNotices) log(msg string) {
+	switch {
+	case msg != "":
+		a.waiting = true
+		logf("%s: %s: %s", a.device, a.kind, msg)
+	case a.waiting:
+		a.waiting = false
+		logf("%s: %s: access allowed", a.device, a.kind)
+	}
 }
 
 func shellAt(i int) *shellTab {

@@ -56,6 +56,9 @@ func Files(root string, consent ...string) http.HandlerFunc {
 		if len(consent) > 1 {
 			return
 		}
+		if len(consent) == 1 { // allowed: the agent takes its message back, as meshcore.js does
+			c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":null,"msgid":0}`))
+		}
 
 		var down *os.File
 		var downID any

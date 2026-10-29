@@ -31,7 +31,8 @@ var openFileSession = meshcentral.OpenFiles
 // and closes it once everyone using it released it.
 type fileChannel struct {
 	nodeID string
-	notice func(string) // called from the channel's goroutine
+	ev     meshcentral.SessionEvents // called from the channel's goroutine
+	failed func(error)               // the channel didn't open or broke, also from its goroutine
 	calls  chan fileCall
 	users  int // on the Qt thread
 }
@@ -41,8 +42,8 @@ type fileCall struct {
 	done func(error)
 }
 
-func newFileChannel(nodeID string, notice func(string)) *fileChannel {
-	c := &fileChannel{nodeID: nodeID, notice: notice, calls: make(chan fileCall, 256), users: 1}
+func newFileChannel(nodeID string, ev meshcentral.SessionEvents, failed func(error)) *fileChannel {
+	c := &fileChannel{nodeID: nodeID, ev: ev, failed: failed, calls: make(chan fileCall, 256), users: 1}
 	go c.run()
 	return c
 }
@@ -52,10 +53,13 @@ func (c *fileChannel) run() {
 	for call := range c.calls {
 		var err error
 		if s == nil {
-			s, err = openFileSession(c.nodeID, c.notice)
+			if s, err = openFileSession(c.nodeID, c.ev); err != nil {
+				c.failed(err)
+			}
 		}
 		if err == nil {
 			if err = call.f(s); s.Broken() {
+				c.failed(err)
 				s.Close()
 				s = nil
 			}
@@ -90,6 +94,9 @@ type filesTab struct {
 
 	pathEdit, filter                  *qt.QLineEdit
 	counts                            string // what the folder holds, the status when not filtered
+	notices                           agentNotices
+	noticeShown, beforeNotice         string // the agent's message in the status, and the status it replaced
+	recorded                          bool
 	upBtn, mkdirBtn, upload, download *qt.QPushButton
 	renameBtn, deleteBtn              *qt.QPushButton
 	list                              *qt.QTreeWidget
@@ -128,8 +135,9 @@ var filesTabs []*filesTab
 // openFilesTab opens a tab browsing d's files, from the root.
 func openFilesTab(d meshcentral.Device) {
 	ft := &filesTab{d: d, name: deviceName(d)}
+	ft.notices = agentNotices{device: ft.name, kind: "files"}
 	ft.build()
-	ft.browse = newFileChannel(d.Id, ft.notice)
+	ft.browse = ft.newChannel()
 	filesTabs = append(filesTabs, ft)
 	tabs.SetCurrentIndex(tabs.AddTab2(ft.w, icon("folder"), ft.name+" · Files"))
 	ft.list.SetFocus()
@@ -355,12 +363,48 @@ func (ft *filesTab) retheme() {
 	ft.fill()
 }
 
-// notice shows the agent's status messages, such as waiting for consent.
-func (ft *filesTab) notice(msg string) {
-	mainthread.Start(func() {
-		if !ft.closed {
-			setStatus(ft.status, msg, false)
-		}
+// newChannel opens a files channel to the device, its state shown in the
+// tab and logged.
+func (ft *filesTab) newChannel() *fileChannel {
+	later := func(f func()) {
+		mainthread.Start(func() {
+			if !ft.closed {
+				f()
+			}
+		})
+	}
+	ev := meshcentral.SessionEvents{
+		Recorded: func() {
+			later(func() {
+				if !ft.recorded {
+					ft.recorded = true
+					tabs.SetTabText(tabs.IndexOf(ft.w), ft.name+" · Files · recorded")
+					logf("%s: the server records this files session", ft.name)
+				}
+			})
+		},
+		// The agent's messages show in the status until it takes them back,
+		// then what was there before does.
+		Notice: func(msg string) {
+			later(func() {
+				ft.notices.log(msg)
+				if msg != "" {
+					if ft.noticeShown == "" {
+						ft.beforeNotice = ft.status.Text()
+					}
+					ft.noticeShown = msg
+					setStatus(ft.status, msg, false)
+				} else if ft.noticeShown != "" {
+					if ft.status.Text() == ft.noticeShown {
+						setStatus(ft.status, ft.beforeNotice, false)
+					}
+					ft.noticeShown = ""
+				}
+			})
+		},
+	}
+	return newFileChannel(ft.d.Id, ev, func(err error) {
+		later(func() { logf("%s: files channel failed: %v", ft.name, err) })
 	})
 }
 
@@ -854,7 +898,7 @@ func (ft *filesTab) startNext() {
 	ft.queue = ft.queue[1:]
 	ft.running = t
 	if ft.transfers == nil {
-		ft.transfers = newFileChannel(ft.d.Id, ft.notice)
+		ft.transfers = ft.newChannel()
 	}
 	ft.progress.SetValue(0)
 	ft.progress.SetVisible(true)

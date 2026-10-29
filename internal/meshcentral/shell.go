@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/tls"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -62,9 +63,54 @@ func dialTunnel(nodeID string, p int) (*websocket.Conn, error) {
 	return conn, nil
 }
 
+// SessionEvents report a shell or files session's state, from its
+// goroutines. Either may be nil.
+type SessionEvents struct {
+	// Recorded is called when the server says it records the session.
+	Recorded func()
+	// Notice gets the agent's status messages, such as waiting for the
+	// local user to allow access, and "" once it took the message back,
+	// which it does when access was allowed.
+	Notice func(string)
+}
+
+func (ev SessionEvents) recorded() {
+	if ev.Recorded != nil {
+		ev.Recorded()
+	}
+}
+
+func (ev SessionEvents) notice(s string) {
+	if ev.Notice != nil {
+		ev.Notice(s)
+	}
+}
+
+// agentConsole reads an agent's console message off a tunnel's control
+// channel, as the web UI does: msg is "" when the agent takes its message
+// back, which it does once the local user allowed access. failed is set for
+// an error that ends the session, such as access denied. ok is false for
+// other messages.
+func agentConsole(b []byte) (msg string, failed, ok bool) {
+	var m struct {
+		CtrlChannel any     `json:"ctrlChannel"`
+		Type        string  `json:"type"`
+		Msg         *string `json:"msg"`
+		MsgID       int     `json:"msgid"`
+	}
+	if len(b) == 0 || b[0] != '{' || json.Unmarshal(b, &m) != nil || fmt.Sprint(m.CtrlChannel) != "102938" || m.Type != "console" {
+		return "", false, false
+	}
+	if m.Msg != nil {
+		msg = *m.Msg
+	}
+	return msg, m.MsgID == 2, true
+}
+
 // joinTunnel waits up to timeout for the device to join a tunnel conn just
 // dialed, then starts protocol p on it. what names the access it needs.
-func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string, notice func(string)) error {
+// recorded is called if the server records the session.
+func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string, recorded func()) error {
 	for {
 		conn.SetReadDeadline(time.Now().Add(timeout))
 		_, b, err := conn.ReadMessage()
@@ -73,7 +119,7 @@ func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string,
 		}
 		if string(b) == "c" || string(b) == "cr" { // "cr" when the session is recorded
 			if string(b) == "cr" {
-				notice("The server records this session")
+				recorded()
 			}
 			break
 		}
@@ -84,7 +130,7 @@ func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string,
 // runShellSession pipes one tunnel session between input and out. Returns
 // (inputClosed, err): inputClosed means the user ended it, err is set when
 // the tunnel dropped unexpectedly.
-func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, out io.Writer, size func() (int, int), resize <-chan struct{}, recorded func()) (bool, error) {
+func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, out io.Writer, size func() (int, int), resize <-chan struct{}, ev SessionEvents) (bool, error) {
 	if settings.debug {
 		fmt.Fprintln(os.Stderr, "Websocket connected")
 	}
@@ -146,9 +192,11 @@ func runShellSession(wsConn *websocket.Conn, protocol int, input <-chan []byte, 
 			}
 			if msgType == websocket.BinaryMessage {
 				out.Write(msg)
+			} else if text, _, ok := agentConsole(msg); ok {
+				ev.notice(text)
 			} else if string(msg) == "c" || string(msg) == "cr" { // "cr" when the session is recorded
-				if string(msg) == "cr" && recorded != nil {
-					recorded()
+				if string(msg) == "cr" {
+					ev.recorded()
 				}
 				sendOptions()
 				if err := write(websocket.TextMessage, []byte(fmt.Sprintf("%d", protocol))); err != nil {
@@ -194,9 +242,9 @@ const maxShellReconnectAttempts = 8
 // default shell, 6 PowerShell on Windows agents) between in and out,
 // redialing if the tunnel drops. It returns once in hits EOF, the remote shell
 // exits, or the session can't be restored. size reports the terminal size,
-// resize (may be nil) signals that it changed. recorded (may be nil) is
-// called when the server says it records the session, again on reconnects.
-func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size func() (cols, rows int), resize <-chan struct{}, recorded func()) error {
+// resize (may be nil) signals that it changed. ev's Recorded is called again
+// on reconnects.
+func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size func() (cols, rows int), resize <-chan struct{}, ev SessionEvents) error {
 	done := make(chan struct{})
 	defer close(done)
 
@@ -228,7 +276,7 @@ func RunShell(nodeID string, protocol int, in io.Reader, out io.Writer, size fun
 			return fmt.Errorf("unable to connect to server: %w", err)
 		}
 
-		inputClosed, err := runShellSession(wsConn, protocol, input, out, size, resize, recorded)
+		inputClosed, err := runShellSession(wsConn, protocol, input, out, size, resize, ev)
 		if inputClosed || err == nil {
 			return nil
 		}
@@ -268,10 +316,23 @@ func StartShell(nodeID string, protocol int) {
 		return cols, rows
 	}
 	var once sync.Once
-	recorded := func() {
-		once.Do(func() { fmt.Fprint(os.Stderr, "\r\n[recorded] The server records this session\r\n") })
+	waiting := false
+	ev := SessionEvents{
+		Recorded: func() {
+			once.Do(func() { fmt.Fprint(os.Stderr, "\r\n[recorded] The server records this session\r\n") })
+		},
+		Notice: func(msg string) {
+			switch {
+			case msg != "":
+				waiting = true
+				fmt.Fprintf(os.Stderr, "\r\n[device] %s\r\n", msg)
+			case waiting:
+				waiting = false
+				fmt.Fprint(os.Stderr, "[device] Access granted\r\n")
+			}
+		},
 	}
-	if err := RunShell(nodeID, protocol, in, os.Stdout, size, nil, recorded); err != nil {
+	if err := RunShell(nodeID, protocol, in, os.Stdout, size, nil, ev); err != nil {
 		fmt.Fprintf(os.Stderr, "\r\n%v\r\n", err)
 	}
 }

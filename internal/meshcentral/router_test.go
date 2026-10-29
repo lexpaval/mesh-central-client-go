@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -128,7 +129,7 @@ func TestShellReportsRecording(t *testing.T) {
 		var out bytes.Buffer
 		recorded := false
 		size := func() (int, int) { return 80, 24 }
-		if _, err := runShellSession(relay(t, join), 1, make(chan []byte), &out, size, nil, func() { recorded = true }); err != nil {
+		if _, err := runShellSession(relay(t, join), 1, make(chan []byte), &out, size, nil, SessionEvents{Recorded: func() { recorded = true }}); err != nil {
 			t.Fatalf("%q: %v", join, err)
 		}
 		if recorded != want || out.String() != "data" {
@@ -167,7 +168,7 @@ func TestShellResizeSendsTermsize(t *testing.T) {
 	cols, rows := 80, 24
 	size := func() (int, int) { mu.Lock(); defer mu.Unlock(); return cols, rows }
 	resize, input := make(chan struct{}, 1), make(chan []byte)
-	go runShellSession(ws, 1, input, io.Discard, size, resize, nil)
+	go runShellSession(ws, 1, input, io.Discard, size, resize, SessionEvents{})
 	next := func() string {
 		select {
 		case m := <-msgs:
@@ -192,4 +193,36 @@ func TestShellResizeSendsTermsize(t *testing.T) {
 		t.Fatalf("resize sent %s", m)
 	}
 	close(input)
+}
+
+// The agent's console messages reach the shell's Notice, its taking one
+// back as "", as the local user allows access.
+func TestShellReportsAgentMessages(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		c, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer c.Close()
+		c.WriteMessage(websocket.TextMessage, []byte("c"))
+		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":"Waiting for user to grant access...","msgid":1}`))
+		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":null,"msgid":0}`))
+		c.WriteMessage(websocket.BinaryMessage, []byte("data"))
+		c.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+		c.ReadMessage()
+	}))
+	t.Cleanup(srv.Close)
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	var notices []string
+	size := func() (int, int) { return 80, 24 }
+	if _, err := runShellSession(ws, 1, make(chan []byte), &out, size, nil, SessionEvents{Notice: func(s string) { notices = append(notices, s) }}); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"Waiting for user to grant access...", ""}; !slices.Equal(notices, want) || out.String() != "data" {
+		t.Errorf("notices %q, output %q", notices, out.String())
+	}
 }
