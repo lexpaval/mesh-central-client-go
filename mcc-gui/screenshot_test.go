@@ -33,7 +33,8 @@ func TestScreenshot(t *testing.T) {
 	defer viper.Reset()
 	loadPrefs(filepath.Join(t.TempDir(), "prefs.json"))
 	mainthread.Wait(func() {
-		setPalette(variant == "dark")
+		setPref("theme", variant)
+		applyTheme()
 		win = qt.NewQMainWindow2()
 		win.SetCentralWidget(buildUI())
 		win.Resize(1200, 760)
@@ -146,28 +147,6 @@ func TestScreenshot(t *testing.T) {
 		}
 		win.Close()
 	})
-}
-
-// setPalette switches Fusion between a dark palette and its default light one.
-func setPalette(dark bool) {
-	pal := qt.QApplication_Style().StandardPalette()
-	if dark {
-		c := func(hex string) *qt.QColor { return qt.NewQColor6(hex) }
-		for role, hex := range map[qt.QPalette__ColorRole]string{
-			qt.QPalette__Window: "#202124", qt.QPalette__WindowText: "#e8e8e8", qt.QPalette__Base: "#17171a",
-			qt.QPalette__AlternateBase: "#26262a", qt.QPalette__Text: "#e8e8e8", qt.QPalette__Button: "#2b2b30",
-			qt.QPalette__ButtonText: "#e8e8e8", qt.QPalette__Highlight: "#3d6fd9", qt.QPalette__HighlightedText: "#ffffff",
-			qt.QPalette__PlaceholderText: "#8c8c94", qt.QPalette__Link: "#8ab4f8", qt.QPalette__ToolTipBase: "#2b2b30",
-			qt.QPalette__ToolTipText: "#e8e8e8", qt.QPalette__Light: "#3a3a40", qt.QPalette__Mid: "#2e2e33", qt.QPalette__Dark: "#101012",
-		} {
-			pal.SetColor2(role, c(hex))
-		}
-		for _, role := range []qt.QPalette__ColorRole{qt.QPalette__WindowText, qt.QPalette__Text, qt.QPalette__ButtonText} {
-			pal.SetColor(qt.QPalette__Disabled, role, c("#74747a"))
-		}
-	}
-	qt.QApplication_SetPalette(pal)
-	resetIcons()
 }
 
 func save(t *testing.T, w *qt.QWidget, path string) {

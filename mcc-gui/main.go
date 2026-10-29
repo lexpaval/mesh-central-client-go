@@ -127,6 +127,7 @@ func main() {
 	qt.QGuiApplication_SetWindowIcon(appIcon())
 	viper.SetConfigFile(config.DefaultConfigPath)
 	loadPrefs(filepath.Join(filepath.Dir(config.DefaultConfigPath), "mcc-gui.json"))
+	applyTheme()
 
 	meshcentral.TokenPrompt = promptToken
 	meshcentral.SSOPrompt = promptSSO
@@ -288,11 +289,15 @@ func buildUI() *qt.QWidget {
 	profileBar = qt.NewQWidget2()
 	profileBar.SetLayout(hbox(false, qt.NewQLabel3("Profile").QWidget, profileSel.QWidget, addProfileBtn.QWidget,
 		editProfileBtn.QWidget, rmProfileBtn.QWidget, insecureChk.QWidget).QLayout)
+	settingsBtn := iconButton("", "gear", "Settings")
+	settingsBtn.SetFlat(true)
+	settingsBtn.OnClicked(showSettings)
 	aboutBtn := iconButton("", "circle-info", "About")
 	aboutBtn.SetFlat(true)
 	aboutBtn.OnClicked(showAbout)
 	top := hbox(false, profileBar, connectBtn.QWidget)
 	top.AddWidget2(statusLabel.QWidget, 1)
+	top.AddWidget(settingsBtn.QWidget)
 	top.AddWidget(aboutBtn.QWidget)
 
 	searchEntry = qt.NewQLineEdit2()
@@ -526,7 +531,7 @@ func buildTree() {
 	})
 	deviceTree.OnItemDoubleClicked(func(item *qt.QTreeWidgetItem, _ int) {
 		if d, ok := shownDevice(item.Data(0, int(qt.UserRole)).ToString()); ok {
-			openShell(d, 1)
+			openDefault(d)
 		}
 	})
 	deviceTree.OnItemExpanded(func(item *qt.QTreeWidgetItem) {
@@ -542,7 +547,7 @@ func buildTree() {
 	deviceTree.OnKeyPressEvent(func(super func(*qt.QKeyEvent), e *qt.QKeyEvent) {
 		if k := e.Key(); (k == int(qt.Key_Return) || k == int(qt.Key_Enter)) && connected {
 			if d, ok := shownDevice(selectedID); ok {
-				openShell(d, 1)
+				openDefault(d)
 				return
 			}
 		}
