@@ -9,6 +9,7 @@ Simple client for [MeshCentral](https://github.com/Ylianst/MeshCentral) using th
 * SSH connections with proxy mode support
 * Direct shell access (cmd/powershell/bash)
 * Run a command on a node, fire and forget
+* Device details: system, hardware, network and security status, as in the web UI
 * File management: list, upload, download, copy, move, delete
 * Multi-profile management
 * Single sign-on (OIDC, or any other sign-in the web UI offers) through the browser
@@ -30,11 +31,13 @@ go build -o mcc
 
 ### GUI
 
-`mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices. **Files** opens a tab browsing the device's files: upload (or drop files on the list), download, rename, delete and create folders, with transfers on a channel of their own so browsing never waits for them. Double-click a text file to edit it in its own window; saving writes it in place, so it keeps its owner and permissions, and asks first if the file changed on the device since it was opened. A route's **Open** starts the matching client: the browser for web ports, `ssh` in a terminal window for SSH, and for RDP `mstsc` on Windows or the app registered for `rdp://` links on macOS (Microsoft's Windows App) and Linux (Remmina, KRDC, GNOME Connections). **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH. Shell tabs and routes are marked when the server records the session. Profiles can log in with [single sign-on](#single-sign-on-oidc) instead of a password. The GUI opens with the profile last connected to, leaving the CLI's default profile as it is, and routes still running at a disconnect or quit reopen on the next connect with that profile, on the same local ports.
+`mcc-gui` uses the same profiles and keyring as the CLI. Log in, pick a device, and add as many routes as needed, each can be stopped on its own. Double-click a device (or use **Shell**) to open an interactive shell in a tab, with a PowerShell option for Windows devices; **Settings** can make double-click open the device's files, desktop or details, or `ssh`, instead. **Files** opens a tab browsing the device's files: upload (or drop files on the list), download, rename, delete and create folders, with transfers on a channel of their own so browsing never waits for them. Double-click a text file to edit it in its own window; saving writes it in place, so it keeps its owner and permissions, and asks first if the file changed on the device since it was opened. A route's **Open** starts the matching client: the browser for web ports, `ssh` in a terminal window for SSH, and for RDP `mstsc` on Windows or the app registered for `rdp://` links on macOS (Microsoft's Windows App) and Linux (Remmina, KRDC, GNOME Connections). **Copy** gives the device's node ID for the CLI, or a ready-made `~/.ssh/config` block with the `mcc ssh --proxy` ProxyCommand for ssh and VSCode Remote-SSH. Shell tabs and routes are marked when the server records the session. Profiles can log in with [single sign-on](#single-sign-on-oidc) instead of a password. The GUI opens with the profile last connected to, leaving the CLI's default profile as it is, and routes still running at a disconnect or quit reopen on the next connect with that profile, on the same local ports.
 
 **Desktop** opens the device's screen with mouse and keyboard control, display selection, image quality, and fit or actual-size viewing. The clipboard toggle enables automatic bidirectional text sync while that tab and the client window are active; it starts off in each tab, and turning it on sends the local text to the device. Images and files are not transferred. **Type clipboard** remains available for typing text as keystrokes. The fullscreen button (Ctrl+Alt+Enter) hides the client panels and keeps the Desktop toolbar visible; use it again to restore the client. Esc still goes to the remote device. Clipboard support depends on the agent and remote desktop session; some agents do not report an empty remote clipboard.
 
-Right-click a device or group for **Notes**, the free-text notes MeshCentral keeps for it and shows in the web UI. Device notes can be read by anyone who sees the device and edited with the *Edit notes* right; group notes need the *Edit group* right for both. The server silently ignores requests without the right, so the dialog says when it got no answer or a change wasn't kept. The buttons beside **Show offline** expand or collapse every group in the device list. The gear button opens **Settings**: the theme (System, Light or Dark) and what double-clicking a device or pressing Enter opens, a shell, its files, its desktop, or `ssh` in a terminal over a route to port 22.
+**Details** (the info button under the device list, or right-click) opens a tab with what the web UI's General and Details tabs show, the same as `mcc details`: group, description, tags and logged-in users, security status (firewall, antivirus, updates, Defender) colored like the web UI, operating system, agent and last connection, network interfaces, BIOS, motherboard, TPM, battery, memory, disks and volumes. Hardware and network details need the *Device details* right and an agent that has reported them. **Refresh** (or F5) reads them again.
+
+Right-click a device or group for **Notes**, the free-text notes MeshCentral keeps for it and shows in the web UI. Device notes can be read by anyone who sees the device and edited with the *Edit notes* right; group notes need the *Edit group* right for both. The server silently ignores requests without the right, so the dialog says when it got no answer or a change wasn't kept. The buttons beside **Show offline** expand or collapse every group in the device list. The gear button opens **Settings**: the theme (System, Light or Dark) and what double-clicking a device or pressing Enter opens, a shell, its files, its desktop, its details, or `ssh` in a terminal over a route to port 22.
 
 Devices and port routes, connected to the local dummy server with fictional data:
 
@@ -57,6 +60,13 @@ The Files tab browsing a fictional home folder through the dummy server's files 
   <img alt="MeshCentral Client Files tab listing folders and files with their sizes and dates" src="docs/screenshots/light-files.png" width="1200">
 </picture>
 
+The Details tab of a fictional Linux device, with the system, agent and hardware information the dummy server reports:
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/dark-details.png">
+  <img alt="MeshCentral Client Details tab showing a device's general, security, operating system and agent sections" src="docs/screenshots/light-details.png" width="1200">
+</picture>
+
 The GUI uses Qt 6 through miqt and needs cgo and a C++ compiler. For a native build, install the Qt 6 development packages (`qt6-qtbase-devel` on Fedora or `qt6-base-dev` on Debian/Ubuntu):
 
 ```bash
@@ -66,7 +76,7 @@ make gui-shots    # Start a dummy server and capture both themes in dist/shots
 make gui-readme-shots # Regenerate the README images in docs/screenshots
 ```
 
-Screenshot generation runs offscreen on Linux using the GUI test binary and `tools/guibench`'s local dummy server. It uses temporary preferences and a mock keyring, exercises login, device queries, notes, a shell relay and a files channel, and waits for the device list, terminal output and file listing before saving PNGs. No real MeshCentral account, credentials, or desktop session is needed. The images show fictional devices and documentation IP addresses; local server and route ports are assigned automatically.
+Screenshot generation runs offscreen on Linux using the GUI test binary and `tools/guibench`'s local dummy server. It uses temporary preferences and a mock keyring, exercises login, device queries, notes, device details, a shell relay and a files channel, and waits for the device list, terminal output, file listing and details before saving PNGs. No real MeshCentral account, credentials, or desktop session is needed. The images show fictional devices and documentation IP addresses; local server and route ports are assigned automatically.
 
 Cross-platform builds use Podman images in `mcc-gui/package`. Images are built on first use; Windows resource generation uses `go-winres`, pinned in `tools.mod`.
 
@@ -133,6 +143,10 @@ mcc shell -i <nodeid> --powershell # Windows: PowerShell
 # Run a command, fire and forget (no output returned)
 mcc run -i <nodeid> "rename computer new-hostname"
 mcc run -i <nodeid> --as-user "notify-send hello" # as logged-in user instead of SYSTEM/root
+
+# Device details: what the web UI's General and Details tabs show
+mcc details -i <nodeid>            # OS, agent, network, hardware, disks; security status in color
+mcc details -i <nodeid> --json     # the server's data as is, for scripts
 
 # Files (remote paths are absolute: /home/user, C:\Users)
 # Leave out -i or a remote path to pick it interactively, e.g. `mcc files get`
@@ -204,6 +218,7 @@ For a MeshCentral server specified by IPv6 address, use `[2001:db8::1]` or `[200
 - `--proxy` - SSH proxy mode for ProxyCommand (ssh)
 - `--powershell` - Use PowerShell instead of cmd.exe (shell)
 - `--as-user` - Run as the logged-in user instead of SYSTEM/root (run)
+- `--json` - Print JSON instead of text (details, files ls)
 - `--sso` - Log in with single sign-on instead of a username and password (profile add)
 
 ## 2FA Authentication

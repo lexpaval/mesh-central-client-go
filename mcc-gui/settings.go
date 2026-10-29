@@ -13,7 +13,7 @@ type choice struct{ value, label, icon string }
 var (
 	themes        = []choice{{"", "System", ""}, {"light", "Light", ""}, {"dark", "Dark", ""}}
 	deviceActions = []choice{{"", "Shell", "terminal"}, {"files", "Files", "folder"}, {"desktop", "Desktop", "display"},
-		{"ssh", "SSH in a terminal", "terminal"}}
+		{"ssh", "SSH in a terminal", "terminal"}, {"details", "Details", "circle-info"}}
 )
 
 // systemStyle is the style Qt picked at start, the System theme goes back
@@ -104,6 +104,8 @@ func openDefault(d meshcentral.Device) {
 		openFilesTab(d)
 	case "desktop":
 		openDesktop(d)
+	case "details":
+		openDetails(d)
 	case "ssh":
 		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, RemotePort: 22}, true)
 		tabs.SetCurrentWidget(routesTab)

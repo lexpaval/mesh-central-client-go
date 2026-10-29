@@ -36,11 +36,7 @@ func notesServer(t *testing.T, hidden, readOnly string) {
 			}
 			mu.Unlock()
 		}
-	}, func(m map[string]interface{}) {
-		if m["action"] == "getNotes" {
-			handleNotesCommand(m)
-		}
-	})
+	}, handleReply)
 }
 
 func TestNotes(t *testing.T) {
@@ -80,10 +76,10 @@ func TestNotes(t *testing.T) {
 	if _, err := GetNotes(short, "mesh//hidden"); !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("refused read returned %v", err)
 	}
-	notesRequests.Lock()
-	defer notesRequests.Unlock()
-	if len(notesRequests.pending) != 0 {
-		t.Errorf("requests left pending: %v", notesRequests.pending)
+	pendingReplies.Lock()
+	defer pendingReplies.Unlock()
+	if len(pendingReplies.m) != 0 {
+		t.Errorf("requests left pending: %v", pendingReplies.m)
 	}
 }
 

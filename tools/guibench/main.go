@@ -541,6 +541,28 @@ const demoDeviceNotes = "Bench PSU on outlet 3, power cycle from the PDU if the 
 	"Serial console: /dev/ttyUSB0 at 115200 on build-01.\n\n" +
 	"Reserved for firmware tests until the end of the month."
 
+// The details every device has, made up like the devices: more of its
+// record, its system and network information.
+const (
+	demoNode = `{"desc": "Firmware test bench", "tags": ["lab", "firmware"], "users": ["alice"], "firstconnect": 1767225600000,
+		"agent": {"id": 6, "ver": 0, "root": true}, "lsc": {"firewall": "OK"}}`
+	demoSysInfo = `{"time": 1793000000000, "hardware": {
+		"linux": {"LastBootUpTime": "2026-10-21 08:14:00", "kernel_release": "6.17.1-300.fc44.x86_64", "arch": "x86_64",
+			"memory": {"Memory_Device": [{"Locator": "DIMM A", "Size": "16 GB", "Speed": "5600 MT/s", "Manufacturer": "Example", "PartNumber": "EX-16G-5600"},
+				{"Locator": "DIMM B", "Size": "16 GB", "Speed": "5600 MT/s", "Manufacturer": "Example", "PartNumber": "EX-16G-5600"}]},
+			"volumes": [{"mount_point": "/", "size": 488281250, "available": 301234567, "type": "btrfs"},
+				{"mount_point": "/boot/efi", "size": 614400, "available": 589824, "type": "vfat"}]},
+		"identifiers": {"bios_vendor": "Example Inc.", "bios_version": "1.24.0", "bios_mode": "UEFI", "board_vendor": "Example Inc.",
+			"board_name": "EX-B650", "product_name": "Bench Tower 3", "cpu_name": "AMD Ryzen 7 7700 8-Core Processor",
+			"gpu_name": ["Example Radeon Graphics"], "storage_devices": [{"Caption": "Example NVMe 512GB", "Size": 512105932800}]},
+		"tpm": {"SpecVersion": "2.0", "IsActivated": true, "IsEnabled": true, "IsOwned": true},
+		"agentvers": {"compileTime": "2026-09-30 12:00:00"}, "network": {"dns": ["192.0.2.53"]}}}`
+	demoNetInfo = `{"netif2": {"enp5s0": [
+		{"mac": "00:11:22:33:44:55", "address": "192.0.2.10", "netmask": "255.255.255.0", "gateway": "192.0.2.1", "family": "IPv4", "fqdn": "lab.example", "speed": 1000000000},
+		{"mac": "00:11:22:33:44:55", "address": "2001:db8::10", "netmask": "ffff:ffff:ffff:ffff::", "family": "IPv6"}],
+		"lo": [{"mac": "00:00:00:00:00:00", "address": "127.0.0.1", "family": "IPv4"}]}}`
+)
+
 // control is the session's control socket: login, device list, events.
 func control(w http.ResponseWriter, r *http.Request) {
 	// The user names the run, and the auth cookie the relay sees.
@@ -604,7 +626,7 @@ func control(w http.ResponseWriter, r *http.Request) {
 		if err != nil {
 			return
 		}
-		var cmd struct{ Action, ID, Notes string }
+		var cmd struct{ Action, ID, NodeID, ResponseID, Notes string }
 		json.Unmarshal(msg, &cmd)
 		switch cmd.Action {
 		case "getNotes":
@@ -650,9 +672,28 @@ func control(w http.ResponseWriter, r *http.Request) {
 					})
 				}
 			}
+			if cmd.ResponseID != "" { // one device, for its details
+				for mesh, list := range nodes {
+					nodes[mesh] = nil
+					for _, n := range list {
+						if n["_id"] == cmd.ID {
+							json.Unmarshal([]byte(demoNode), &n)
+							nodes[mesh] = []map[string]any{n}
+						}
+					}
+				}
+				send(map[string]any{"action": "nodes", "responseid": cmd.ResponseID, "nodes": nodes})
+				break
+			}
 			send(map[string]any{"action": "nodes", "nodes": nodes})
 			counters(user).lists.Add(1)
 			once.Do(func() { close(listed) })
+		case "getsysinfo", "getnetworkinfo", "lastconnect":
+			reply := map[string]any{}
+			json.Unmarshal([]byte(map[string]string{"getsysinfo": demoSysInfo, "getnetworkinfo": demoNetInfo,
+				"lastconnect": `{"time": 1793000000000, "addr": "198.51.100.7:51234"}`}[cmd.Action]), &reply)
+			reply["action"], reply["nodeid"] = cmd.Action, cmd.NodeID
+			send(reply)
 		}
 	}
 }

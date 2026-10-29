@@ -396,14 +396,12 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 			replied()
 		case "meshes":
 			handleMeshesCommand(command)
-		case "nodes":
-			handleNodesCommand(command)
+		case "nodes", "getNotes", "getsysinfo", "getnetworkinfo", "lastconnect":
+			handleReply(command)
 		case "event":
 			handleEventCommand(command)
 		case "msg":
 			handleClipboardCommand(command)
-		case "getNotes":
-			handleNotesCommand(command)
 		}
 	}
 }

@@ -130,6 +130,13 @@ func TestScreenshot(t *testing.T) {
 		save(t, editors[0].w, filepath.Join(dir, variant+"-editor.png"))
 		closeEditors()
 		filesTabs[0].close()
+		openDetails(devices[deviceIdx["1"]])
+	})
+	waitFor("the details", func() bool { return len(detailsTabs) == 1 && detailsTabs[0].info != nil })
+	mainthread.Wait(func() {
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+"-details.png"))
+		detailsTabs[0].close()
 		openDesktop(devices[deviceIdx["1"]])
 	})
 	waitFor("the desktop", func() bool {

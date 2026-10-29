@@ -238,7 +238,7 @@ func buildUI() *qt.QWidget {
 	clear(treeChildren)
 	treeDirty = false
 	clear(collapsed)
-	routeRows, recentRows, shells, filesTabs, desktopTabs = nil, nil, nil, nil, nil
+	routeRows, recentRows, shells, filesTabs, desktopTabs, detailsTabs = nil, nil, nil, nil, nil, nil
 	root := qt.NewQWidget2()
 
 	statusLabel = newElidedLabel("Disconnected")
@@ -336,8 +336,9 @@ func buildUI() *qt.QWidget {
 	routeBtn := iconButton("Add route", "plus", "Forward a local port to the device")
 	runBtn := iconButton("Run command", "play", "Run a command on the device")
 	copyBtn := iconButton("Copy", "copy", "")
+	detailsBtn := iconButton("", "circle-info", "Show the device's details: system, hardware and network")
 	reloadBtn := iconButton("", "rotate", "Reload the device list")
-	deviceBtns = []*qt.QPushButton{shellBtn, filesBtn, desktopBtn, routeBtn, runBtn, copyBtn, reloadBtn}
+	deviceBtns = []*qt.QPushButton{shellBtn, filesBtn, desktopBtn, routeBtn, runBtn, copyBtn, detailsBtn, reloadBtn}
 	shellBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			if menu := shellMenu(d); menu != nil {
@@ -355,6 +356,11 @@ func buildUI() *qt.QWidget {
 	desktopBtn.OnClicked(func() {
 		if d, ok := selectedDevice(); ok {
 			openDesktop(d)
+		}
+	})
+	detailsBtn.OnClicked(func() {
+		if d, ok := selectedDevice(); ok {
+			openDetails(d)
 		}
 	})
 	routeBtn.OnClicked(showAddRoute)
@@ -437,6 +443,10 @@ func buildUI() *qt.QWidget {
 			tabs.SetTabIcon(tabs.IndexOf(dt.w), icon("display"))
 			dt.retheme()
 		}
+		for _, dv := range detailsTabs {
+			tabs.SetTabIcon(tabs.IndexOf(dv.w), icon("circle-info"))
+			dv.retheme()
+		}
 	})
 	for i := range 2 {
 		tabs.TabBar().SetTabButton(i, qt.QTabBar__RightSide, nil)
@@ -449,6 +459,8 @@ func buildUI() *qt.QWidget {
 			ft.requestClose()
 		} else if dt := desktopAt(i); dt != nil {
 			dt.close()
+		} else if dv := detailsAt(i); dv != nil {
+			dv.close()
 		}
 	})
 
@@ -581,6 +593,7 @@ func buildTree() {
 		}
 		m.AddAction2(icon("folder"), "Files").OnTriggered(func() { openFilesTab(d) })
 		m.AddAction2(icon("display"), "Desktop").OnTriggered(func() { openDesktop(d) })
+		m.AddAction2(icon("circle-info"), "Details").OnTriggered(func() { openDetails(d) })
 		m.AddAction2(icon("plus"), "Add route…").OnTriggered(showAddRoute)
 		m.AddAction2(icon("play"), "Run command…").OnTriggered(showRunCommand)
 		m.AddAction2(icon("note-sticky"), "Notes…").OnTriggered(func() { showNotes(d.Id, deviceName(d), false) })
@@ -704,6 +717,9 @@ func disconnect() {
 	}
 	for _, dt := range slices.Clone(desktopTabs) {
 		dt.close()
+	}
+	for _, dv := range slices.Clone(detailsTabs) {
+		dv.close()
 	}
 	routes = nil
 	rebuildRoutes()
