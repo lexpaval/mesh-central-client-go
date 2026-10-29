@@ -99,7 +99,13 @@ var (
 	iconSetters []func()
 )
 
-var presets = []string{"SSH (22)", "RDP (3389)", "HTTP (80)", "HTTPS (443)", "Cockpit (9090)", "VNC (5900)"}
+// routeChoices are the presets Add route offers: the built-in ones, then the
+// user's from Settings.
+func routeChoices() []routePreset { return append(slices.Clone(presets), customPresets()...) }
+
+// presets are the built-in ports Add route offers, before the user's.
+var presets = []routePreset{{Name: "SSH", Port: 22}, {Name: "RDP", Port: 3389}, {Name: "HTTP", Port: 80}, {Name: "HTTPS", Port: 443},
+	{Name: "Cockpit", Port: 9090}, {Name: "VNC", Port: 5900}}
 
 func main() {
 	link := routerLinkArg()
@@ -240,7 +246,7 @@ func buildUI() *qt.QWidget {
 	clear(treeChildren)
 	treeDirty = false
 	clear(collapsed)
-	routeRows, recentRows, shells, filesTabs, desktopTabs, detailsTabs = nil, nil, nil, nil, nil, nil
+	routeRows, recentRows, shells, filesTabs, desktopTabs, detailsTabs, settingsTab = nil, nil, nil, nil, nil, nil, nil
 	root := qt.NewQWidget2()
 
 	statusLabel = newElidedLabel("Disconnected")
@@ -293,7 +299,7 @@ func buildUI() *qt.QWidget {
 		editProfileBtn.QWidget, rmProfileBtn.QWidget, insecureChk.QWidget).QLayout)
 	settingsBtn := iconButton("", "gear", "Settings")
 	settingsBtn.SetFlat(true)
-	settingsBtn.OnClicked(showSettings)
+	settingsBtn.OnClicked(openSettings)
 	aboutBtn := iconButton("", "circle-info", "About")
 	aboutBtn.SetFlat(true)
 	aboutBtn.OnClicked(showAbout)
@@ -449,6 +455,10 @@ func buildUI() *qt.QWidget {
 			tabs.SetTabIcon(tabs.IndexOf(dv.w), icon("circle-info"))
 			dv.retheme()
 		}
+		if settingsTab != nil {
+			tabs.SetTabIcon(tabs.IndexOf(settingsTab.w), icon("gear"))
+			settingsTab.retheme()
+		}
 	})
 	for i := range 2 {
 		tabs.TabBar().SetTabButton(i, qt.QTabBar__RightSide, nil)
@@ -463,6 +473,8 @@ func buildUI() *qt.QWidget {
 			dt.close()
 		} else if dv := detailsAt(i); dv != nil {
 			dv.close()
+		} else if sp := settingsAt(i); sp != nil {
+			sp.close()
 		}
 	})
 
@@ -904,8 +916,11 @@ func bindRouteRow(rr *routeRow) {
 	rr.text.set(d)
 }
 
-// service names a remote port and picks its icon.
+// service names a remote port and picks its icon, a preset's by its client.
 func service(port int) (name, icon string) {
+	if p, ok := presetFor(port); ok {
+		return p.Name, map[string]string{"http": "globe", "https": "globe", "ssh": "terminal", "rdp": "desktop"}[p.Open]
+	}
 	switch port {
 	case 22:
 		return "SSH", "terminal"
@@ -1409,14 +1424,18 @@ func showAddRoute() {
 	}
 	name := deviceName(d)
 	f := newForm("Route to "+name, "Start")
+	choices := routeChoices()
 	preset := qt.NewQComboBox2()
-	preset.AddItems(presets)
+	for _, p := range choices {
+		preset.AddItem(fmt.Sprintf("%s (%d)", p.Name, p.Port))
+	}
 	f.add("Preset", preset.QWidget)
 	remotePort := f.entry("Remote port", "22", "", portValidator(false))
-	preset.OnCurrentTextChanged(func(s string) {
-		remotePort.SetText(strings.TrimSuffix(s[strings.Index(s, "(")+1:], ")"))
-	})
 	target := f.entry("Target host", "", "the device itself", nil)
+	preset.OnActivated(func(i int) {
+		remotePort.SetText(strconv.Itoa(choices[i].Port))
+		target.SetText(choices[i].Target)
+	})
 	localPort := f.entry("Local port", "", "auto", portValidator(true))
 	bind := f.entry("Bind address", "", "127.0.0.1", nil)
 	// Open on start runs the route's Open action once it listens. The choice
@@ -1997,21 +2016,19 @@ func startCommand(cmd *exec.Cmd) error {
 }
 
 func copyText(r *meshcentral.Route) string {
-	addr := localAddr(r)
-	switch r.RemotePort {
-	case 22:
+	switch openKind(r.RemotePort) {
+	case "ssh":
 		return strings.Join(sshArgs(r), " ")
-	case 80, 8080, 443, 8443, 9090:
+	case "http", "https":
 		return webURL(r).String()
 	}
-	return addr
+	return localAddr(r)
 }
 
 // webURL is the browser link for a route, https for the ports that serve TLS.
 func webURL(r *meshcentral.Route) *url.URL {
 	scheme := "http"
-	switch r.RemotePort {
-	case 443, 8443, 9090: // Cockpit serves TLS on 9090
+	if openKind(r.RemotePort) == "https" {
 		scheme = "https"
 	}
 	return &url.URL{Scheme: scheme, Host: localAddr(r)}
@@ -2020,10 +2037,10 @@ func webURL(r *meshcentral.Route) *url.URL {
 // openCmd returns the action for the route's Open button: a terminal for
 // SSH, the RDP client for RDP and the browser for any other port.
 func openCmd(r *meshcentral.Route) func() error {
-	switch r.RemotePort {
-	case 22:
+	switch openKind(r.RemotePort) {
+	case "ssh":
 		return func() error { return openTerminal(sshArgs(r)) }
-	case 3389:
+	case "rdp":
 		if runtime.GOOS == "windows" { // mstsc doesn't register rdp://
 			return func() error { return startCommand(exec.Command("mstsc", "/v:"+localAddr(r))) }
 		}

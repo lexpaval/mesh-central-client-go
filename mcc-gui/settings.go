@@ -1,6 +1,14 @@
 package main
 
 import (
+	"cmp"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"slices"
+	"strconv"
+	"strings"
+
 	qt "github.com/mappu/miqt/qt6"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
@@ -114,31 +122,277 @@ func openDefault(d meshcentral.Device) {
 	}
 }
 
-func showSettings() {
-	f := newForm("Settings", "Save")
-	combo := func(label, key string, choices []choice) func() {
+// routePreset is a remote port the Add route dialog offers, the user's own
+// besides the built-in ones. Routes to its port take its name, and Open
+// starts its client.
+type routePreset struct {
+	Name   string
+	Port   int
+	Target string `json:",omitempty"` // "" for the device itself
+	Open   string // an openKinds value
+}
+
+// openKinds are the clients a route can open with.
+var openKinds = []choice{{"http", "Browser (http://)", "globe"}, {"https", "Browser (https://)", "globe"},
+	{"ssh", "SSH in a terminal", "terminal"}, {"rdp", "RDP client", "desktop"}}
+
+// The user's presets, parsed again when the pref changes.
+var presetCache struct {
+	raw     string
+	presets []routePreset
+}
+
+// customPresets are the user's route presets, in the "routePresets" pref.
+func customPresets() []routePreset {
+	if raw := pref("routePresets"); raw != presetCache.raw {
+		presetCache.raw, presetCache.presets = raw, nil
+		json.Unmarshal([]byte(raw), &presetCache.presets)
+	}
+	return presetCache.presets
+}
+
+// saveCustomPresets stores the user's presets, routes and Recent then show
+// their names.
+func saveCustomPresets(p []routePreset) {
+	b := []byte(nil)
+	if len(p) > 0 {
+		b, _ = json.Marshal(p)
+	}
+	setPref("routePresets", string(b))
+	refreshRows()
+}
+
+// presetFor is the user's preset for port, if any.
+func presetFor(port int) (routePreset, bool) {
+	i := slices.IndexFunc(customPresets(), func(p routePreset) bool { return p.Port == port })
+	if i < 0 {
+		return routePreset{}, false
+	}
+	return customPresets()[i], true
+}
+
+// openKind is how a route to port opens: a preset's choice, or by the
+// well-known ports. "" opens the browser over HTTP, Copy then copies the
+// address alone.
+func openKind(port int) string {
+	if p, ok := presetFor(port); ok {
+		return p.Open
+	}
+	switch port {
+	case 22:
+		return "ssh"
+	case 3389:
+		return "rdp"
+	case 80, 8080:
+		return "http"
+	case 443, 8443, 9090: // Cockpit serves TLS on 9090
+		return "https"
+	}
+	return ""
+}
+
+// settingsPage is the Settings tab, one at most.
+type settingsPage struct {
+	w       *qt.QWidget
+	icons   []func() // set again on a palette change
+	presets *qt.QTreeWidget
+	remove  *qt.QPushButton
+}
+
+var settingsTab *settingsPage
+
+// openSettings shows the Settings tab, opening it if needed. Changes apply
+// as they're made.
+func openSettings() {
+	if settingsTab == nil {
+		settingsTab = &settingsPage{}
+		settingsTab.build()
+		tabs.AddTab2(settingsTab.w, icon("gear"), "Settings")
+	}
+	tabs.SetCurrentWidget(settingsTab.w)
+}
+
+func settingsAt(i int) *settingsPage {
+	if w := tabs.Widget(i); settingsTab != nil && w != nil && w.UnsafePointer() == settingsTab.w.UnsafePointer() {
+		return settingsTab
+	}
+	return nil
+}
+
+func (sp *settingsPage) close() {
+	tabs.RemoveTab(tabs.IndexOf(sp.w))
+	sp.w.DeleteLater()
+	settingsTab = nil
+}
+
+func (sp *settingsPage) retheme() {
+	for _, set := range sp.icons {
+		set()
+	}
+}
+
+func (sp *settingsPage) build() {
+	page := qt.NewQWidget2()
+	v := qt.NewQVBoxLayout(page)
+	section := func(title string) *qt.QFormLayout {
+		box := qt.NewQGroupBox3(title)
+		fl := qt.NewQFormLayout(box.QWidget)
+		v.AddWidget(box.QWidget)
+		return fl
+	}
+	// combo shows a pref's choices, apply runs after one is picked.
+	combo := func(key string, choices []choice, apply func()) *qt.QComboBox {
 		c := qt.NewQComboBox2()
 		for i, ch := range choices {
-			if ch.icon != "" {
-				c.AddItem2(icon(ch.icon), ch.label)
-			} else {
-				c.AddItem(ch.label)
-			}
+			c.AddItem(ch.label)
 			if ch.value == pref(key) {
 				c.SetCurrentIndex(i)
 			}
 		}
-		f.add(label, c.QWidget)
-		return func() { setPref(key, choices[c.CurrentIndex()].value) }
+		sp.icons = append(sp.icons, func() { setChoiceIcons(c, choices) })
+		setChoiceIcons(c, choices)
+		c.OnActivated(func(i int) {
+			setPref(key, choices[i].value)
+			if apply != nil {
+				apply()
+			}
+		})
+		return c
 	}
-	saveTheme := combo("Theme", "theme", themes)
-	saveAction := combo("Double-click a device", "deviceAction", deviceActions)
+	section("Appearance").AddRow3("Theme", combo("theme", themes, applyTheme).QWidget)
+	section("Devices").AddRow3("Double-click a device", combo("deviceAction", deviceActions, nil).QWidget)
+
+	box := qt.NewQGroupBox3("Route presets")
+	bl := qt.NewQVBoxLayout(box.QWidget)
+	hint := qt.NewQLabel3("Your own ports for Add route, after the built-in ones. Routes to a preset's port take its name and open with its client.")
+	hint.SetWordWrap(true)
+	hint.SetForegroundRole(qt.QPalette__PlaceholderText)
+	bl.AddWidget(hint.QWidget)
+	sp.presets = qt.NewQTreeWidget2()
+	sp.presets.SetHeaderLabels([]string{"Name", "Port", "Target", "Open with"})
+	sp.presets.SetRootIsDecorated(false)
+	sp.presets.SetSelectionMode(qt.QAbstractItemView__SingleSelection)
+	sp.presets.SetMinimumHeight(80)
+	button := func(text, iconName, tip string) *qt.QPushButton { return tabButton(&sp.icons, text, iconName, tip) }
+	add := button("Add…", "plus", "Add a route preset")
+	edit := button("Edit…", "pen", "Edit the selected preset")
+	remove := button("Remove", "trash-can", "Remove the selected preset")
+	sp.remove = remove
+	add.OnClicked(func() { sp.editPreset(-1) })
+	edit.OnClicked(func() { sp.editPreset(sp.selected()) })
+	remove.OnClicked(func() {
+		if i := sp.selected(); i >= 0 {
+			saveCustomPresets(slices.Delete(slices.Clone(customPresets()), i, i+1))
+			sp.fill()
+		}
+	})
+	sp.presets.OnItemDoubleClicked(func(*qt.QTreeWidgetItem, int) { sp.editPreset(sp.selected()) })
+	sp.presets.OnItemSelectionChanged(func() {
+		edit.SetEnabled(sp.selected() >= 0)
+		remove.SetEnabled(sp.selected() >= 0)
+	})
+	// The buttons above the list, in view however short the tab is.
+	row := hbox(false, add.QWidget, edit.QWidget, remove.QWidget)
+	row.AddStretch()
+	bl.AddLayout(row.QLayout)
+	bl.AddWidget2(sp.presets.QWidget, 1)
+	v.AddWidget2(box.QWidget, 1) // the list takes the room left
+	sp.fill()
+
+	scroll := qt.NewQScrollArea2()
+	scroll.SetWidgetResizable(true)
+	scroll.SetWidget(page)
+	scroll.SetFrameShape(qt.QFrame__NoFrame)
+	sp.w = scroll.QWidget
+}
+
+// setChoiceIcons tints a combo's choice icons for the palette.
+func setChoiceIcons(c *qt.QComboBox, choices []choice) {
+	for i, ch := range choices {
+		if ch.icon != "" {
+			c.SetItemIcon(i, icon(ch.icon))
+		}
+	}
+}
+
+func (sp *settingsPage) selected() int {
+	if sel := sp.presets.SelectedItems(); len(sel) > 0 {
+		return sp.presets.IndexOfTopLevelItem(sel[0])
+	}
+	return -1
+}
+
+// fill lists the presets, in the order they're offered.
+func (sp *settingsPage) fill() {
+	sp.presets.Clear()
+	for _, p := range customPresets() {
+		open := p.Open
+		if i := slices.IndexFunc(openKinds, func(c choice) bool { return c.value == p.Open }); i >= 0 {
+			open = openKinds[i].label
+		}
+		sp.presets.AddTopLevelItem(qt.NewQTreeWidgetItem2([]string{p.Name, strconv.Itoa(p.Port), cmp.Or(p.Target, "device"), open}))
+	}
+	for i := range 4 {
+		sp.presets.ResizeColumnToContents(i)
+	}
+	sp.presets.ItemSelectionChanged()
+}
+
+// editPreset edits the preset at i, or adds one for -1.
+func (sp *settingsPage) editPreset(i int) {
+	presets := slices.Clone(customPresets())
+	p := routePreset{Open: "http"}
+	title := "Add route preset"
+	if i >= 0 {
+		p, title = presets[i], "Edit route preset"
+	}
+	f := newForm(title, "Save")
+	name := f.entry("Name", p.Name, "e.g. Grafana", func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("required")
+		}
+		return nil
+	})
+	portText := ""
+	if p.Port > 0 {
+		portText = strconv.Itoa(p.Port)
+	}
+	port := f.entry("Remote port", portText, "", func(s string) error {
+		if err := portValidator(false)(s); err != nil {
+			return err
+		}
+		n, _ := strconv.Atoi(s)
+		for j, o := range presets {
+			if j != i && o.Port == n {
+				return fmt.Errorf("%s already uses port %d", o.Name, n)
+			}
+		}
+		return nil
+	})
+	target := f.entry("Target host", p.Target, "the device itself", nil)
+	open := qt.NewQComboBox2()
+	for j, k := range openKinds {
+		open.AddItem2(icon(k.icon), k.label)
+		if k.value == p.Open {
+			open.SetCurrentIndex(j)
+		}
+	}
+	f.add("Open with", open.QWidget)
+	name.SetMinimumWidth(240)
 	f.show(0, func() {
-		saveAction()
-		theme := pref("theme")
-		saveTheme()
-		if pref("theme") != theme {
-			applyTheme()
+		p.Name, p.Target, p.Open = strings.TrimSpace(name.Text()), strings.TrimSpace(target.Text()), openKinds[open.CurrentIndex()].value
+		p.Port, _ = strconv.Atoi(port.Text())
+		if p.Target == "127.0.0.1" { // the device itself, as Add route takes it
+			p.Target = ""
+		}
+		if i >= 0 {
+			presets[i] = p
+		} else {
+			presets = append(presets, p)
+		}
+		saveCustomPresets(presets)
+		if settingsTab == sp {
+			sp.fill()
 		}
 	})
 }
