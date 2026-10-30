@@ -191,6 +191,17 @@ func TestDesktopTab(t *testing.T) {
 		dt.fullBtn.Click()
 	})
 
+	// The session ending leaves no stale screen.
+	center := func() (r, g, b int) { return viewPixel(dt, dt.view.Width()/2, dt.view.Height()/2) }
+	waitFor(t, "the screen shown", func() bool { r, g, b := center(); return r+g+b > 0 })
+	mainthread.Wait(func() { go dt.sess.Close() })
+	waitFor(t, "the end", func() bool { return !dt.live && dt.reconnect.IsVisible() })
+	mainthread.Wait(func() {
+		if r, g, b := center(); r+g+b != 0 {
+			t.Errorf("the ended session's screen shows (%d, %d, %d)", r, g, b)
+		}
+	})
+
 	mainthread.Wait(func() {
 		if len(recent) != 1 || recent[0].Kind != "desktop" || tabs.TabText(tabs.IndexOf(dt.w)) != "dev · Desktop" {
 			t.Errorf("recent %+v, tab %q", recent[0], tabs.TabText(tabs.IndexOf(dt.w)))

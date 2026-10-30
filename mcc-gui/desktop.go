@@ -59,7 +59,7 @@ type desktopTab struct {
 	cadBtn     *qt.QPushButton
 	reconnect  *qt.QPushButton
 
-	sess            *meshcentral.Desktop // the latest, kept after it ends to show its last frame
+	sess            *meshcentral.Desktop // the latest
 	attempt         int                  // sessions opened, results of older ones are dropped
 	live            bool                 // sess is open
 	notice          string               // the agent's, until it takes it back
@@ -445,6 +445,7 @@ func (dt *desktopTab) setLive(live bool) {
 	for _, w := range []*qt.QWidget{dt.clipBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.displaySel.QWidget} {
 		w.SetEnabled(live)
 	}
+	dt.view.Update() // an ended session's screen goes
 }
 
 // showSize puts the screen size in the status, after the agent's notice.
@@ -600,9 +601,9 @@ func (dt *desktopTab) queueFrame(r image.Rectangle) {
 }
 
 // target is where the screen is drawn in the view, and the view pixels per
-// screen pixel.
+// screen pixel, while the session is live.
 func (dt *desktopTab) target() (r *qt.QRectF, scale float64, ok bool) {
-	if dt.sess == nil {
+	if !dt.live || dt.sess == nil {
 		return nil, 0, false
 	}
 	w, h := dt.sess.Size()
@@ -665,12 +666,6 @@ func (dt *desktopTab) paint(e *qt.QPaintEvent) {
 		src.Delete()
 		img.Delete()
 	})
-	if !dt.live {
-		shade := qt.NewQColor3(0, 0, 0)
-		shade.SetAlpha(96)
-		p.FillRect6(dt.view.Rect(), shade)
-		shade.Delete()
-	}
 }
 
 // toRemote maps a view position to screen pixels, ok while on the screen.
