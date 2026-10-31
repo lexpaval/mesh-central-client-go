@@ -54,6 +54,7 @@ type desktopTab struct {
 	qualitySel *qt.QComboBox
 	fitBtn     *qt.QPushButton
 	clipBtn    *qt.QPushButton
+	inputBtn   *qt.QPushButton
 	fullBtn    *qt.QPushButton
 	typeBtn    *qt.QPushButton
 	cadBtn     *qt.QPushButton
@@ -196,6 +197,17 @@ func (dt *desktopTab) build() {
 	dt.clipTimer.OnTimeout(dt.syncClipboard)
 	dt.clipTimer.Start(1000)
 
+	// Off, the screen is only watched: nothing typed or clicked goes to the
+	// device, and local shortcuts work again.
+	dt.inputBtn = button("Input", "computer-mouse", "Send the mouse and keyboard to the device, off is view only")
+	dt.inputBtn.SetCheckable(true)
+	dt.inputBtn.SetChecked(true)
+	dt.inputBtn.OnToggled(func(bool) {
+		dt.releaseKeys()
+		dt.setLive(dt.live)
+		dt.view.SetFocus()
+	})
+
 	dt.typeBtn = button("Type clipboard", "keyboard", "Type the clipboard's text on the device")
 	dt.typeBtn.OnClicked(func() {
 		if dt.live {
@@ -235,10 +247,10 @@ func (dt *desktopTab) build() {
 	bar := hbox(false)
 	bar.SetContentsMargins(6, 4, 0, 4) // the screen goes edge to edge, not the bar
 	bar.AddWidget2(dt.status.QWidget, 1)
-	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn} {
+	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn} {
 		b.SetText("")
 	}
-	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.reconnect.QWidget} {
+	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.reconnect.QWidget} {
 		bar.AddWidget(w)
 	}
 
@@ -248,9 +260,10 @@ func (dt *desktopTab) build() {
 	dt.view.SetAttribute(qt.WA_OpaquePaintEvent)
 	dt.view.OnPaintEvent(func(_ func(*qt.QPaintEvent), e *qt.QPaintEvent) { dt.paint(e) })
 	dt.view.OnResizeEvent(func(super func(*qt.QResizeEvent), e *qt.QResizeEvent) { super(e); dt.view.Update() })
-	// Every key belongs to the device, shortcuts and Tab included.
+	// Every key belongs to the device, shortcuts and Tab included, while
+	// input goes to it.
 	dt.view.OnEvent(func(super func(*qt.QEvent) bool, e *qt.QEvent) bool {
-		if e.Type() == qt.QEvent__ShortcutOverride {
+		if e.Type() == qt.QEvent__ShortcutOverride && dt.inputOn() {
 			k := qt.UnsafeNewQKeyEvent(e.UnsafePointer())
 			if k.Key() == int(qt.Key_Return) && k.Modifiers() == qt.ControlModifier|qt.AltModifier {
 				return super(e)
@@ -260,7 +273,7 @@ func (dt *desktopTab) build() {
 		}
 		return super(e)
 	})
-	dt.view.OnFocusNextPrevChild(func(func(bool) bool, bool) bool { return false })
+	dt.view.OnFocusNextPrevChild(func(super func(bool) bool, next bool) bool { return !dt.inputOn() && super(next) })
 	dt.view.OnKeyPressEvent(func(_ func(*qt.QKeyEvent), e *qt.QKeyEvent) { dt.key(e, true) })
 	dt.view.OnKeyReleaseEvent(func(_ func(*qt.QKeyEvent), e *qt.QKeyEvent) { dt.key(e, false) })
 	dt.view.OnFocusOutEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); dt.releaseKeys() })
@@ -268,8 +281,10 @@ func (dt *desktopTab) build() {
 	dt.view.OnMouseDoubleClickEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, pressEvent) })
 	dt.view.OnMouseReleaseEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, releaseEvent) })
 	dt.view.OnMouseMoveEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, moveEvent) })
-	dt.view.OnWheelEvent(func(_ func(*qt.QWheelEvent), e *qt.QWheelEvent) {
-		if x, y, ok := dt.toRemote(e.Position()); ok && dt.live {
+	dt.view.OnWheelEvent(func(super func(*qt.QWheelEvent), e *qt.QWheelEvent) {
+		if !dt.inputOn() {
+			super(e) // scrolls the view instead
+		} else if x, y, ok := dt.toRemote(e.Position()); ok {
 			dt.sess.MouseWheel(e.AngleDelta().Y(), x, y)
 		}
 	})
@@ -442,8 +457,11 @@ func (dt *desktopTab) setLive(live bool) {
 	}
 	dt.live = live
 	dt.reconnect.SetVisible(!live)
-	for _, w := range []*qt.QWidget{dt.clipBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.displaySel.QWidget} {
+	for _, w := range []*qt.QWidget{dt.clipBtn.QWidget, dt.displaySel.QWidget} {
 		w.SetEnabled(live)
+	}
+	for _, w := range []*qt.QWidget{dt.typeBtn.QWidget, dt.cadBtn.QWidget} {
+		w.SetEnabled(dt.inputOn())
 	}
 	dt.view.Update() // an ended session's screen goes
 }
@@ -687,7 +705,7 @@ func (dt *desktopTab) mouse(e *qt.QMouseEvent, kind int) {
 	if kind == pressEvent {
 		dt.view.SetFocus()
 	}
-	if !dt.live {
+	if !dt.inputOn() {
 		return
 	}
 	x, y, on := dt.toRemote(e.Position())
@@ -731,7 +749,7 @@ var superModifier = func() qt.KeyboardModifier {
 }()
 
 func (dt *desktopTab) key(e *qt.QKeyEvent, down bool) {
-	if !dt.live {
+	if !dt.inputOn() {
 		return
 	}
 	id := keyID(e)
@@ -764,6 +782,9 @@ func (dt *desktopTab) sendKey(k sentKey, down bool) {
 		dt.sess.Key(k.vk, down, k.ext)
 	}
 }
+
+// inputOn is whether the mouse and keyboard go to the device.
+func (dt *desktopTab) inputOn() bool { return dt.live && dt.inputBtn.IsChecked() }
 
 // releaseKeys lets go of the keys held when the view loses focus, their
 // releases would go elsewhere.

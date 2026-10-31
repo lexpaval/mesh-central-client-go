@@ -144,6 +144,41 @@ func TestDesktopTab(t *testing.T) {
 		waitFor(t, "the keys", func() bool { return got(w) })
 	}
 
+	// View only: a held key is let go, then nothing goes until input is back.
+	mainthread.Wait(func() {
+		send := func(typ qt.QEvent__Type, key qt.Key, text string) {
+			e := qt.NewQKeyEvent3(typ, int(key), qt.NoModifier, text)
+			qt.QCoreApplication_SendEvent(dt.view.QObject, e.QEvent)
+			e.Delete()
+		}
+		send(qt.QEvent__KeyPress, qt.Key_Left, "")
+		dt.inputBtn.SetChecked(false)
+		if dt.typeBtn.IsEnabled() || dt.cadBtn.IsEnabled() {
+			t.Error("typing and Ctrl+Alt+Del are enabled with input off")
+		}
+		send(qt.QEvent__KeyPress, qt.Key_B, "b")
+		send(qt.QEvent__KeyRelease, qt.Key_B, "b")
+		pos := qt.NewQPointF3(60, 50)
+		e := qt.NewQMouseEvent(qt.QEvent__MouseButtonPress, pos, qt.LeftButton, qt.LeftButton, qt.NoModifier)
+		qt.QCoreApplication_SendEvent(dt.view.QObject, e.QEvent)
+		e.Delete()
+		pos.Delete()
+		dt.inputBtn.SetChecked(true)
+		send(qt.QEvent__KeyPress, qt.Key_C, "c")
+	})
+	waitFor(t, "input back", func() bool { return got([]byte{0, 85, 0, 7, 0, 0, 'c'}) })
+	if !got([]byte{0, 1, 0, 6, 3, 0x25}) {
+		t.Error("the held key was not let go")
+	}
+	if got([]byte{0, 85, 0, 7, 0, 0, 'b'}) || got([]byte{0, 2, 0, 10, 0, 0x02, 0, 60, 0, 50}) {
+		t.Error("input went to the device while off")
+	}
+	mainthread.Wait(func() {
+		e := qt.NewQKeyEvent3(qt.QEvent__KeyRelease, int(qt.Key_C), qt.NoModifier, "c")
+		qt.QCoreApplication_SendEvent(dt.view.QObject, e.QEvent)
+		e.Delete()
+	})
+
 	// Another display.
 	mainthread.Wait(func() { dt.displaySel.Activated(1) })
 	waitFor(t, "display 2", func() bool { return dt.status.Text() == "200 × 100" })
