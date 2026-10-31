@@ -56,6 +56,7 @@ type desktopTab struct {
 	clipBtn    *qt.QPushButton
 	inputBtn   *qt.QPushButton
 	fullBtn    *qt.QPushButton
+	windowBtn  *qt.QPushButton
 	typeBtn    *qt.QPushButton
 	cadBtn     *qt.QPushButton
 	reconnect  *qt.QPushButton
@@ -66,6 +67,7 @@ type desktopTab struct {
 	notice          string               // the agent's, until it takes it back
 	notices         agentNotices
 	recorded        bool
+	detached        bool // in a window of its own rather than a tab
 	displays        []int
 	down            map[uint64]sentKey // keys pressed here, released the way they were sent
 	closed          bool
@@ -103,11 +105,18 @@ func openDesktop(d meshcentral.Device) {
 	dt.notices = agentNotices{device: dt.name, kind: "desktop"}
 	dt.build()
 	desktopTabs = append(desktopTabs, dt)
-	tabs.SetCurrentIndex(tabs.AddTab2(dt.w, icon("display"), dt.name+" · Desktop"))
+	tabs.SetCurrentIndex(tabs.AddTab2(dt.w, icon("display"), dt.title()))
 	dt.view.SetFocus()
 	dt.connect()
 	logf("%s: desktop opened", dt.name)
 	recordRecent(recentAction{Kind: "desktop", NodeID: d.Id, Device: dt.name})
+}
+
+func (dt *desktopTab) title() string {
+	if dt.recorded {
+		return dt.name + " · Desktop · recorded"
+	}
+	return dt.name + " · Desktop"
 }
 
 func desktopAt(i int) *desktopTab {
@@ -135,7 +144,9 @@ func (dt *desktopTab) close() {
 		go dt.sess.Close()
 	}
 	desktopTabs = slices.DeleteFunc(desktopTabs, func(x *desktopTab) bool { return x == dt })
-	tabs.RemoveTab(tabs.IndexOf(dt.w))
+	if !dt.detached {
+		tabs.RemoveTab(tabs.IndexOf(dt.w))
+	}
 	dt.w.DeleteLater()
 	logf("%s: desktop closed", dt.name)
 }
@@ -240,6 +251,14 @@ func (dt *desktopTab) build() {
 			dt.fullBtn.SetIcon(icon("compress"))
 		}
 	})
+	dt.windowBtn = button("Separate window", "window-restore", "Move the desktop to a window of its own")
+	dt.windowBtn.SetCheckable(true)
+	dt.windowBtn.OnToggled(dt.detach)
+	// Closing its window ends the desktop, as closing its tab does.
+	dt.w.OnCloseEvent(func(super func(*qt.QCloseEvent), e *qt.QCloseEvent) {
+		super(e)
+		dt.close()
+	})
 	shortcut := qt.NewQShortcut2(qt.NewQKeySequence2("Ctrl+Alt+Return"), dt.w.QObject)
 	shortcut.SetContext(qt.WidgetWithChildrenShortcut)
 	shortcut.OnActivated(func() { dt.fullBtn.Toggle() })
@@ -247,10 +266,10 @@ func (dt *desktopTab) build() {
 	bar := hbox(false)
 	bar.SetContentsMargins(6, 4, 0, 4) // the screen goes edge to edge, not the bar
 	bar.AddWidget2(dt.status.QWidget, 1)
-	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn} {
+	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn} {
 		b.SetText("")
 	}
-	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.reconnect.QWidget} {
+	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.reconnect.QWidget} {
 		bar.AddWidget(w)
 	}
 
@@ -313,7 +332,16 @@ func (dt *desktopTab) retheme() {
 func (dt *desktopTab) fullscreen(on bool) {
 	window := dt.w.Window()
 	dt.releaseKeys()
-	if on {
+	if dt.detached {
+		// Its own window, no client chrome to hide.
+		if on {
+			dt.windowState = window.WindowState()
+			window.ShowFullScreen()
+		} else {
+			window.SetWindowState(dt.windowState)
+		}
+		dt.fullscreenTip(on)
+	} else if on {
 		if fullscreenDesktop != nil && fullscreenDesktop != dt {
 			fullscreenDesktop.fullBtn.SetChecked(false)
 		}
@@ -325,25 +353,63 @@ func (dt *desktopTab) fullscreen(on bool) {
 			w.Hide()
 		}
 		window.ShowFullScreen()
-		dt.fullBtn.SetToolTip("Leave fullscreen (Ctrl+Alt+Enter)")
-		dt.fullBtn.SetAccessibleName("Leave fullscreen")
+		dt.fullscreenTip(true)
 	} else if fullscreenDesktop == dt {
 		fullscreenDesktop = nil
 		for i, w := range desktopChrome {
 			w.SetVisible(!dt.chromeHidden[i])
 		}
 		window.SetWindowState(dt.windowState)
-		dt.fullBtn.SetToolTip("Desktop-only fullscreen (Ctrl+Alt+Enter)")
-		dt.fullBtn.SetAccessibleName("Fullscreen")
+		dt.fullscreenTip(false)
 	}
 	dt.retheme()
 	dt.relayout()
 	dt.view.SetFocus()
 }
 
+func (dt *desktopTab) fullscreenTip(on bool) {
+	if on {
+		dt.fullBtn.SetToolTip("Leave fullscreen (Ctrl+Alt+Enter)")
+		dt.fullBtn.SetAccessibleName("Leave fullscreen")
+	} else {
+		dt.fullBtn.SetToolTip("Desktop-only fullscreen (Ctrl+Alt+Enter)")
+		dt.fullBtn.SetAccessibleName("Fullscreen")
+	}
+}
+
+// detach moves the desktop to a window of its own, or back to a tab.
+func (dt *desktopTab) detach(on bool) {
+	if on == dt.detached {
+		return
+	}
+	dt.fullBtn.SetChecked(false)
+	dt.releaseKeys()
+	if on {
+		size := dt.w.Size()
+		tabs.RemoveTab(tabs.IndexOf(dt.w))
+		dt.detached = true
+		dt.w.SetParent2(nil, qt.Window)
+		dt.w.SetWindowTitle(dt.title())
+		dt.w.SetWindowIcon(icon("display"))
+		dt.w.Resize(max(size.Width(), 800), max(size.Height(), 600))
+		dt.w.Show()
+		dt.w.ActivateWindow()
+		dt.windowBtn.SetToolTip("Put the desktop back in a tab")
+		logf("%s: desktop moved to its own window", dt.name)
+	} else {
+		dt.detached = false
+		tabs.SetCurrentIndex(tabs.AddTab2(dt.w, icon("display"), dt.title()))
+		tabs.Window().ActivateWindow()
+		dt.windowBtn.SetToolTip("Move the desktop to a window of its own")
+		logf("%s: desktop moved back to a tab", dt.name)
+	}
+	dt.relayout()
+	dt.view.SetFocus()
+}
+
 func (dt *desktopTab) clipboardActive() bool {
 	return !dt.closed && dt.live && dt.clipBtn.IsChecked() &&
-		desktopAt(tabs.CurrentIndex()) == dt
+		(dt.detached || desktopAt(tabs.CurrentIndex()) == dt)
 }
 
 func (dt *desktopTab) cancelClipboard() {
@@ -361,7 +427,7 @@ func (dt *desktopTab) resetClipboard() {
 	dt.clipSendError = ""
 }
 
-const clipTip = "Automatically sync text with this device while its Desktop tab is active"
+const clipTip = "Automatically sync text with this device while its Desktop tab or window is active"
 
 func (dt *desktopTab) syncClipboard() {
 	if !dt.clipboardActive() {
@@ -536,7 +602,8 @@ func (dt *desktopTab) connect() {
 			later(func() {
 				if !dt.recorded {
 					dt.recorded = true
-					tabs.SetTabText(tabs.IndexOf(dt.w), dt.name+" · Desktop · recorded")
+					tabs.SetTabText(tabs.IndexOf(dt.w), dt.title())
+					dt.w.SetWindowTitle(dt.title())
 					logf("%s: the server records this desktop session", dt.name)
 				}
 			})

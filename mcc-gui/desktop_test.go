@@ -488,3 +488,40 @@ func TestDesktopConsentClears(t *testing.T) {
 		}
 	})
 }
+
+func TestDesktopWindow(t *testing.T) {
+	fakeDesktop(t, &fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(64, 48)}})
+	var dt *desktopTab
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		openDesktop(devices[0])
+		dt = desktopTabs[0]
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { dt.close() }) })
+	waitFor(t, "the screen", func() bool { return dt.status.Text() == "64 × 48" })
+	mainthread.Wait(func() {
+		tabCount := tabs.Count()
+		dt.windowBtn.Click()
+		if !dt.w.IsWindow() || !dt.w.IsVisible() || tabs.IndexOf(dt.w) != -1 || tabs.Count() != tabCount-1 {
+			t.Error("the desktop did not move to its own window")
+		}
+		if dt.w.WindowTitle() != "dev · Desktop" {
+			t.Errorf("window %q", dt.w.WindowTitle())
+		}
+		dt.fullBtn.Click()
+		settle()
+		if !dt.w.IsFullScreen() || fullscreenDesktop != nil {
+			t.Error("the window did not go fullscreen on its own")
+		}
+		dt.windowBtn.Click()
+		if dt.w.IsWindow() || dt.fullBtn.IsChecked() || tabs.CurrentWidget().UnsafePointer() != dt.w.UnsafePointer() {
+			t.Error("the desktop did not move back to a tab")
+		}
+		dt.windowBtn.Click()
+		dt.w.Close()
+		if !dt.closed || len(desktopTabs) != 0 || tabs.Count() != tabCount-1 {
+			t.Error("closing the window did not close the desktop")
+		}
+	})
+}

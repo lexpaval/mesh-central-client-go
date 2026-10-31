@@ -429,7 +429,9 @@ func buildUI() *qt.QWidget {
 			fullscreenDesktop.fullBtn.SetChecked(false)
 		}
 		for _, dt := range desktopTabs {
-			dt.cancelClipboard()
+			if !dt.detached {
+				dt.cancelClipboard()
+			}
 		}
 	})
 	tabs.SetTabsClosable(true)
@@ -448,7 +450,11 @@ func buildUI() *qt.QWidget {
 			ft.retheme()
 		}
 		for _, dt := range desktopTabs {
-			tabs.SetTabIcon(tabs.IndexOf(dt.w), icon("display"))
+			if dt.detached {
+				dt.w.SetWindowIcon(icon("display"))
+			} else {
+				tabs.SetTabIcon(tabs.IndexOf(dt.w), icon("display"))
+			}
 			dt.retheme()
 		}
 		for _, dv := range detailsTabs {
