@@ -45,19 +45,32 @@ func handleNodesCommand(command map[string]interface{}) {
 // parseNode reads a node as the server sends it in "nodes" and in events,
 // missing fields are left empty. ok is false without a node ID.
 func parseNode(meshID string, node map[string]interface{}) (d Device, ok bool) {
-	str := func(k string) string { s, _ := node[k].(string); return s }
+	text := func(k string) string { s, _ := node[k].(string); return s }
 	num := func(k string) int { f, _ := node[k].(float64); return int(f) }
 	d = Device{
-		Id:          str("_id"),
-		Name:        str("rname"),
-		DisplayName: str("name"),
-		OS:          str("osdesc"),
-		IP:          str("ip"),
+		Id:          text("_id"),
+		Name:        text("rname"),
+		DisplayName: text("name"),
+		OS:          text("osdesc"),
+		IP:          text("ip"),
 		Icon:        num("icon"),
 		Conn:        num("conn"),
 		Pwr:         num("pwr"),
 		MeshID:      meshID,
 		Group:       settings.groups[meshID],
+		Desc:        text("desc"),
+		Tags:        strs(node["tags"]),
+		Users:       strs(node["users"]),
+		UPNUsers:    strs(node["upnusers"]),
+	}
+	if agent := obj(node["agent"]); agent != nil {
+		d.Agent, d.AgentTag = true, str(agent["tag"])
+	}
+	if amt := obj(node["intelamt"]); amt != nil {
+		d.AMT, d.AMTState = true, str(amt["state"])
+	}
+	if wsc := obj(node["wsc"]); wsc != nil {
+		d.WSC = &WSC{str(wsc["antiVirus"]), str(wsc["autoUpdate"]), str(wsc["firewall"])}
 	}
 	return d, d.Id != ""
 }

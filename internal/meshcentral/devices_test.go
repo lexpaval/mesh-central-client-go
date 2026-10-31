@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -164,7 +165,8 @@ func TestHandleEventCommand(t *testing.T) {
 	for _, msg := range []string{
 		`{"action":"event","event":{"action":"nodeconnect","nodeid":"node//1","conn":1,"pwr":1}}`,
 		// Edits from the web UI only name the device inside node.
-		`{"action":"event","event":{"action":"changenode","node":{"_id":"node//2","meshid":"mesh//1","name":"Bench","rname":"bench","osdesc":"Fedora","ip":"192.0.2.1"}}}`,
+		`{"action":"event","event":{"action":"changenode","node":{"_id":"node//2","meshid":"mesh//1","name":"Bench","rname":"bench","osdesc":"Fedora","ip":"192.0.2.1",` +
+			`"desc":"Rack 2","tags":["lab","ci"],"users":["alice"],"agent":{"id":6,"ver":0,"tag":"rack"},"intelamt":{"state":2},"wsc":{"antiVirus":"OK","firewall":"OFF"}}}}`,
 		`{"action":"event","event":{"action":"changenode","nodeid":"node//3"}}`,
 		`{"action":"event","event":{"action":"addnode","node":{"_id":"node//4","name":"No group"}}}`,
 		`{"action":"event","event":{"action":"servertimelinestats"}}`,
@@ -182,8 +184,10 @@ func TestHandleEventCommand(t *testing.T) {
 	if e := got[0]; e.Action != "nodeconnect" || e.NodeID != "node//1" || e.Conn != 1 || e.Pwr != 1 || e.Device != nil {
 		t.Errorf("nodeconnect: %+v", e)
 	}
-	want := Device{Id: "node//2", Name: "bench", DisplayName: "Bench", OS: "Fedora", IP: "192.0.2.1", MeshID: "mesh//1", Group: "Lab"}
-	if e := got[1]; e.NodeID != "node//2" || e.Device == nil || *e.Device != want {
+	want := Device{Id: "node//2", Name: "bench", DisplayName: "Bench", OS: "Fedora", IP: "192.0.2.1", MeshID: "mesh//1", Group: "Lab",
+		Desc: "Rack 2", Tags: []string{"lab", "ci"}, Users: []string{"alice"}, Agent: true, AgentTag: "rack", AMT: true, AMTState: "2",
+		WSC: &WSC{AV: "OK", Firewall: "OFF"}}
+	if e := got[1]; e.NodeID != "node//2" || e.Device == nil || !reflect.DeepEqual(*e.Device, want) {
 		t.Errorf("changenode with node: %+v %+v", e, e.Device)
 	}
 	if e := got[2]; e.NodeID != "node//3" || e.Device != nil {

@@ -23,7 +23,19 @@ type Device struct {
 	Pwr         int
 	MeshID      string // device group
 	Group       string // device group name
+	Desc        string
+	Tags        []string
+	Users       []string // logged in
+	UPNUsers    []string // the same users by principal name
+	Agent       bool     // has a mesh agent
+	AgentTag    string
+	AMT         bool   // has Intel AMT
+	AMTState    string // Intel AMT's state number
+	WSC         *WSC   // nil where unreported
 }
+
+// WSC is the Windows Security Center's state, "OK" or a problem.
+type WSC struct{ AV, Update, Firewall string }
 
 type Settings struct {
 	ServerURL             string

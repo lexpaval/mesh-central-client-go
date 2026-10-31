@@ -309,10 +309,12 @@ func buildUI() *qt.QWidget {
 	top.AddWidget(aboutBtn.QWidget)
 
 	searchEntry = qt.NewQLineEdit2()
-	searchEntry.SetPlaceholderText("Search name, hostname, IP or OS")
+	searchEntry.SetPlaceholderText("Search, or filter: u:alice and !g:lab")
 	searchEntry.SetClearButtonEnabled(true)
 	searchAction := searchEntry.AddAction2(icon("magnifying-glass"), qt.QLineEdit__LeadingPosition)
+	searchAction.SetToolTip("Search filters")
 	themed(func() { searchAction.SetIcon(icon("magnifying-glass")) })
+	searchAction.OnTriggered(showSearchFilters)
 	// Typing opens the groups with a match. Only then, so a group collapsed
 	// during a search stays collapsed through updates.
 	searchEntry.OnTextChanged(func(q string) {
@@ -1072,6 +1074,30 @@ func shownDevice(id string) (meshcentral.Device, bool) {
 	return devices[i], true
 }
 
+// showSearchFilters lists the search prefixes, picking one adds it to the
+// search's terms.
+func showSearchFilters() {
+	m := qt.NewQMenu(searchEntry.QWidget)
+	m.SetAttribute(qt.WA_DeleteOnClose)
+	for _, p := range meshcentral.SearchPrefixes {
+		prefix := p.Names[0] + ":"
+		m.AddActionWithText(p.Help + "\t" + strings.Join(p.Names, ": ") + ":").OnTriggered(func() {
+			q := strings.TrimSpace(searchEntry.Text())
+			if q != "" && !strings.HasSuffix(q, ",") && !strings.HasSuffix(q, " and") && !strings.HasSuffix(q, " or") {
+				q += " and"
+			}
+			if q != "" {
+				q += " "
+			}
+			searchEntry.SetText(q + prefix)
+			searchEntry.SetFocus()
+		})
+	}
+	m.AddSeparator()
+	m.AddActionWithText("Join with \"and\", or with \",\" or \"or\" for either; !term excludes").SetEnabled(false)
+	popupBelow(m, searchEntry.QWidget)
+}
+
 // applyFilter rebuilds the device tree from devices, keeping the selected
 // device selected if it's still shown. Groups with no matching device are
 // left out, the rest keep their open/closed state.
@@ -1109,7 +1135,7 @@ func filterDevices() (reshaped bool) {
 	shown = slices.Grow(shown[:0], len(devices))[:len(devices)]
 	clear(shown)
 
-	q := strings.ToLower(searchEntry.Text())
+	q := meshcentral.ParseSearch(searchEntry.Text())
 	for i, d := range devices {
 		g := groups[d.MeshID]
 		if g == nil {
@@ -1124,7 +1150,7 @@ func filterDevices() (reshaped bool) {
 		if d.Pwr == 0 && !offlineChk.IsChecked() {
 			continue
 		}
-		if q != "" && !strings.Contains(strings.ToLower(d.DisplayName+" "+d.Name+" "+d.IP+" "+d.OS+" "+d.Group), q) {
+		if !q.Match(&devices[i]) {
 			continue
 		}
 		g.children[treeBuf] = append(g.children[treeBuf], d.Id)

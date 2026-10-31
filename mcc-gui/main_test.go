@@ -278,6 +278,38 @@ func TestSearchKeepsCollapsedGroups(t *testing.T) {
 	})
 }
 
+func TestSearchPrefixes(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{
+			{Id: "a", MeshID: "m", Group: "G", Name: "front", Users: []string{"alice"}, Tags: []string{"desk"}, Pwr: 1},
+			{Id: "b", MeshID: "m", Group: "G", Name: "back", Pwr: 1},
+		})
+		shownIDs := func() (ids []string) {
+			for i, d := range devices {
+				if shown[i] {
+					ids = append(ids, d.Id)
+				}
+			}
+			return ids
+		}
+		searchEntry.SetText("user:alice")
+		if got := shownIDs(); !slices.Equal(got, []string{"a"}) {
+			t.Errorf("user:alice shows %v", got)
+		}
+		// Someone logging in on b shows it.
+		onNodeEvent(meshcentral.NodeEvent{Action: "changenode", NodeID: "b", Device: &meshcentral.Device{Id: "b", MeshID: "m", Group: "G", Name: "back", Users: []string{"alice"}}})
+		flushNodeEvents()
+		if got := shownIDs(); !slices.Equal(got, []string{"b", "a"}) { // by name
+			t.Errorf("after the login user:alice shows %v", got)
+		}
+		searchEntry.SetText("user:alice and !tag:desk")
+		if got := shownIDs(); !slices.Equal(got, []string{"b"}) {
+			t.Errorf("user:alice and !tag:desk shows %v", got)
+		}
+	})
+}
+
 func TestExpandCollapseAll(t *testing.T) {
 	ui(t, func() {
 		setConnected(true)
