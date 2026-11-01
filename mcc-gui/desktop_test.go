@@ -557,6 +557,10 @@ func TestDesktopDisplayWindows(t *testing.T) {
 		if title := dt.screens[0].WindowTitle(); title != "dev · Display 2" {
 			t.Errorf("window %q", title)
 		}
+		// The tab shows where the displays are, its own view's controls off.
+		if !dt.view.overview() || dt.view.inputOn() || dt.fitBtn.IsEnabled() || dt.fullBtn.IsEnabled() || !dt.screens[0].inputOn() {
+			t.Error("the tab did not become the displays' overview")
+		}
 	})
 	waitFor(t, "the screen of all displays", func() bool { return dt.status.Text() == "96 × 48" })
 	v := dt.screens[0]
@@ -584,8 +588,21 @@ func TestDesktopDisplayWindows(t *testing.T) {
 		if len(dt.screens) != 1 || !dt.splitBtn.IsChecked() {
 			t.Error("closing one display window closed the others")
 		}
+		// Clicking its place in the overview opens it again.
+		dt.view.SetFixedSize2(400, 300)
+		boxes := dt.view.boxes()
+		if len(boxes) != 2 || boxes[0].id != 2 || boxes[0].r.Max.X > boxes[1].r.Min.X {
+			t.Fatalf("overview %v", boxes)
+		}
+		c := boxes[0].r.Min.Add(boxes[0].r.Max).Div(2)
+		e := qt.NewQMouseEvent(qt.QEvent__MouseButtonPress, qt.NewQPointF3(float64(c.X), float64(c.Y)), qt.LeftButton, qt.LeftButton, qt.NoModifier)
+		qt.QCoreApplication_SendEvent(dt.view.QObject, e.QEvent)
+		if len(dt.screens) != 2 || dt.screens[1].display != 2 || !dt.screens[1].IsVisible() {
+			t.Error("clicking display 2 did not reopen its window")
+		}
+		dt.screens[1].Close()
 		dt.screens[0].Close()
-		if dt.screens != nil || dt.splitBtn.IsChecked() || !dt.displaySel.IsEnabled() {
+		if dt.screens != nil || dt.splitBtn.IsChecked() || !dt.displaySel.IsEnabled() || !dt.fitBtn.IsEnabled() || dt.view.overview() {
 			t.Error("closing the last display window did not end the split")
 		}
 	})
