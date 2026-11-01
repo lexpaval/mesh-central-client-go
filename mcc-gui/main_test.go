@@ -834,3 +834,20 @@ func TestCLICommand(t *testing.T) {
 		t.Fatal("remove left the copy")
 	}
 }
+
+func TestHideDevices(t *testing.T) {
+	ui(t, func() {
+		hideListBtn.Click()
+		if !devicePane.IsHidden() || showListBtn.IsHidden() || pref("hideDevices") == "" {
+			t.Error("the device list did not hide")
+		}
+		buildUI()
+		if !devicePane.IsHidden() || showListBtn.IsHidden() {
+			t.Error("a rebuild showed the hidden device list")
+		}
+		showListBtn.Click()
+		if devicePane.IsHidden() || !showListBtn.IsHidden() || pref("hideDevices") != "" {
+			t.Error("the device list did not come back")
+		}
+	})
+}

@@ -188,6 +188,10 @@ func TestDesktopTab(t *testing.T) {
 	mainthread.Wait(func() {
 		window := dt.w.Window()
 		state := window.WindowState()
+		var hidden []bool
+		for _, w := range desktopChrome {
+			hidden = append(hidden, w.IsHidden())
+		}
 		dt.fullBtn.Click()
 		settle()
 		if !window.IsFullScreen() || fullscreenDesktop != dt || !dt.scroll.IsVisible() {
@@ -214,8 +218,8 @@ func TestDesktopTab(t *testing.T) {
 		if window.WindowState() != state || fullscreenDesktop != nil {
 			t.Error("fullscreen shortcut did not restore the window")
 		}
-		for _, w := range desktopChrome {
-			if w.IsHidden() {
+		for i, w := range desktopChrome {
+			if w.IsHidden() != hidden[i] {
 				t.Error("client chrome was not restored")
 			}
 		}

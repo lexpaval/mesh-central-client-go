@@ -74,6 +74,9 @@ var (
 	insecureChk   *qt.QCheckBox
 	searchEntry   *qt.QLineEdit
 	offlineChk    *qt.QCheckBox
+	devicePane    *qt.QWidget // search, tree and device buttons
+	hideListBtn   *qt.QPushButton
+	showListBtn   *qt.QPushButton // the tabs' corner, while the list is hidden
 	deviceTree    *qt.QTreeWidget
 	treeItems     = map[string]*qt.QTreeWidgetItem{} // group and device rows by ID
 	collapsed     = map[string]bool{}                // groups the user closed
@@ -338,6 +341,9 @@ func buildUI() *qt.QWidget {
 	filterRow.AddStretch()
 	filterRow.AddWidget(expandBtn.QWidget)
 	filterRow.AddWidget(collapseBtn.QWidget)
+	hideListBtn = iconButton("", "angles-left", "Hide the device list (Ctrl+Shift+B)")
+	hideListBtn.SetFlat(true)
+	filterRow.AddWidget(hideListBtn.QWidget)
 	buildTree()
 
 	shellBtn := iconButton("Shell", "terminal", "Open a shell on the device")
@@ -390,6 +396,7 @@ func buildUI() *qt.QWidget {
 	btnRow.AddStretch()
 
 	left := qt.NewQWidget2()
+	devicePane = left
 	ll := qt.NewQVBoxLayout(left)
 	ll.SetContentsMargins(0, 0, 0, 0)
 	ll.AddWidget(searchEntry.QWidget)
@@ -502,6 +509,26 @@ func buildUI() *qt.QWidget {
 	hsplit.SetStretchFactor(1, 1)
 	hsplit.SetSizes([]int{450, 650})
 	hsplit.SetChildrenCollapsible(false)
+
+	// The device list folds away for room, back from the tabs' corner, or
+	// Ctrl+Shift+B either way. Not in a desktop's fullscreen, which puts it
+	// back as it was.
+	showListBtn = iconButton("", "angles-right", "Show the device list (Ctrl+Shift+B)")
+	showListBtn.SetFlat(true)
+	tabs.SetCornerWidget2(showListBtn.QWidget, qt.TopLeftCorner)
+	showDevices := func(show bool) {
+		left.SetVisible(show)
+		showListBtn.SetVisible(!show)
+		setPref("hideDevices", map[bool]string{false: "1"}[show])
+	}
+	hideListBtn.OnClicked(func() { showDevices(false) })
+	showListBtn.OnClicked(func() { showDevices(true) })
+	qt.NewQShortcut2(qt.NewQKeySequence2("Ctrl+Shift+B"), root.QObject).OnActivated(func() {
+		if fullscreenDesktop == nil {
+			showDevices(left.IsHidden())
+		}
+	})
+	showDevices(pref("hideDevices") == "")
 	vsplit := qt.NewQSplitter3(qt.Vertical)
 	vsplit.AddWidget(hsplit.QWidget)
 	vsplit.AddWidget(logView.QWidget)
@@ -514,7 +541,7 @@ func buildUI() *qt.QWidget {
 	topPane.SetLayout(top.QLayout)
 	rl.AddWidget(topPane)
 	rl.AddWidget2(vsplit.QWidget, 1)
-	desktopChrome = []*qt.QWidget{topPane, left, logView.QWidget, tabs.TabBar().QWidget}
+	desktopChrome = []*qt.QWidget{topPane, left, logView.QWidget, tabs.TabBar().QWidget, showListBtn.QWidget}
 	fullscreenDesktop = nil
 	setConnected(false)
 	recent = nil
