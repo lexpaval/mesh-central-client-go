@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"image"
+	"maps"
 	"runtime"
 	"slices"
 	"strconv"
@@ -47,7 +48,7 @@ type desktopTab struct {
 	w     *qt.QWidget
 	icons []func()
 
-	view       *qt.QWidget
+	view       *deskView
 	scroll     *qt.QScrollArea
 	status     *qt.QLabel
 	displaySel *qt.QComboBox
@@ -57,6 +58,7 @@ type desktopTab struct {
 	inputBtn   *qt.QPushButton
 	fullBtn    *qt.QPushButton
 	windowBtn  *qt.QPushButton
+	splitBtn   *qt.QPushButton
 	typeBtn    *qt.QPushButton
 	cadBtn     *qt.QPushButton
 	reconnect  *qt.QPushButton
@@ -69,6 +71,9 @@ type desktopTab struct {
 	recorded        bool
 	detached        bool // in a window of its own rather than a tab
 	displays        []int
+	layout          map[int]image.Rectangle // the displays in the screen of all of them
+	screens         []*deskView             // the displays' own windows
+	cursor          qt.CursorShape
 	down            map[uint64]sentKey // keys pressed here, released the way they were sent
 	closed          bool
 	clipCancel      context.CancelFunc
@@ -86,6 +91,16 @@ type desktopTab struct {
 	mu      sync.Mutex
 	dirty   image.Rectangle
 	pending bool
+}
+
+// deskView shows the device's screen, or one of its displays in a window of
+// its own, and passes the mouse and keyboard on.
+type deskView struct {
+	*qt.QWidget
+	dt      *desktopTab
+	display int             // the display in its own window, 0 in the tab
+	crop    image.Rectangle // the display in the screen of all of them
+	state   qt.WindowState  // before fullscreen
 }
 
 // sentKey is how a key press went to the device: a character or a key.
@@ -112,11 +127,14 @@ func openDesktop(d meshcentral.Device) {
 	recordRecent(recentAction{Kind: "desktop", NodeID: d.Id, Device: dt.name})
 }
 
-func (dt *desktopTab) title() string {
+func (dt *desktopTab) title() string { return dt.titled("Desktop") }
+
+func (dt *desktopTab) titled(s string) string {
+	s = dt.name + " · " + s
 	if dt.recorded {
-		return dt.name + " · Desktop · recorded"
+		s += " · recorded"
 	}
-	return dt.name + " · Desktop"
+	return s
 }
 
 func desktopAt(i int) *desktopTab {
@@ -137,6 +155,7 @@ func (dt *desktopTab) close() {
 		return
 	}
 	dt.fullBtn.SetChecked(false)
+	dt.splitBtn.SetChecked(false)
 	dt.cancelClipboard()
 	dt.closed = true
 	dt.attempt++
@@ -254,6 +273,10 @@ func (dt *desktopTab) build() {
 	dt.windowBtn = button("Separate window", "window-restore", "Move the desktop to a window of its own")
 	dt.windowBtn.SetCheckable(true)
 	dt.windowBtn.OnToggled(dt.detach)
+	dt.splitBtn = button("Window per display", "table-columns", "Show each of the device's displays in a window of its own, Ctrl+Alt+Enter in one makes it fullscreen")
+	dt.splitBtn.SetCheckable(true)
+	dt.splitBtn.SetVisible(false)
+	dt.splitBtn.OnToggled(dt.split)
 	// Closing its window ends the desktop, as closing its tab does.
 	dt.w.OnCloseEvent(func(super func(*qt.QCloseEvent), e *qt.QCloseEvent) {
 		super(e)
@@ -266,53 +289,19 @@ func (dt *desktopTab) build() {
 	bar := hbox(false)
 	bar.SetContentsMargins(6, 4, 0, 4) // the screen goes edge to edge, not the bar
 	bar.AddWidget2(dt.status.QWidget, 1)
-	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn} {
+	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
 		b.SetText("")
 	}
-	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.reconnect.QWidget} {
+	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
 		bar.AddWidget(w)
 	}
 
-	dt.view = qt.NewQWidget2()
-	dt.view.SetFocusPolicy(qt.StrongFocus)
-	dt.view.SetMouseTracking(true)
-	dt.view.SetAttribute(qt.WA_OpaquePaintEvent)
-	dt.view.OnPaintEvent(func(_ func(*qt.QPaintEvent), e *qt.QPaintEvent) { dt.paint(e) })
-	dt.view.OnResizeEvent(func(super func(*qt.QResizeEvent), e *qt.QResizeEvent) { super(e); dt.view.Update() })
-	// Every key belongs to the device, shortcuts and Tab included, while
-	// input goes to it.
-	dt.view.OnEvent(func(super func(*qt.QEvent) bool, e *qt.QEvent) bool {
-		if e.Type() == qt.QEvent__ShortcutOverride && dt.inputOn() {
-			k := qt.UnsafeNewQKeyEvent(e.UnsafePointer())
-			if k.Key() == int(qt.Key_Return) && k.Modifiers() == qt.ControlModifier|qt.AltModifier {
-				return super(e)
-			}
-			e.Accept()
-			return true
-		}
-		return super(e)
-	})
-	dt.view.OnFocusNextPrevChild(func(super func(bool) bool, next bool) bool { return !dt.inputOn() && super(next) })
-	dt.view.OnKeyPressEvent(func(_ func(*qt.QKeyEvent), e *qt.QKeyEvent) { dt.key(e, true) })
-	dt.view.OnKeyReleaseEvent(func(_ func(*qt.QKeyEvent), e *qt.QKeyEvent) { dt.key(e, false) })
-	dt.view.OnFocusOutEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); dt.releaseKeys() })
-	dt.view.OnMousePressEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, pressEvent) })
-	dt.view.OnMouseDoubleClickEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, pressEvent) })
-	dt.view.OnMouseReleaseEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, releaseEvent) })
-	dt.view.OnMouseMoveEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { dt.mouse(e, moveEvent) })
-	dt.view.OnWheelEvent(func(super func(*qt.QWheelEvent), e *qt.QWheelEvent) {
-		if !dt.inputOn() {
-			super(e) // scrolls the view instead
-		} else if x, y, ok := dt.toRemote(e.Position()); ok {
-			dt.sess.MouseWheel(e.AngleDelta().Y(), x, y)
-		}
-	})
-	dt.view.OnContextMenuEvent(func(_ func(*qt.QContextMenuEvent), _ *qt.QContextMenuEvent) {}) // the right button is the device's
+	dt.view = dt.newView(0)
 
 	dt.scroll = qt.NewQScrollArea2()
 	dt.scroll.SetFrameShape(qt.QFrame__NoFrame)
 	dt.scroll.SetAlignment(qt.AlignCenter)
-	dt.scroll.SetWidget(dt.view)
+	dt.scroll.SetWidget(dt.view.QWidget)
 	dt.scroll.SetBackgroundRole(qt.QPalette__Dark)
 
 	l := qt.NewQVBoxLayout(dt.w)
@@ -323,9 +312,58 @@ func (dt *desktopTab) build() {
 	dt.setLive(false)
 }
 
+// newView makes a view of the screen, display 0 for the tab's.
+func (dt *desktopTab) newView(display int) *deskView {
+	v := &deskView{QWidget: qt.NewQWidget2(), dt: dt, display: display}
+	v.SetFocusPolicy(qt.StrongFocus)
+	v.SetMouseTracking(true)
+	v.SetAttribute(qt.WA_OpaquePaintEvent)
+	v.OnPaintEvent(func(_ func(*qt.QPaintEvent), e *qt.QPaintEvent) { v.paint(e) })
+	v.OnResizeEvent(func(super func(*qt.QResizeEvent), e *qt.QResizeEvent) { super(e); v.Update() })
+	// Every key belongs to the device, shortcuts and Tab included, while
+	// input goes to it.
+	v.OnEvent(func(super func(*qt.QEvent) bool, e *qt.QEvent) bool {
+		if e.Type() == qt.QEvent__ShortcutOverride && dt.inputOn() {
+			k := qt.UnsafeNewQKeyEvent(e.UnsafePointer())
+			if k.Key() == int(qt.Key_Return) && k.Modifiers() == qt.ControlModifier|qt.AltModifier {
+				return super(e)
+			}
+			e.Accept()
+			return true
+		}
+		return super(e)
+	})
+	v.OnFocusNextPrevChild(func(super func(bool) bool, next bool) bool { return !dt.inputOn() && super(next) })
+	v.OnKeyPressEvent(func(_ func(*qt.QKeyEvent), e *qt.QKeyEvent) { dt.key(e, true) })
+	v.OnKeyReleaseEvent(func(_ func(*qt.QKeyEvent), e *qt.QKeyEvent) { dt.key(e, false) })
+	v.OnFocusOutEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); dt.releaseKeys() })
+	v.OnMousePressEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, pressEvent) })
+	v.OnMouseDoubleClickEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, pressEvent) })
+	v.OnMouseReleaseEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, releaseEvent) })
+	v.OnMouseMoveEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, moveEvent) })
+	v.OnWheelEvent(func(super func(*qt.QWheelEvent), e *qt.QWheelEvent) {
+		if !dt.inputOn() {
+			super(e) // scrolls the view instead
+		} else if x, y, ok := v.toRemote(e.Position()); ok {
+			dt.sess.MouseWheel(e.AngleDelta().Y(), x, y)
+		}
+	})
+	v.OnContextMenuEvent(func(_ func(*qt.QContextMenuEvent), _ *qt.QContextMenuEvent) {}) // the right button is the device's
+	cur := qt.NewQCursor2(dt.cursor)
+	v.SetCursor(cur)
+	cur.Delete()
+	return v
+}
+
+// views are the tab's view and the display windows.
+func (dt *desktopTab) views() []*deskView { return append([]*deskView{dt.view}, dt.screens...) }
+
 func (dt *desktopTab) retheme() {
 	for _, set := range dt.icons {
 		set()
+	}
+	for _, v := range dt.screens {
+		v.SetWindowIcon(icon("display"))
 	}
 }
 
@@ -407,9 +445,103 @@ func (dt *desktopTab) detach(on bool) {
 	dt.view.SetFocus()
 }
 
+// split shows each of the device's displays in a window of its own, cut
+// from the screen of all of them, or closes those windows. They open on the
+// local screens in the order the displays are placed, left to right.
+func (dt *desktopTab) split(on bool) {
+	dt.releaseKeys()
+	dt.displaySel.SetEnabled(dt.live && !on)
+	if !on {
+		views := dt.screens
+		dt.screens = nil
+		for _, v := range views {
+			v.Close()
+		}
+		if views != nil {
+			logf("%s: display windows closed", dt.name)
+		}
+		return
+	}
+	if dt.screens != nil {
+		return
+	}
+	if dt.live {
+		dt.sess.SetDisplay(meshcentral.AllDisplays)
+	}
+	ids := slices.SortedFunc(maps.Keys(dt.layout), func(a, b int) int {
+		ra, rb := dt.layout[a], dt.layout[b]
+		return cmp.Or(ra.Min.X-rb.Min.X, ra.Min.Y-rb.Min.Y, a-b)
+	})
+	local := qt.QGuiApplication_Screens()
+	slices.SortFunc(local, func(a, b *qt.QScreen) int {
+		ga, gb := a.Geometry(), b.Geometry()
+		return cmp.Or(ga.X()-gb.X(), ga.Y()-gb.Y())
+	})
+	for i, id := range ids {
+		v := dt.newView(id)
+		v.crop = dt.layout[id]
+		dt.screens = append(dt.screens, v)
+		v.SetWindowTitle(dt.titled(fmt.Sprintf("Display %d", id)))
+		v.SetWindowIcon(icon("display"))
+		v.OnCloseEvent(func(super func(*qt.QCloseEvent), e *qt.QCloseEvent) {
+			super(e)
+			v.DeleteLater()
+			if j := slices.Index(dt.screens, v); j >= 0 {
+				dt.screens = slices.Delete(dt.screens, j, j+1)
+				if len(dt.screens) == 0 {
+					dt.splitBtn.SetChecked(false)
+				}
+			}
+		})
+		shortcut := qt.NewQShortcut2(qt.NewQKeySequence2("Ctrl+Alt+Return"), v.QObject)
+		shortcut.SetContext(qt.WindowShortcut)
+		shortcut.OnActivated(func() {
+			dt.releaseKeys()
+			if v.IsFullScreen() {
+				v.SetWindowState(v.state)
+			} else {
+				v.state = v.WindowState()
+				v.ShowFullScreen()
+			}
+		})
+		screen := dt.w.Screen()
+		if i < len(local) {
+			screen = local[i]
+		}
+		v.SetScreen(screen)
+		g, dpr := screen.AvailableGeometry(), screen.DevicePixelRatio()
+		w := min(int(float64(v.crop.Dx())/dpr), g.Width()*9/10)
+		h := min(int(float64(v.crop.Dy())/dpr), g.Height()*9/10)
+		v.Resize(w, h)
+		v.Move(g.X()+(g.Width()-w)/2, g.Y()+(g.Height()-h)/2)
+		v.Show()
+	}
+	logf("%s: %d displays in windows of their own", dt.name, len(ids))
+}
+
+// setLayout takes the displays' places in the screen of all of them, the
+// windows of displays gone close.
+func (dt *desktopTab) setLayout(layout map[int]image.Rectangle) {
+	dt.layout = layout
+	dt.splitBtn.SetVisible(len(layout) > 1)
+	for _, v := range slices.Clone(dt.screens) {
+		if r, ok := layout[v.display]; ok {
+			v.crop = r
+			v.Update()
+		} else {
+			v.Close()
+		}
+	}
+}
+
 func (dt *desktopTab) clipboardActive() bool {
 	return !dt.closed && dt.live && dt.clipBtn.IsChecked() &&
-		(dt.detached || desktopAt(tabs.CurrentIndex()) == dt)
+		(dt.detached || len(dt.screens) > 0 || desktopAt(tabs.CurrentIndex()) == dt)
+}
+
+// active is whether one of the desktop's windows is the active window.
+func (dt *desktopTab) active() bool {
+	return dt.w.Window().IsActiveWindow() || slices.ContainsFunc(dt.screens, func(v *deskView) bool { return v.IsActiveWindow() })
 }
 
 func (dt *desktopTab) cancelClipboard() {
@@ -435,7 +567,7 @@ func (dt *desktopTab) syncClipboard() {
 		return
 	}
 	// Finish reads started here even after switching to a local application.
-	if !dt.w.Window().IsActiveWindow() {
+	if !dt.active() {
 		return
 	}
 	if dt.clipCancel != nil {
@@ -523,13 +655,14 @@ func (dt *desktopTab) setLive(live bool) {
 	}
 	dt.live = live
 	dt.reconnect.SetVisible(!live)
-	for _, w := range []*qt.QWidget{dt.clipBtn.QWidget, dt.displaySel.QWidget} {
-		w.SetEnabled(live)
-	}
+	dt.clipBtn.SetEnabled(live)
+	dt.displaySel.SetEnabled(live && !dt.splitBtn.IsChecked())
 	for _, w := range []*qt.QWidget{dt.typeBtn.QWidget, dt.cadBtn.QWidget} {
 		w.SetEnabled(dt.inputOn())
 	}
-	dt.view.Update() // an ended session's screen goes
+	for _, v := range dt.views() {
+		v.Update() // an ended session's screen goes
+	}
 }
 
 // showSize puts the screen size in the status, after the agent's notice.
@@ -575,6 +708,7 @@ func (dt *desktopTab) connect() {
 	}
 	ev := meshcentral.DesktopEvents{
 		Screen: func(int, int) { later(func() { dt.relayout(); dt.showSize() }) },
+		Layout: func(l map[int]image.Rectangle) { later(func() { dt.setLayout(l) }) },
 		Frame:  dt.queueFrame,
 		Displays: func(ids []int, sel int) {
 			later(func() {
@@ -604,22 +738,32 @@ func (dt *desktopTab) connect() {
 					dt.recorded = true
 					tabs.SetTabText(tabs.IndexOf(dt.w), dt.title())
 					dt.w.SetWindowTitle(dt.title())
+					for _, v := range dt.screens {
+						v.SetWindowTitle(dt.titled(fmt.Sprintf("Display %d", v.display)))
+					}
 					logf("%s: the server records this desktop session", dt.name)
 				}
 			})
 		},
 		Cursor: func(c int) {
 			later(func() {
-				cur := qt.NewQCursor2(desktopCursor(c))
-				dt.view.SetCursor(cur)
+				dt.cursor = desktopCursor(c)
+				cur := qt.NewQCursor2(dt.cursor)
+				for _, v := range dt.views() {
+					v.SetCursor(cur)
+				}
 				cur.Delete()
 			})
 		},
 	}
+	split := dt.splitBtn.IsChecked()
 	go func() {
 		s, err := openDesktopSession(dt.d.Id, ev)
 		if err == nil {
 			s.SetQuality(q.quality, q.frame)
+			if split {
+				s.SetDisplay(meshcentral.AllDisplays)
+			}
 		}
 		mainthread.Start(func() {
 			if dt.closed || attempt != dt.attempt {
@@ -673,36 +817,58 @@ func (dt *desktopTab) queueFrame(r image.Rectangle) {
 		if dt.closed {
 			return
 		}
-		tr, scale, ok := dt.target()
-		if !ok {
-			return
+		for _, v := range dt.views() {
+			tr, src, scale, ok := v.target()
+			if !ok {
+				continue
+			}
+			if r := r.Intersect(src).Sub(src.Min); !r.Empty() {
+				rect := qt.NewQRect4(int(tr.X()+float64(r.Min.X)*scale)-1, int(tr.Y()+float64(r.Min.Y)*scale)-1,
+					int(float64(r.Dx())*scale)+3, int(float64(r.Dy())*scale)+3)
+				v.UpdateWithQRect(rect)
+				rect.Delete()
+			}
+			tr.Delete()
 		}
-		defer tr.Delete()
-		rect := qt.NewQRect4(int(tr.X()+float64(r.Min.X)*scale)-1, int(tr.Y()+float64(r.Min.Y)*scale)-1,
-			int(float64(r.Dx())*scale)+3, int(float64(r.Dy())*scale)+3)
-		dt.view.UpdateWithQRect(rect)
-		rect.Delete()
 	})
 }
 
-// target is where the screen is drawn in the view, and the view pixels per
-// screen pixel, while the session is live.
-func (dt *desktopTab) target() (r *qt.QRectF, scale float64, ok bool) {
+// shown is the part of the screen the view shows, none while there's no
+// screen: a display's window waits for the screen of all displays.
+func (v *deskView) shown() image.Rectangle {
+	dt := v.dt
 	if !dt.live || dt.sess == nil {
-		return nil, 0, false
+		return image.Rectangle{}
 	}
 	w, h := dt.sess.Size()
-	if w == 0 || h == 0 {
-		return nil, 0, false
+	if v.display == 0 {
+		return image.Rect(0, 0, w, h)
 	}
-	dpr := dt.view.DevicePixelRatioF()
-	scale = 1 / dpr // a screen pixel to a device pixel
-	vw, vh := float64(dt.view.Width()), float64(dt.view.Height())
-	if dt.fitBtn.IsChecked() {
-		scale = min(vw/float64(w), vh/float64(h), scale)
+	var all image.Rectangle
+	for _, r := range dt.layout {
+		all = all.Union(r)
 	}
-	tw, th := float64(w)*scale, float64(h)*scale
-	return qt.NewQRectF4((vw-tw)/2, (vh-th)/2, tw, th), scale, true
+	if all.Size() != image.Pt(w, h) {
+		return image.Rectangle{}
+	}
+	return v.crop
+}
+
+// target is where src, the part of the screen shown, is drawn in the view,
+// and the view pixels per screen pixel, while there is one. Display windows
+// always fit it.
+func (v *deskView) target() (r *qt.QRectF, src image.Rectangle, scale float64, ok bool) {
+	src = v.shown()
+	if src.Empty() {
+		return nil, src, 0, false
+	}
+	scale = 1 / v.DevicePixelRatioF() // a screen pixel to a device pixel
+	vw, vh := float64(v.Width()), float64(v.Height())
+	if v.display != 0 || v.dt.fitBtn.IsChecked() {
+		scale = min(vw/float64(src.Dx()), vh/float64(src.Dy()), scale)
+	}
+	tw, th := float64(src.Dx())*scale, float64(src.Dy())*scale
+	return qt.NewQRectF4((vw-tw)/2, (vh-th)/2, tw, th), src, scale, true
 }
 
 // relayout sizes the view: the scroll area's viewport when fitting, the
@@ -716,13 +882,15 @@ func (dt *desktopTab) relayout() {
 			dt.view.Resize(int(float64(w)/dpr+0.5), int(float64(h)/dpr+0.5))
 		}
 	}
-	dt.view.Update()
+	for _, v := range dt.views() {
+		v.Update()
+	}
 }
 
-func (dt *desktopTab) paint(e *qt.QPaintEvent) {
-	p := qt.NewQPainter2(dt.view.QPaintDevice)
+func (v *deskView) paint(e *qt.QPaintEvent) {
+	p := qt.NewQPainter2(v.QPaintDevice)
 	defer p.Delete()
-	tr, scale, ok := dt.target()
+	tr, shown, scale, ok := v.target()
 	if ok {
 		defer tr.Delete()
 	}
@@ -737,45 +905,46 @@ func (dt *desktopTab) paint(e *qt.QPaintEvent) {
 	if !ok {
 		return
 	}
-	if scale*dt.view.DevicePixelRatioF() != 1 {
+	if scale*v.DevicePixelRatioF() != 1 {
 		p.SetRenderHint2(qt.QPainter__SmoothPixmapTransform, true)
 	}
-	dt.sess.Frame(func(pix []byte, w, h int) {
-		if len(pix) < w*h*4 || w == 0 {
+	v.dt.sess.Frame(func(pix []byte, w, h int) {
+		if len(pix) < w*h*4 || w == 0 || !shown.In(image.Rect(0, 0, w, h)) {
 			return
 		}
 		// Wraps the frame for the call, the session holds it still meanwhile.
 		img := qt.NewQImage4(&pix[0], w, h, qt.QImage__Format_RGB32)
-		src := qt.NewQRectF4(0, 0, float64(w), float64(h))
+		src := qt.NewQRectF4(float64(shown.Min.X), float64(shown.Min.Y), float64(shown.Dx()), float64(shown.Dy()))
 		p.DrawImage(tr, img, src)
 		src.Delete()
 		img.Delete()
 	})
 }
 
-// toRemote maps a view position to screen pixels, ok while on the screen.
-func (dt *desktopTab) toRemote(pos *qt.QPointF) (x, y int, ok bool) {
-	tr, scale, ok := dt.target()
+// toRemote maps a view position to screen pixels, ok while on the part
+// shown.
+func (v *deskView) toRemote(pos *qt.QPointF) (x, y int, ok bool) {
+	tr, src, scale, ok := v.target()
 	if !ok {
 		return 0, 0, false
 	}
 	defer tr.Delete()
-	w, h := dt.sess.Size()
 	fx, fy := (pos.X()-tr.X())/scale, (pos.Y()-tr.Y())/scale
-	if fx < 0 || fy < 0 || fx >= float64(w) || fy >= float64(h) {
-		return min(max(int(fx), 0), w-1), min(max(int(fy), 0), h-1), false
+	if fx < 0 || fy < 0 || fx >= float64(src.Dx()) || fy >= float64(src.Dy()) {
+		return src.Min.X + min(max(int(fx), 0), src.Dx()-1), src.Min.Y + min(max(int(fy), 0), src.Dy()-1), false
 	}
-	return int(fx), int(fy), true
+	return src.Min.X + int(fx), src.Min.Y + int(fy), true
 }
 
-func (dt *desktopTab) mouse(e *qt.QMouseEvent, kind int) {
+func (v *deskView) mouse(e *qt.QMouseEvent, kind int) {
+	dt := v.dt
 	if kind == pressEvent {
-		dt.view.SetFocus()
+		v.SetFocus()
 	}
 	if !dt.inputOn() {
 		return
 	}
-	x, y, on := dt.toRemote(e.Position())
+	x, y, on := v.toRemote(e.Position())
 	// Off the screen only a drag carries on, clamped to its edge.
 	if !on && (kind == pressEvent || kind == moveEvent && e.Buttons() == qt.NoButton) {
 		return

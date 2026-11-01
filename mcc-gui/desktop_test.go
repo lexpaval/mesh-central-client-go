@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"image"
+	"image/color"
+	"image/draw"
 	"net/http/httptest"
 	"slices"
 	"strings"
@@ -111,11 +113,11 @@ func TestDesktopTab(t *testing.T) {
 	mainthread.Wait(func() {
 		dt.fitBtn.SetChecked(true)
 		dt.view.SetFixedSize2(600, 150) // what the viewport would give it
-		x, y, ok := dt.toRemote(qt.NewQPointF3(300, 75))
+		x, y, ok := dt.view.toRemote(qt.NewQPointF3(300, 75))
 		if !ok || x != 200 || y != 150 {
 			t.Errorf("the middle of the view is (%d, %d) %v, want (200, 150)", x, y, ok)
 		}
-		if _, _, ok := dt.toRemote(qt.NewQPointF3(50, 75)); ok {
+		if _, _, ok := dt.view.toRemote(qt.NewQPointF3(50, 75)); ok {
 			t.Errorf("the letterbox is on the screen")
 		}
 		dt.view.SetMinimumSize2(0, 0)
@@ -522,6 +524,65 @@ func TestDesktopWindow(t *testing.T) {
 		dt.w.Close()
 		if !dt.closed || len(desktopTabs) != 0 || tabs.Count() != tabCount-1 {
 			t.Error("closing the window did not close the desktop")
+		}
+	})
+}
+
+func TestDesktopDisplayWindows(t *testing.T) {
+	// Display 2 is left of display 1, so its window comes first.
+	second := image.NewRGBA(image.Rect(0, 0, 32, 24))
+	draw.Draw(second, second.Bounds(), image.NewUniform(color.RGBA{0, 200, 0, 255}), image.Point{}, draw.Src)
+	got := fakeDesktop(t, &fakeagent.DesktopAgent{
+		Screens:   map[int]*image.RGBA{1: fakeagent.DemoScreen(64, 48), 2: second},
+		Positions: map[int]image.Point{1: {0, 0}, 2: {-32, 8}},
+	})
+	var dt *desktopTab
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		openDesktop(devices[0])
+		dt = desktopTabs[0]
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { dt.close() }) })
+	waitFor(t, "the layout", func() bool { return dt.splitBtn.IsVisibleTo(dt.w) })
+	mainthread.Wait(func() {
+		dt.splitBtn.Click()
+		if len(dt.screens) != 2 || dt.screens[0].display != 2 || !dt.screens[0].IsVisible() || dt.displaySel.IsEnabled() {
+			t.Fatal("no window per display")
+		}
+		if title := dt.screens[0].WindowTitle(); title != "dev · Display 2" {
+			t.Errorf("window %q", title)
+		}
+	})
+	waitFor(t, "the screen of all displays", func() bool { return dt.status.Text() == "96 × 48" })
+	v := dt.screens[0]
+	waitFor(t, "display 2 in its window", func() bool {
+		img := v.Grab().ToImage()
+		c := qt.NewQColor4(uint(img.Pixel(v.Width()/2, v.Height()/2)))
+		defer c.Delete()
+		return c.Red() < 60 && c.Green() > 160 && c.Blue() < 60
+	})
+	mainthread.Wait(func() {
+		// The window's middle is display 2's, at (16, 20) on the screen of all.
+		x, y, ok := v.toRemote(qt.NewQPointF3(float64(v.Width())/2, float64(v.Height())/2))
+		if !ok || x != 16 || y != 20 {
+			t.Errorf("the middle of display 2 is (%d, %d) %v, want (16, 20)", x, y, ok)
+		}
+		pos := qt.NewQPointF3(float64(v.Width())/2, float64(v.Height())/2)
+		for _, typ := range []qt.QEvent__Type{qt.QEvent__MouseButtonPress, qt.QEvent__MouseButtonRelease} {
+			e := qt.NewQMouseEvent(typ, pos, qt.LeftButton, qt.NoButton, qt.NoModifier)
+			qt.QCoreApplication_SendEvent(v.QObject, e.QEvent)
+		}
+	})
+	waitFor(t, "the click", func() bool { return got([]byte{0, 2, 0, 10, 0, 0x02, 0, 16, 0, 20}) })
+	mainthread.Wait(func() {
+		v.Close()
+		if len(dt.screens) != 1 || !dt.splitBtn.IsChecked() {
+			t.Error("closing one display window closed the others")
+		}
+		dt.screens[0].Close()
+		if dt.screens != nil || dt.splitBtn.IsChecked() || !dt.displaySel.IsEnabled() {
+			t.Error("closing the last display window did not end the split")
 		}
 	})
 }

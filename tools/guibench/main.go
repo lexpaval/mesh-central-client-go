@@ -753,7 +753,10 @@ func relay(w http.ResponseWriter, r *http.Request) {
 		fakeagent.Files(demoFiles)(w, r)
 		return
 	case "2":
-		(&fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(1280, 800), 2: fakeagent.DemoScreen(1024, 768)}}).ServeHTTP(w, r)
+		(&fakeagent.DesktopAgent{
+			Screens:   map[int]*image.RGBA{1: fakeagent.DemoScreen(1280, 800), 2: fakeagent.DemoScreen(1024, 768)},
+			Positions: map[int]image.Point{1: {0, 0}, 2: {1280, 0}},
+		}).ServeHTTP(w, r)
 		return
 	}
 	if r.URL.Query().Get("p") != "1" { // port routes aren't benchmarked

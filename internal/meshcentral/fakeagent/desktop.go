@@ -24,6 +24,10 @@ type DesktopAgent struct {
 	// Screens by display ID, the lowest is shown first. Clicks paint on
 	// them.
 	Screens map[int]*image.RGBA
+	// Positions, when set, place the screens on one virtual desktop, as
+	// Windows does: the agent offers it as the display AllDisplays and
+	// reports the layout, the screens' origins being their positions.
+	Positions map[int]image.Point
 	// Input, when set, gets every binary command the viewer sends.
 	Input func(cmd []byte)
 	// Consent messages are sent as the agent's console messages first.
@@ -72,9 +76,25 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":null,"msgid":0}`))
 	}
 
-	ids := slices.Sorted(maps.Keys(a.Screens))
+	screens := maps.Clone(a.Screens)
+	var layout []byte
+	if a.Positions != nil {
+		var all image.Rectangle
+		for id, s := range a.Screens {
+			all = all.Union(s.Bounds().Add(a.Positions[id]))
+		}
+		img := image.NewRGBA(all.Sub(all.Min))
+		for id, s := range a.Screens {
+			p := a.Positions[id]
+			draw.Draw(img, s.Bounds().Add(p.Sub(all.Min)), s, image.Point{}, draw.Src)
+			layout = append(layout, byte(id>>8), byte(id), byte(p.X>>8), byte(p.X), byte(p.Y>>8), byte(p.Y),
+				byte(s.Bounds().Dx()>>8), byte(s.Bounds().Dx()), byte(s.Bounds().Dy()>>8), byte(s.Bounds().Dy()))
+		}
+		screens[0xffff] = img
+	}
+	ids := slices.Sorted(maps.Keys(screens))
 	display := ids[0]
-	screen := func() *image.RGBA { return a.Screens[display] }
+	screen := func() *image.RGBA { return screens[display] }
 	sendSize := func() {
 		b := screen().Bounds()
 		c.WriteMessage(websocket.BinaryMessage, kvm(7, byte(b.Dx()>>8), byte(b.Dx()), byte(b.Dy()>>8), byte(b.Dy())))
@@ -130,6 +150,9 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		case 11: // get displays
+			if layout != nil {
+				c.WriteMessage(websocket.BinaryMessage, kvm(82, layout...))
+			}
 			p := []byte{byte(len(ids) >> 8), byte(len(ids))}
 			for _, id := range append(slices.Clone(ids), display) {
 				p = append(p, byte(id>>8), byte(id))
@@ -137,7 +160,7 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			c.WriteMessage(websocket.BinaryMessage, kvm(11, p...))
 		case 12: // set display
 			if len(m) == 6 {
-				if id := int(binary.BigEndian.Uint16(m[4:])); a.Screens[id] != nil {
+				if id := int(binary.BigEndian.Uint16(m[4:])); screens[id] != nil {
 					display = id
 					sendSize()
 					sendScreen()

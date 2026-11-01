@@ -40,6 +40,7 @@ const (
 	kvmMessage     = 17
 	kvmJumbo       = 27
 	kvmAlert       = 65
+	kvmDisplayInfo = 82
 	kvmInputLock   = 87
 	kvmCursor      = 88
 	kvmKeyUnicode  = 85
@@ -66,6 +67,9 @@ type DesktopEvents struct {
 	// Displays lists the device's display IDs and the one shown, once
 	// asked for with GetDisplays.
 	Displays func(ids []int, selected int)
+	// Layout gives where each display, by ID, sits in the screen that
+	// AllDisplays shows. Windows agents send it with the display list.
+	Layout func(map[int]image.Rectangle)
 	// Notice gets the agent's status messages, such as waiting for the
 	// local user to allow access, and "" once it took the message back,
 	// which it does when access was allowed.
@@ -405,6 +409,29 @@ func (d *Desktop) command(cmd int, v []byte) error {
 		if d.ev.Displays != nil {
 			d.ev.Displays(ids, sel)
 		}
+	case kvmDisplayInfo:
+		// ID, x, y, width and height per display, the position on the
+		// virtual desktop, which may start left of or above 0, 0.
+		n := (len(v) - 4) / 10
+		if n == 0 || n > maxDesktopDisplays || (len(v)-4)%10 != 0 || d.ev.Layout == nil {
+			return nil
+		}
+		layout := map[int]image.Rectangle{}
+		var all image.Rectangle
+		for i := range n {
+			e := v[4+10*i:]
+			x, y := int(int16(binary.BigEndian.Uint16(e[2:]))), int(int16(binary.BigEndian.Uint16(e[4:])))
+			r := image.Rect(x, y, x+int(binary.BigEndian.Uint16(e[6:])), y+int(binary.BigEndian.Uint16(e[8:])))
+			if r.Empty() {
+				continue
+			}
+			layout[int(binary.BigEndian.Uint16(e))] = r
+			all = all.Union(r)
+		}
+		for id, r := range layout {
+			layout[id] = r.Sub(all.Min)
+		}
+		d.ev.Layout(layout)
 	case kvmMessage:
 		d.notice(string(v[4:]))
 	case kvmAlert:

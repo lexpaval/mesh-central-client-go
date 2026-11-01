@@ -6,6 +6,7 @@ import (
 	"errors"
 	"image"
 	"image/jpeg"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -349,6 +350,20 @@ func TestDesktopLimits(t *testing.T) {
 	}
 	if err := d.data(cmd(kvmGetDisplays, append(be16(2), make([]byte, 2*2+2)...)...)); err != nil || !listed {
 		t.Errorf("2 displays: %v, listed %v", err, listed)
+	}
+
+	// Display 2 left of the primary display, the layout starts at its edge.
+	var layout map[int]image.Rectangle
+	d.ev.Layout = func(l map[int]image.Rectangle) { layout = l }
+	if err := d.data(cmd(kvmDisplayInfo, be16(1, 0, 0, 1920, 1080, 2, -1280, 200, 1280, 1024)...)); err != nil {
+		t.Fatal(err)
+	}
+	if want := map[int]image.Rectangle{1: image.Rect(1280, 0, 3200, 1080), 2: image.Rect(0, 200, 1280, 1224)}; !maps.Equal(layout, want) {
+		t.Errorf("layout %v, want %v", layout, want)
+	}
+	layout = nil
+	if err := d.data(cmd(kvmDisplayInfo, be16(1, 0, 0, 1920)...)); err != nil || layout != nil {
+		t.Errorf("short layout: %v, got %v", err, layout)
 	}
 }
 
