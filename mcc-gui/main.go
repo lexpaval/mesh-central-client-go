@@ -121,6 +121,11 @@ func main() {
 		// Qt's own options (-platformpluginpath loads libraries).
 		args = args[:1]
 	}
+	// Windows types AltGr as Ctrl+Alt, so its characters would go to the
+	// terminal and the desktop as shortcuts; Qt can tell them apart.
+	if runtime.GOOS == "windows" && os.Getenv("QT_QPA_PLATFORM") == "" {
+		os.Setenv("QT_QPA_PLATFORM", "windows:altgr")
+	}
 	app := qt.NewQApplication(args)
 	// macOS opens links in the running app with an event, not arguments.
 	app.OnEvent(func(super func(*qt.QEvent) bool, e *qt.QEvent) bool {

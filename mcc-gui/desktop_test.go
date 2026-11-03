@@ -447,7 +447,8 @@ func TestDesktopKeys(t *testing.T) {
 		}{
 			{qt.Key_A, qt.ShiftModifier, "A", sentKey{r: 'A'}},
 			{qt.Key_A, ctrlModifier, "\x01", sentKey{vk: 0x41}},
-			{qt.Key_At, qt.ControlModifier | qt.AltModifier, "@", sentKey{r: '@'}}, // AltGr on Windows
+			{qt.Key_At, qt.ControlModifier | qt.AltModifier, "@", sentKey{r: '@'}}, // Ctrl+Alt, AltGr to Windows
+			{qt.Key_Bar, qt.GroupSwitchModifier, "|", sentKey{r: '|'}},             // AltGr on Windows
 			{qt.Key_Exclam, ctrlModifier | qt.ShiftModifier, "!", sentKey{vk: 0x31}},
 			{qt.Key_Left, qt.KeypadModifier, "", sentKey{vk: 0x25}},
 			{qt.Key_Enter, qt.KeypadModifier, "\r", sentKey{vk: 0x0d, ext: true}},

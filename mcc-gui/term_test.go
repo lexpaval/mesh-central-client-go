@@ -138,6 +138,7 @@ func TestTermKeys(t *testing.T) {
 		{qt.Key_X, qt.AltModifier, "x", "\x1bx"},
 		{qt.Key_Backtab, qt.ShiftModifier, "", "\x1b[Z"},
 		{qt.Key_Tab, 0, "\t", "\t"},
+		{qt.Key_Bar, qt.GroupSwitchModifier, "|", "|"}, // AltGr on Windows
 	} {
 		if got := press(c.key, c.mods, c.text); got != c.want {
 			t.Errorf("key %x mods %x: sent %q, want %q", c.key, c.mods, got, c.want)
