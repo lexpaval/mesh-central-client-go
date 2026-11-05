@@ -261,6 +261,14 @@ func (sp *settingsPage) build() {
 	}
 	section("Appearance").AddRow3("Theme", combo("theme", themes, applyTheme).QWidget)
 	section("Devices").AddRow3("Double-click a device", combo("deviceAction", deviceActions, nil).QWidget)
+	updates := qt.NewQCheckBox3("Check for new releases once a day")
+	updates.SetToolTip("Asks GitHub for the latest release and shows a newer one beside the Settings button")
+	updates.SetChecked(updatesOn())
+	updates.OnToggled(func(on bool) {
+		setPref("updateCheck", map[bool]string{true: "", false: "off"}[on])
+		checkUpdates(false)
+	})
+	section("Updates").AddRowWithWidget(updates.QWidget)
 
 	box := qt.NewQGroupBox3("Route presets")
 	bl := qt.NewQVBoxLayout(box.QWidget)

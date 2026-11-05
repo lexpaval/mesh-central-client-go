@@ -161,6 +161,11 @@ func main() {
 	win.SetWindowTitle("MeshCentral Client")
 	win.SetCentralWidget(buildUI())
 	win.Resize(1100, 700)
+	// Checks when a day has passed since the last, the app may run for days.
+	checkUpdates(false)
+	updateTimer := qt.NewQTimer2(win.QObject)
+	updateTimer.OnTimeout(func() { checkUpdates(false) })
+	updateTimer.Start(int(time.Hour / time.Millisecond))
 	win.OnCloseEvent(func(super func(*qt.QCloseEvent), e *qt.QCloseEvent) {
 		if n := unsavedEditors(); n > 0 {
 			b := qt.NewQMessageBox6(qt.QMessageBox__Question, "Unsaved changes",
@@ -310,11 +315,16 @@ func buildUI() *qt.QWidget {
 	settingsBtn := iconButton("", "gear", "Settings")
 	settingsBtn.SetFlat(true)
 	settingsBtn.OnClicked(openSettings)
+	updateBtn = iconButton("", "download", "Open the new release's page to download it")
+	updateBtn.SetFlat(true)
+	updateBtn.SetVisible(false)
+	updateBtn.OnClicked(openLatestRelease)
 	aboutBtn := iconButton("", "circle-info", "About")
 	aboutBtn.SetFlat(true)
 	aboutBtn.OnClicked(showAbout)
 	top := hbox(false, profileBar, connectBtn.QWidget)
 	top.AddWidget2(statusLabel.QWidget, 1)
+	top.AddWidget(updateBtn.QWidget)
 	top.AddWidget(settingsBtn.QWidget)
 	top.AddWidget(aboutBtn.QWidget)
 
@@ -1765,6 +1775,24 @@ func showAbout() {
 	header.SetSpacing(16)
 	header.AddLayout2(names.QLayout, 1)
 	v.AddLayout(header.QLayout)
+	// Release builds check for updates, here on demand too.
+	if releaseTag.MatchString(version) {
+		status := qt.NewQLabel2()
+		status.SetOpenExternalLinks(true)
+		check := qt.NewQPushButton3("Check now")
+		check.SetIcon(icon("rotate"))
+		check.OnClicked(func() { checkUpdates(true) })
+		aboutUpdate = func() {
+			status.SetText(updateStatus())
+			check.SetEnabled(!checking)
+		}
+		aboutUpdate()
+		d.OnFinished(func(int) { aboutUpdate = nil })
+		row := hbox(false, status.QWidget)
+		row.AddStretch()
+		row.AddWidget(check.QWidget)
+		v.AddLayout(row.QLayout)
+	}
 	v.AddSpacing(8)
 
 	desc := qt.NewQLabel3("Desktop client for MeshCentral: shells, files, remote desktop and port routes\nto your devices, sharing profiles and 2FA login with the mcc CLI.\nNot affiliated with MeshCentral.")
@@ -1782,6 +1810,9 @@ func showAbout() {
 		v.AddWidget(w)
 	}
 	box := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Close)
+	// The app's icon, not the style's: only some styles (KDE's Breeze) put
+	// icons on dialog buttons.
+	box.Button(qt.QDialogButtonBox__Close).SetIcon(icon("xmark"))
 	box.OnRejected(d.Reject)
 	// The macOS bundle and the AppImage carry the mcc CLI, put on PATH here:
 	// on macOS a link in /usr/local/bin to the app in Applications, after an
