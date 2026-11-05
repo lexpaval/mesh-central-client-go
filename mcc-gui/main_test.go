@@ -887,3 +887,50 @@ func TestHideDevices(t *testing.T) {
 		}
 	})
 }
+
+// About shows the app icon, and links a release's own notes, other builds
+// the list of releases.
+func TestAbout(t *testing.T) {
+	ui(t, func() {})
+	saved := version
+	t.Cleanup(func() { version = saved })
+	for v, want := range map[string]string{
+		"v1.10.0":            `/releases/tag/v1.10.0"`,
+		"v1.10.0-2-g7010538": `/releases"`,
+		"":                   `/releases"`,
+	} {
+		mainthread.Wait(func() {
+			version = v
+			showAbout()
+			var about *qt.QWidget
+			for _, w := range qt.QApplication_TopLevelWidgets() {
+				if w.WindowTitle() == "About" && w.IsVisible() {
+					about = w
+				}
+			}
+			if about == nil {
+				t.Fatal("no About dialog")
+			}
+			defer about.Close()
+			icon, link := false, ""
+			for _, o := range about.Children() {
+				if !o.Inherits("QLabel") {
+					continue
+				}
+				l := qt.UnsafeNewQLabel(o.UnsafePointer())
+				if pm := l.Pixmap(qt.ReturnByValue); !pm.IsNull() {
+					icon = true
+				}
+				if strings.Contains(l.Text(), "Release notes") {
+					link = l.Text()
+				}
+			}
+			if !icon {
+				t.Error("About has no icon")
+			}
+			if !strings.Contains(link, want) {
+				t.Errorf("version %q links %s, want %s", v, link, want)
+			}
+		})
+	}
+}

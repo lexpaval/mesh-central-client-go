@@ -17,6 +17,7 @@ import (
 	"os/exec"
 	osuser "os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -1731,11 +1732,22 @@ func showSSHConfig() {
 	})
 }
 
+// releaseTag is a release's version, as tagged.
+var releaseTag = regexp.MustCompile(`^v\d+\.\d+\.\d+$`)
+
 func showAbout() {
 	d := qt.NewQDialog(parent())
 	d.SetWindowTitle("About")
 	d.SetAttribute(qt.WA_DeleteOnClose)
 	v := qt.NewQVBoxLayout(d.QWidget)
+	// The icon beside the name and version.
+	logo := qt.NewQLabel2()
+	size := qt.NewQSize2(64, 64)
+	ic := appIcon()
+	logo.SetPixmap(ic.Pixmap3(size, d.DevicePixelRatioF()))
+	ic.Delete()
+	size.Delete()
+	logo.SetAlignment(qt.AlignTop)
 	title := qt.NewQLabel3("MeshCentral Client")
 	tf := title.Font()
 	tf.SetBold(true)
@@ -1744,12 +1756,29 @@ func showAbout() {
 	info := qt.NewQLabel3(fmt.Sprintf("Version %s\nCommit %s, built %s\n%s, Qt %s GUI",
 		cmp.Or(version, "dev"), cmp.Or(commit, "unknown"), cmp.Or(buildDate, "unknown"), runtime.Version(), qt.QLibraryInfo_Version().ToString()))
 	info.SetTextInteractionFlags(qt.TextSelectableByMouse)
-	desc := qt.NewQLabel3("Desktop client for MeshCentral: devices, port routes and remote commands,\nsharing profiles and 2FA login with the mcc CLI. Not affiliated with MeshCentral.")
-	link := qt.NewQLabel3(`<a href="https://github.com/lexpaval/mesh-central-client-go">github.com/lexpaval/mesh-central-client-go</a>`)
+	names := qt.NewQVBoxLayout2()
+	names.SetSpacing(2)
+	names.AddWidget(title.QWidget)
+	names.AddWidget(info.QWidget)
+	names.AddStretch()
+	header := hbox(false, logo.QWidget)
+	header.SetSpacing(16)
+	header.AddLayout2(names.QLayout, 1)
+	v.AddLayout(header.QLayout)
+	v.AddSpacing(8)
+
+	desc := qt.NewQLabel3("Desktop client for MeshCentral: shells, files, remote desktop and port routes\nto your devices, sharing profiles and 2FA login with the mcc CLI.\nNot affiliated with MeshCentral.")
+	// Release notes of this version when it's a release, the list otherwise.
+	const repo = "https://github.com/lexpaval/mesh-central-client-go"
+	notes := repo + "/releases"
+	if releaseTag.MatchString(version) {
+		notes += "/tag/" + version
+	}
+	link := qt.NewQLabel3(fmt.Sprintf(`<a href="%s">GitHub</a> · <a href="%s">Release notes</a> · <a href="%s/issues">Report an issue</a>`, repo, notes, repo))
 	link.SetOpenExternalLinks(true)
 	credits := qt.NewQLabel3("MIT License. Icons by Font Awesome Free (CC BY 4.0), UI by Qt (LGPLv3) through miqt (MIT).")
 	credits.SetForegroundRole(qt.QPalette__PlaceholderText)
-	for _, w := range []*qt.QWidget{title.QWidget, info.QWidget, desc.QWidget, link.QWidget, credits.QWidget} {
+	for _, w := range []*qt.QWidget{desc.QWidget, link.QWidget, credits.QWidget} {
 		v.AddWidget(w)
 	}
 	box := qt.NewQDialogButtonBox4(qt.QDialogButtonBox__Close)
@@ -1789,7 +1818,9 @@ func showAbout() {
 			return "install"
 		}
 		label := func() {
-			btn.SetText(map[string]string{"install": "Install", "update": "Update", "remove": "Remove"}[state()] + " mcc command")
+			st := state()
+			btn.SetText(map[string]string{"install": "Install", "update": "Update", "remove": "Remove"}[st] + " mcc command")
+			btn.SetIcon(icon(map[string]string{"install": "download", "update": "rotate", "remove": "trash-can"}[st]))
 		}
 		label()
 		open := true // the password prompt can outlive the dialog
