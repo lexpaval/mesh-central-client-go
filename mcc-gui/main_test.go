@@ -61,6 +61,42 @@ func event(action, id string, pwr int) {
 	flushNodeEvents()
 }
 
+// The device toolbar names its buttons from the left as far as they fit,
+// so it never holds the device list wider.
+func TestDeviceBarFits(t *testing.T) {
+	ui(t, func() {
+		tabs.Window().Resize(1300, 700)
+		tabs.Window().Show()
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { tabs.Window().Hide() }) })
+	labels := func(width int) (named []string) {
+		mainthread.Wait(func() {
+			qt.UnsafeNewQSplitter(devicePane.ParentWidget().UnsafePointer()).SetSizes([]int{width, 1300 - width})
+			settle()
+			if deviceBar.SizeHint().Width() > deviceBar.Width() {
+				t.Errorf("at %d px the toolbar wants %d", width, deviceBar.SizeHint().Width())
+			}
+			for _, a := range deviceBar.Actions() {
+				if qt.UnsafeNewQToolButton(deviceBar.WidgetForAction(a).UnsafePointer()).ToolButtonStyle() != qt.ToolButtonIconOnly {
+					named = append(named, a.Text())
+				}
+			}
+		})
+		return named
+	}
+	if named := labels(700); len(named) != 7 {
+		t.Errorf("wide, named %v", named)
+	}
+	if named := labels(350); len(named) == 0 || len(named) == 7 || named[0] != "Shell" {
+		t.Errorf("narrower, named %v", named)
+	}
+	mainthread.Wait(func() {
+		if w := devicePane.MinimumSizeHint().Width(); w > 300 {
+			t.Errorf("the device list is at least %d px wide", w)
+		}
+	})
+}
+
 func TestNodeEventsNeedConnection(t *testing.T) {
 	ui(t, func() {
 		setDevices([]meshcentral.Device{{Id: "a", MeshID: "m", Group: "G", Name: "a", Pwr: 1}})

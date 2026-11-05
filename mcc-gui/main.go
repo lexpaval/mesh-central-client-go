@@ -88,7 +88,8 @@ var (
 	routeHint     *qt.QLabel
 	routeRows     []*routeRow
 	routesTab     *qt.QWidget
-	deviceBtns    []*qt.QPushButton
+	deviceBar     *qt.QToolBar // the selected device's actions
+	reloadBtn     *qt.QPushButton
 	reloadTimer   *time.Timer // pending debounced device list reload
 	// A reload is running, and another was asked for meanwhile. A large
 	// server takes seconds to send the list, overlapping loads pile up.
@@ -342,8 +343,12 @@ func buildUI() *qt.QWidget {
 	collapseBtn := iconButton("", "angles-up", "Collapse all groups")
 	collapseBtn.SetFlat(true)
 	collapseBtn.OnClicked(func() { expandGroups(false) })
+	reloadBtn = iconButton("", "rotate", "Reload the device list")
+	reloadBtn.SetFlat(true)
+	reloadBtn.OnClicked(refreshDevices)
 	filterRow := hbox(false, offlineChk.QWidget)
 	filterRow.AddStretch()
+	filterRow.AddWidget(reloadBtn.QWidget)
 	filterRow.AddWidget(expandBtn.QWidget)
 	filterRow.AddWidget(collapseBtn.QWidget)
 	hideListBtn = iconButton("", "angles-left", "Hide the device list (Ctrl+Shift+B)")
@@ -351,63 +356,84 @@ func buildUI() *qt.QWidget {
 	filterRow.AddWidget(hideListBtn.QWidget)
 	buildTree()
 
-	shellBtn := iconButton("Shell", "terminal", "Open a shell on the device")
-	filesBtn := iconButton("Files", "folder", "Browse, transfer and edit the device's files")
-	desktopBtn := iconButton("Desktop", "display", "Show and control the device's screen")
-	routeBtn := iconButton("Add route", "plus", "Forward a local port to the device")
-	runBtn := iconButton("Run command", "play", "Run a command on the device")
-	copyBtn := iconButton("Copy", "copy", "")
-	detailsBtn := iconButton("", "circle-info", "Show the device's details: system, hardware and network")
-	reloadBtn := iconButton("", "rotate", "Reload the device list")
-	deviceBtns = []*qt.QPushButton{shellBtn, filesBtn, desktopBtn, routeBtn, runBtn, copyBtn, detailsBtn, reloadBtn}
-	shellBtn.OnClicked(func() {
-		if d, ok := selectedDevice(); ok {
-			if menu := shellMenu(d); menu != nil {
-				popupBelow(menu, shellBtn.QWidget)
-			} else {
-				openShell(d, 1)
+	// The selected device's actions, named while the pane is wide enough,
+	// the ones that don't fit in the toolbar's » menu.
+	deviceBar = qt.NewQToolBar3()
+	deviceBar.SetMovable(false)
+	deviceBar.SetFloatable(false)
+	size := deviceBar.Style().PixelMetric(qt.QStyle__PM_ButtonIconSize, nil, nil)
+	deviceBar.SetIconSize(qt.NewQSize2(size, size))
+	action := func(text, iconName, tip string, f func()) *qt.QAction {
+		a := deviceBar.AddActionWithText(text)
+		themed(func() { a.SetIcon(icon(iconName)) })
+		a.SetToolTip(tip)
+		a.OnTriggered(f)
+		return a
+	}
+	// popupFor shows m below a's button, or at the pointer when a is in the
+	// » menu.
+	popupFor := func(m *qt.QMenu, a *qt.QAction) {
+		if w := deviceBar.WidgetForAction(a); w != nil && w.IsVisible() {
+			popupBelow(m, w)
+		} else {
+			m.Popup(qt.QCursor_Pos())
+		}
+	}
+	withDevice := func(f func(meshcentral.Device)) func() {
+		return func() {
+			if d, ok := selectedDevice(); ok {
+				f(d)
 			}
 		}
-	})
-	filesBtn.OnClicked(func() {
-		if d, ok := selectedDevice(); ok {
-			openFilesTab(d)
+	}
+	var shellAct, copyAct *qt.QAction
+	shellAct = action("Shell", "terminal", "Open a shell on the device", withDevice(func(d meshcentral.Device) {
+		if menu := shellMenu(d); menu != nil {
+			popupFor(menu, shellAct)
+		} else {
+			openShell(d, 1)
 		}
-	})
-	desktopBtn.OnClicked(func() {
-		if d, ok := selectedDevice(); ok {
-			openDesktop(d)
-		}
-	})
-	detailsBtn.OnClicked(func() {
-		if d, ok := selectedDevice(); ok {
-			openDetails(d)
-		}
-	})
-	routeBtn.OnClicked(showAddRoute)
-	runBtn.OnClicked(showRunCommand)
-	copyBtn.OnClicked(func() {
-		m := qt.NewQMenu(copyBtn.QWidget)
+	}))
+	action("Desktop", "display", "Show and control the device's screen", withDevice(openDesktop))
+	action("Files", "folder", "Browse, transfer and edit the device's files", withDevice(openFilesTab))
+	action("Details", "circle-info", "Show the device's details: system, hardware and network", withDevice(openDetails))
+	action("Run command", "play", "Run a command on the device", showRunCommand)
+	action("Add route", "plus", "Forward a local port to the device", showAddRoute)
+	copyAct = action("Copy", "copy", "Copy the device's node ID or SSH config", func() {
+		m := qt.NewQMenu(deviceBar.QWidget)
 		m.SetAttribute(qt.WA_DeleteOnClose)
 		m.AddActionWithText("Node ID").OnTriggered(copyNodeID)
 		m.AddActionWithText("SSH config…").OnTriggered(showSSHConfig)
-		popupBelow(m, copyBtn.QWidget)
+		popupFor(m, copyAct)
 	})
-	reloadBtn.OnClicked(refreshDevices)
-	btnRow := hbox(false)
-	for _, b := range deviceBtns {
-		btnRow.AddWidget(b.QWidget)
-	}
-	btnRow.AddStretch()
+	// Names go beside the icons from the left as far as they fit.
+	fitting := false
+	deviceBar.OnResizeEvent(func(super func(*qt.QResizeEvent), e *qt.QResizeEvent) {
+		super(e)
+		if fitting {
+			return
+		}
+		fitting = true
+		var btns []*qt.QToolButton
+		for _, a := range deviceBar.Actions() {
+			b := qt.UnsafeNewQToolButton(deviceBar.WidgetForAction(a).UnsafePointer())
+			b.SetToolButtonStyle(qt.ToolButtonTextBesideIcon)
+			btns = append(btns, b)
+		}
+		for i := len(btns) - 1; i >= 0 && deviceBar.SizeHint().Width() > e.Size().Width(); i-- {
+			btns[i].SetToolButtonStyle(qt.ToolButtonIconOnly)
+		}
+		fitting = false
+	})
 
 	left := qt.NewQWidget2()
 	devicePane = left
 	ll := qt.NewQVBoxLayout(left)
 	ll.SetContentsMargins(0, 0, 0, 0)
 	ll.AddWidget(searchEntry.QWidget)
+	ll.AddWidget(deviceBar.QWidget)
 	ll.AddLayout(filterRow.QLayout)
 	ll.AddWidget2(deviceTree.QWidget, 1)
-	ll.AddLayout(btnRow.QLayout)
 
 	// The Routes tab, a column of route rows.
 	routeHint = qt.NewQLabel3("No routes. Select a device and add one.")
@@ -800,9 +826,8 @@ func setConnected(c bool) {
 		connectBtn.SetIcon(icon("right-to-bracket"))
 	}
 	profileBar.SetVisible(!c)
-	for _, b := range deviceBtns {
-		b.SetEnabled(c)
-	}
+	deviceBar.SetEnabled(c)
+	reloadBtn.SetEnabled(c)
 }
 
 // refreshDevices reloads the list in the background. One load runs at a
