@@ -227,6 +227,8 @@ func TestDesktopInput(t *testing.T) {
 	d.Unicode('😀', false)
 	d.CtrlAltDel()
 	d.SetQuality(80, 50*time.Millisecond)
+	d.SetScaling(512)
+	d.SetScaling(1)
 	want := [][]byte{
 		{0, 2, 0, 10, 0, 0, 0, 100, 0, 50},          // move
 		{0, 2, 0, 10, 0, 0x02, 0, 100, 0, 50},       // left down
@@ -241,12 +243,14 @@ func TestDesktopInput(t *testing.T) {
 		{0, 85, 0, 7, 0, 0x00, 0xe9},                // é down
 		{0, 85, 0, 7, 1, 0xd8, 0x3d},                // 😀 up, surrogates
 		{0, 85, 0, 7, 1, 0xde, 0x00},
-		{0, 10, 0, 4},                      // Ctrl+Alt+Del
-		{0, 5, 0, 10, 1, 80, 4, 0, 0, 50},  // JPEG 80, 100 %, 50 ms
-		{0, 1, 0, 6, 1, 17},                // Ctrl released on start
-		{0, 8, 0, 5, 0},                    // unpaused
-		{0, 5, 0, 10, 1, 50, 4, 0, 0, 100}, // the default compression
-		{0, 11, 0, 4},                      // displays asked for
+		{0, 10, 0, 4},                       // Ctrl+Alt+Del
+		{0, 5, 0, 10, 1, 80, 4, 0, 0, 50},   // JPEG 80, 100 %, 50 ms
+		{0, 5, 0, 10, 1, 80, 2, 0, 0, 50},   // 50 %
+		{0, 5, 0, 10, 1, 80, 0, 128, 0, 50}, // 12.5 % at the least
+		{0, 1, 0, 6, 1, 17},                 // Ctrl released on start
+		{0, 8, 0, 5, 0},                     // unpaused
+		{0, 5, 0, 10, 1, 50, 4, 0, 0, 100},  // the default compression
+		{0, 11, 0, 4},                       // displays asked for
 	}
 	for _, w := range want {
 		deadline := time.Now().Add(5 * time.Second)

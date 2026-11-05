@@ -19,7 +19,8 @@ import (
 // channel (protocol 2): it joins with "c", sends the screen size and, once
 // the viewer set the compression, the screen as JPEG tiles, big ones as
 // jumbo commands split over two messages. A left click paints a dot there
-// and sends that tile, so input round-trips.
+// and sends that tile, so input round-trips. It scales the screen down as
+// the compression asks, as Windows agents do.
 type DesktopAgent struct {
 	// Screens by display ID, the lowest is shown first. Clicks paint on
 	// them.
@@ -95,14 +96,30 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ids := slices.Sorted(maps.Keys(screens))
 	display := ids[0]
 	screen := func() *image.RGBA { return screens[display] }
+	scaling := 1024
+	// frame is the screen as sent, scaled to scaling/1024.
+	frame := func() *image.RGBA {
+		if scaling == 1024 {
+			return screen()
+		}
+		src := screen()
+		b := src.Bounds()
+		img := image.NewRGBA(image.Rect(0, 0, b.Dx()*scaling/1024, b.Dy()*scaling/1024))
+		for y := range img.Rect.Dy() {
+			for x := range img.Rect.Dx() {
+				img.SetRGBA(x, y, src.RGBAAt(x*1024/scaling, y*1024/scaling))
+			}
+		}
+		return img
+	}
 	sendSize := func() {
-		b := screen().Bounds()
+		b := frame().Bounds()
 		c.WriteMessage(websocket.BinaryMessage, kvm(7, byte(b.Dx()>>8), byte(b.Dx()), byte(b.Dy()>>8), byte(b.Dy())))
 	}
 	sendTile := func(r image.Rectangle, split bool) {
 		var buf bytes.Buffer
 		a.mu.Lock()
-		jpeg.Encode(&buf, screen().SubImage(r), &jpeg.Options{Quality: 90})
+		jpeg.Encode(&buf, frame().SubImage(r), &jpeg.Options{Quality: 90})
 		a.mu.Unlock()
 		tile := kvm(3, append([]byte{byte(r.Min.X >> 8), byte(r.Min.X), byte(r.Min.Y >> 8), byte(r.Min.Y)}, buf.Bytes()...)...)
 		if len(tile) > 0xffff {
@@ -117,7 +134,7 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		c.WriteMessage(websocket.BinaryMessage, tile)
 	}
 	sendScreen := func() {
-		b := screen().Bounds()
+		b := frame().Bounds()
 		for y := 0; y < b.Dy(); y += 256 {
 			sendTile(image.Rect(0, y, b.Dx(), min(y+256, b.Dy())), y == 0)
 		}
@@ -137,16 +154,26 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 		switch binary.BigEndian.Uint16(m) {
 		case 5, 6: // compression, refresh
+			if len(m) >= 8 && m[1] == 5 {
+				if s := int(binary.BigEndian.Uint16(m[6:])); s != scaling && s >= 64 && s <= 1024 {
+					scaling = s
+					sendSize()
+				}
+			}
 			sendScreen()
 		case 2: // mouse
 			if len(m) == 10 && m[5] == 0x02 {
-				x, y := int(binary.BigEndian.Uint16(m[6:])), int(binary.BigEndian.Uint16(m[8:]))
+				x, y := int(binary.BigEndian.Uint16(m[6:]))*1024/scaling, int(binary.BigEndian.Uint16(m[8:]))*1024/scaling
 				dot := image.Rect(x-4, y-4, x+5, y+5).Intersect(screen().Bounds())
 				a.mu.Lock()
 				draw.Draw(screen(), dot, image.NewUniform(color.RGBA{229, 83, 75, 255}), image.Point{}, draw.Src)
 				a.mu.Unlock()
-				if !dot.Empty() {
+				switch {
+				case dot.Empty():
+				case scaling == 1024:
 					sendTile(dot, false)
+				default:
+					sendScreen()
 				}
 			}
 		case 11: // get displays

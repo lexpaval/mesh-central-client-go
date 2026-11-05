@@ -97,6 +97,7 @@ type Desktop struct {
 	w, h    int
 	pix     []byte // w*h BGRX pixels, QImage's RGB32
 	quality int
+	scaling int // the agent's, 1024 is 100 %
 	frameMs int
 	started bool // the screen size arrived, input goes through
 
@@ -140,7 +141,7 @@ func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 // NewDesktop starts a desktop session on a relay tunnel conn that was just
 // dialed, waiting for the device to join it.
 func NewDesktop(conn *websocket.Conn, ev DesktopEvents) (*Desktop, error) {
-	d := &Desktop{conn: conn, ev: ev, out: make(chan []byte, 1024), done: make(chan struct{}), quality: 50, frameMs: 100}
+	d := &Desktop{conn: conn, ev: ev, out: make(chan []byte, 1024), done: make(chan struct{}), quality: 50, scaling: 1024, frameMs: 100}
 	conn.SetReadLimit(maxTunnelMessage) // dialTunnel's, for conns dialed elsewhere (tests)
 	if err := joinTunnel(conn, 2, desktopJoinTimeout, "desktop", func() {
 		if ev.Recorded != nil {
@@ -351,10 +352,10 @@ func (d *Desktop) command(cmd int, v []byte) error {
 		}
 		first := !d.started
 		d.started = true
-		quality, frameMs := d.quality, d.frameMs
+		quality, scaling, frameMs := d.quality, d.scaling, d.frameMs
 		d.mu.Unlock()
 		if changed {
-			d.send(compression(quality, frameMs), false)
+			d.send(compression(quality, scaling, frameMs), false)
 			d.send(kvmCmd(kvmPause, 0), false)
 			d.send(kvmCmd(kvmInputLock, 2), false) // asks for the input lock state
 		}
@@ -446,9 +447,9 @@ func (d *Desktop) command(cmd int, v []byte) error {
 	return nil
 }
 
-func compression(quality, frameMs int) []byte {
-	// JPEG at quality, no scaling (1024 is 100 %), a frame every frameMs.
-	return kvmCmd(kvmCompression, append([]byte{1, byte(quality)}, be16(1024, frameMs)...)...)
+func compression(quality, scaling, frameMs int) []byte {
+	// JPEG at quality, scaled down to scaling/1024, a frame every frameMs.
+	return kvmCmd(kvmCompression, append([]byte{1, byte(quality)}, be16(scaling, frameMs)...)...)
 }
 
 // blit copies img to (x, y) of the w*h frame pix, returning the rectangle
@@ -626,10 +627,27 @@ func (d *Desktop) SetQuality(quality int, frame time.Duration) {
 	ms := min(max(int(frame/time.Millisecond), 10), 65535)
 	d.mu.Lock()
 	d.quality, d.frameMs = quality, ms
-	started := d.started
+	d.mu.Unlock()
+	d.sendCompression()
+}
+
+// SetScaling has the agent scale the screen down to scaling/1024 (128 to
+// 1024) before sending it, as the web UI's Scaling setting does. It sends a
+// new screen size, and mouse positions are in its pixels. Only Windows
+// agents scale, others ignore it.
+func (d *Desktop) SetScaling(scaling int) {
+	d.mu.Lock()
+	d.scaling = min(max(scaling, 128), 1024)
+	d.mu.Unlock()
+	d.sendCompression()
+}
+
+func (d *Desktop) sendCompression() {
+	d.mu.Lock()
+	started, b := d.started, compression(d.quality, d.scaling, d.frameMs)
 	d.mu.Unlock()
 	if started {
-		d.send(compression(quality, ms), false)
+		d.send(b, false)
 	}
 }
 

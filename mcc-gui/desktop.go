@@ -42,6 +42,24 @@ var desktopQualities = []struct {
 	{"Low bandwidth", 25, 200 * time.Millisecond},
 }
 
+// desktopViews are the ways the screen fits the view, as the web UI's view
+// modes: Fit and Stretch fill it, Actual size scrolls.
+const (
+	viewFit = iota
+	viewStretch
+	viewActual
+)
+
+var desktopViews = []struct{ pref, name string }{
+	{"fit", "Fit, keeping the aspect ratio"},
+	{"stretch", "Stretch to fill"},
+	{"actual", "Actual size, pixel for pixel"},
+}
+
+// desktopScalings are the web UI's scalings, the screen scaled down on the
+// device to scaling/1024 to send fewer pixels.
+var desktopScalings = []int{1024, 896, 768, 640, 512, 384, 256, 128}
+
 type desktopTab struct {
 	d     meshcentral.Device
 	name  string
@@ -53,7 +71,7 @@ type desktopTab struct {
 	status     *qt.QLabel
 	displaySel *qt.QComboBox
 	qualitySel *qt.QComboBox
-	fitBtn     *qt.QPushButton
+	scaleBtn   *qt.QPushButton
 	clipBtn    *qt.QPushButton
 	inputBtn   *qt.QPushButton
 	fullBtn    *qt.QPushButton
@@ -86,6 +104,8 @@ type desktopTab struct {
 	clipSendError   string
 	windowState     qt.WindowState
 	chromeHidden    []bool
+	viewMode        int
+	scaling         int // the device's, 1024 is 100 %
 
 	// Frame changes queued by the session's reader for the Qt thread.
 	mu      sync.Mutex
@@ -201,18 +221,17 @@ func (dt *desktopTab) build() {
 		}
 		dt.view.SetFocus()
 	})
-	dt.fitBtn = button("Fit", "arrows-left-right-to-line", "Scale the screen to the window, off shows it pixel for pixel")
-	dt.fitBtn.SetCheckable(true)
-	dt.fitBtn.SetChecked(pref("desktopActualSize") == "")
-	dt.fitBtn.OnToggled(func(on bool) {
-		v := ""
-		if !on {
-			v = "1"
+	dt.scaleBtn = button("Scaling", "arrows-left-right-to-line", "How the screen fits the window, and the resolution the device sends")
+	dt.scaleBtn.OnClicked(dt.scaleMenu)
+	for i, v := range desktopViews {
+		if v.pref == pref("desktopView") {
+			dt.viewMode = i
 		}
-		setPref("desktopActualSize", v)
-		dt.relayout()
-		dt.view.SetFocus()
-	})
+	}
+	dt.scaling = 1024
+	if s, err := strconv.Atoi(pref("desktopScaling")); err == nil && slices.Contains(desktopScalings, s) {
+		dt.scaling = s
+	}
 	// Off until asked for: on, the local clipboard goes to the device right
 	// away, and whatever the device copies replaces it.
 	dt.clipBtn = button("Clipboard sync", "clipboard", clipTip)
@@ -293,10 +312,10 @@ func (dt *desktopTab) build() {
 	bar := hbox(false)
 	bar.SetContentsMargins(6, 4, 0, 4) // the screen goes edge to edge, not the bar
 	bar.AddWidget2(dt.status.QWidget, 1)
-	for _, b := range []*qt.QPushButton{dt.fitBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
+	for _, b := range []*qt.QPushButton{dt.scaleBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
 		b.SetText("")
 	}
-	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.fitBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
+	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.scaleBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
 		bar.AddWidget(w)
 	}
 
@@ -314,6 +333,47 @@ func (dt *desktopTab) build() {
 	l.AddWidget2(dt.scroll.QWidget, 1)
 	dt.relayout()
 	dt.setLive(false)
+}
+
+// scaleMenu offers the view modes and the device's scalings.
+func (dt *desktopTab) scaleMenu() {
+	m := qt.NewQMenu(dt.scaleBtn.QWidget)
+	m.SetAttribute(qt.WA_DeleteOnClose)
+	item := func(group *qt.QActionGroup, text string, checked bool, f func()) {
+		a := m.AddActionWithText(text)
+		a.SetCheckable(true)
+		a.SetChecked(checked)
+		group.AddAction(a)
+		a.OnTriggered(func() { f(); dt.view.SetFocus() })
+	}
+	m.AddActionWithText("View").SetEnabled(false)
+	views := qt.NewQActionGroup(m.QObject)
+	for i, v := range desktopViews {
+		item(views, v.name, i == dt.viewMode, func() { dt.setViewMode(i) })
+	}
+	m.AddSeparator()
+	m.AddActionWithText("Resolution sent, Windows devices").SetEnabled(false)
+	scalings := qt.NewQActionGroup(m.QObject)
+	for _, sc := range desktopScalings {
+		item(scalings, strconv.FormatFloat(float64(sc)*100/1024, 'f', -1, 64)+" %", sc == dt.scaling, func() { dt.setScaling(sc) })
+	}
+	popupBelow(m, dt.scaleBtn.QWidget)
+}
+
+func (dt *desktopTab) setViewMode(mode int) {
+	dt.viewMode = mode
+	setPref("desktopView", desktopViews[mode].pref)
+	dt.relayout()
+}
+
+// setScaling has the device scale its screen to scaling/1024, it sends the
+// new size.
+func (dt *desktopTab) setScaling(scaling int) {
+	dt.scaling = scaling
+	setPref("desktopScaling", strconv.Itoa(scaling))
+	if dt.live {
+		dt.sess.SetScaling(scaling)
+	}
 }
 
 // newView makes a view of the screen, display 0 for the tab's.
@@ -492,7 +552,6 @@ func (dt *desktopTab) split(on bool) {
 	}
 	split := dt.screens != nil
 	dt.displaySel.SetEnabled(dt.live && !split)
-	dt.fitBtn.SetEnabled(!split)
 	dt.fullBtn.SetEnabled(!split)
 	if split {
 		dt.view.setCursor(qt.ArrowCursor)
@@ -842,7 +901,7 @@ func (dt *desktopTab) connect() {
 	dt.displaySel.SetVisible(false)
 	dt.reconnect.SetVisible(false)
 	setStatus(dt.status, "Connecting…", false)
-	q := desktopQualities[dt.qualitySel.CurrentIndex()]
+	q, scaling := desktopQualities[dt.qualitySel.CurrentIndex()], dt.scaling
 	// Events of this attempt, on the Qt thread while it's the tab's latest.
 	later := func(f func()) {
 		mainthread.Start(func() {
@@ -906,6 +965,7 @@ func (dt *desktopTab) connect() {
 		s, err := openDesktopSession(dt.d.Id, ev)
 		if err == nil {
 			s.SetQuality(q.quality, q.frame)
+			s.SetScaling(scaling)
 			if split {
 				s.SetDisplay(meshcentral.AllDisplays)
 			}
@@ -963,17 +1023,16 @@ func (dt *desktopTab) queueFrame(r image.Rectangle) {
 			return
 		}
 		for _, v := range dt.views() {
-			tr, src, scale, ok := v.target()
+			at, ok := v.target()
 			if !ok {
 				continue
 			}
-			if r := r.Intersect(src).Sub(src.Min); !r.Empty() {
-				rect := qt.NewQRect4(int(tr.X()+float64(r.Min.X)*scale)-1, int(tr.Y()+float64(r.Min.Y)*scale)-1,
-					int(float64(r.Dx())*scale)+3, int(float64(r.Dy())*scale)+3)
+			if r := r.Intersect(at.src).Sub(at.src.Min); !r.Empty() {
+				rect := qt.NewQRect4(int(at.x+float64(r.Min.X)*at.sx)-1, int(at.y+float64(r.Min.Y)*at.sy)-1,
+					int(float64(r.Dx())*at.sx)+3, int(float64(r.Dy())*at.sy)+3)
 				v.UpdateWithQRect(rect)
 				rect.Delete()
 			}
-			tr.Delete()
 		}
 	})
 }
@@ -989,37 +1048,58 @@ func (v *deskView) shown() image.Rectangle {
 	if v.display == 0 {
 		return image.Rect(0, 0, w, h)
 	}
+	// The layout is in the device's pixels, the screen as scaled.
+	scaled := func(r image.Rectangle) image.Rectangle {
+		return image.Rect(r.Min.X*dt.scaling/1024, r.Min.Y*dt.scaling/1024, r.Max.X*dt.scaling/1024, r.Max.Y*dt.scaling/1024)
+	}
 	var all image.Rectangle
 	for _, r := range dt.layout {
 		all = all.Union(r)
 	}
-	if all.Size() != image.Pt(w, h) {
+	if scaled(all).Size() != image.Pt(w, h) {
 		return image.Rectangle{}
 	}
-	return v.crop
+	return scaled(v.crop)
 }
 
-// target is where src, the part of the screen shown, is drawn in the view,
-// and the view pixels per screen pixel, while there is one. Display windows
-// always fit it.
-func (v *deskView) target() (r *qt.QRectF, src image.Rectangle, scale float64, ok bool) {
-	src = v.shown()
-	if src.Empty() {
-		return nil, src, 0, false
+// placement is where src, the part of the screen shown, is drawn in a view:
+// at (x, y), sx and sy view pixels per screen pixel.
+type placement struct {
+	src          image.Rectangle
+	x, y, sx, sy float64
+}
+
+func (at placement) rect() *qt.QRectF {
+	return qt.NewQRectF4(at.x, at.y, float64(at.src.Dx())*at.sx, float64(at.src.Dy())*at.sy)
+}
+
+// target is the view's placement of the screen, while there is one.
+// Display windows fit it unless stretching.
+func (v *deskView) target() (at placement, ok bool) {
+	at.src = v.shown()
+	if at.src.Empty() || v.Width() <= 0 || v.Height() <= 0 {
+		return at, false
 	}
-	scale = 1 / v.DevicePixelRatioF() // a screen pixel to a device pixel
 	vw, vh := float64(v.Width()), float64(v.Height())
-	if v.display != 0 || v.dt.fitBtn.IsChecked() {
-		scale = min(vw/float64(src.Dx()), vh/float64(src.Dy()), scale)
+	sw, sh := float64(at.src.Dx()), float64(at.src.Dy())
+	switch {
+	case v.dt.viewMode == viewStretch:
+		at.sx, at.sy = vw/sw, vh/sh
+	case v.dt.viewMode == viewFit || v.display != 0:
+		at.sx = min(vw/sw, vh/sh)
+		at.sy = at.sx
+	default:
+		at.sx = 1 / v.DevicePixelRatioF() // a screen pixel to a device pixel
+		at.sy = at.sx
 	}
-	tw, th := float64(src.Dx())*scale, float64(src.Dy())*scale
-	return qt.NewQRectF4((vw-tw)/2, (vh-th)/2, tw, th), src, scale, true
+	at.x, at.y = (vw-sw*at.sx)/2, (vh-sh*at.sy)/2
+	return at, true
 }
 
-// relayout sizes the view: the scroll area's viewport when fitting, the
-// screen's size otherwise.
+// relayout sizes the view: the scroll area's viewport unless at actual
+// size, the screen's size then.
 func (dt *desktopTab) relayout() {
-	fit := dt.fitBtn.IsChecked() || dt.screens != nil
+	fit := dt.viewMode != viewActual || dt.screens != nil
 	dt.scroll.SetWidgetResizable(fit)
 	if !fit && dt.sess != nil {
 		if w, h := dt.sess.Size(); w > 0 {
@@ -1039,8 +1119,10 @@ func (v *deskView) paint(e *qt.QPaintEvent) {
 		v.paintOverview(p)
 		return
 	}
-	tr, shown, scale, ok := v.target()
+	at, ok := v.target()
+	var tr *qt.QRectF
 	if ok {
+		tr = at.rect()
 		defer tr.Delete()
 	}
 	// The frame is opaque, only what it doesn't cover needs the background.
@@ -1054,9 +1136,10 @@ func (v *deskView) paint(e *qt.QPaintEvent) {
 	if !ok {
 		return
 	}
-	if scale*v.DevicePixelRatioF() != 1 {
+	if dpr := v.DevicePixelRatioF(); at.sx*dpr != 1 || at.sy*dpr != 1 {
 		p.SetRenderHint2(qt.QPainter__SmoothPixmapTransform, true)
 	}
+	shown := at.src
 	v.dt.sess.Frame(func(pix []byte, w, h int) {
 		if len(pix) < w*h*4 || w == 0 || !shown.In(image.Rect(0, 0, w, h)) {
 			return
@@ -1073,12 +1156,12 @@ func (v *deskView) paint(e *qt.QPaintEvent) {
 // toRemote maps a view position to screen pixels, ok while on the part
 // shown.
 func (v *deskView) toRemote(pos *qt.QPointF) (x, y int, ok bool) {
-	tr, src, scale, ok := v.target()
+	at, ok := v.target()
 	if !ok {
 		return 0, 0, false
 	}
-	defer tr.Delete()
-	fx, fy := (pos.X()-tr.X())/scale, (pos.Y()-tr.Y())/scale
+	src := at.src
+	fx, fy := (pos.X()-at.x)/at.sx, (pos.Y()-at.y)/at.sy
 	if fx < 0 || fy < 0 || fx >= float64(src.Dx()) || fy >= float64(src.Dy()) {
 		return src.Min.X + min(max(int(fx), 0), src.Dx()-1), src.Min.Y + min(max(int(fy), 0), src.Dy()-1), false
 	}

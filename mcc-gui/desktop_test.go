@@ -76,7 +76,7 @@ func TestDesktopTab(t *testing.T) {
 		tabs.Window().Show()
 		openDesktop(devices[0])
 		dt = desktopTabs[0]
-		dt.fitBtn.SetChecked(false) // pixel for pixel, the view is the screen's size
+		dt.setViewMode(viewActual) // pixel for pixel, the view is the screen's size
 	})
 	t.Cleanup(func() { mainthread.Wait(func() { dt.close(); tabs.Window().Hide() }) })
 	waitFor(t, "the screen", func() bool { return dt.status.Text() == "400 × 300" && dt.displaySel.Count() == 2 })
@@ -109,20 +109,43 @@ func TestDesktopTab(t *testing.T) {
 		return r > 200 && g < 120 && b < 120
 	})
 
-	// Fitting halves the screen into a 200 px tall view, centered.
+	// Fitting halves the screen into a 200 px tall view, centered, and
+	// enlarges it in a larger one. Stretching fills the view.
 	mainthread.Wait(func() {
-		dt.fitBtn.SetChecked(true)
-		dt.view.SetFixedSize2(600, 150) // what the viewport would give it
-		x, y, ok := dt.view.toRemote(qt.NewQPointF3(300, 75))
-		if !ok || x != 200 || y != 150 {
-			t.Errorf("the middle of the view is (%d, %d) %v, want (200, 150)", x, y, ok)
+		at := func(x, y float64) image.Point {
+			rx, ry, ok := dt.view.toRemote(qt.NewQPointF3(x, y))
+			if !ok {
+				return image.Pt(-1, -1)
+			}
+			return image.Pt(rx, ry)
 		}
-		if _, _, ok := dt.view.toRemote(qt.NewQPointF3(50, 75)); ok {
+		dt.setViewMode(viewFit)
+		dt.view.SetFixedSize2(600, 150) // what the viewport would give it
+		if p := at(300, 75); p != image.Pt(200, 150) {
+			t.Errorf("the middle of the view is %v, want (200, 150)", p)
+		}
+		if p := at(50, 75); p.X >= 0 {
 			t.Errorf("the letterbox is on the screen")
 		}
+		dt.view.SetFixedSize2(1200, 450)
+		if p := at(310, 9); p != image.Pt(6, 6) {
+			t.Errorf("(310, 9) of the view at 1.5x is %v, want (6, 6)", p)
+		}
+		dt.setViewMode(viewStretch)
+		dt.view.SetFixedSize2(600, 150)
+		if p := at(30, 15); p != image.Pt(20, 30) {
+			t.Errorf("(30, 15) of the stretched view is %v, want (20, 30)", p)
+		}
+		dt.setViewMode(viewFit)
 		dt.view.SetMinimumSize2(0, 0)
 		dt.view.SetMaximumSize2(16777215, 16777215)
 	})
+
+	// The device scales its screen down, and back.
+	mainthread.Wait(func() { dt.setScaling(512) })
+	waitFor(t, "the half size screen", func() bool { return dt.status.Text() == "200 × 150" && got([]byte{0, 5, 0, 10, 1, 50, 2, 0, 0, 100}) })
+	mainthread.Wait(func() { dt.setScaling(1024) })
+	waitFor(t, "the full size screen", func() bool { return dt.status.Text() == "400 × 300" })
 
 	// Typing: text as characters, keys as virtual keys, released alike.
 	mainthread.Wait(func() {
@@ -559,7 +582,7 @@ func TestDesktopDisplayWindows(t *testing.T) {
 			t.Errorf("window %q", title)
 		}
 		// The tab shows where the displays are, its own view's controls off.
-		if !dt.view.overview() || dt.view.inputOn() || dt.fitBtn.IsEnabled() || dt.fullBtn.IsEnabled() || !dt.screens[0].inputOn() {
+		if !dt.view.overview() || dt.view.inputOn() || dt.fullBtn.IsEnabled() || !dt.screens[0].inputOn() {
 			t.Error("the tab did not become the displays' overview")
 		}
 	})
@@ -584,6 +607,18 @@ func TestDesktopDisplayWindows(t *testing.T) {
 		}
 	})
 	waitFor(t, "the click", func() bool { return got([]byte{0, 2, 0, 10, 0, 0x02, 0, 16, 0, 20}) })
+
+	// Scaled down, the displays are cut from the smaller screen.
+	mainthread.Wait(func() { dt.setScaling(512) })
+	t.Cleanup(func() { mainthread.Wait(func() { dt.setScaling(1024) }) })
+	waitFor(t, "the half size screen", func() bool { return dt.status.Text() == "48 × 24" })
+	waitFor(t, "display 2 scaled in its window", func() bool {
+		x, y, ok := v.toRemote(qt.NewQPointF3(float64(v.Width())/2, float64(v.Height())/2))
+		img := v.Grab().ToImage() // off the click's dot in the middle
+		c := qt.NewQColor4(uint(img.Pixel(v.Width()/4, v.Height()/4)))
+		defer c.Delete()
+		return ok && x == 8 && y == 10 && c.Red() < 60 && c.Green() > 160 && c.Blue() < 60
+	})
 	mainthread.Wait(func() {
 		v.Close()
 		if len(dt.screens) != 1 || !dt.splitBtn.IsChecked() {
@@ -603,7 +638,7 @@ func TestDesktopDisplayWindows(t *testing.T) {
 		}
 		dt.screens[1].Close()
 		dt.screens[0].Close()
-		if dt.screens != nil || dt.splitBtn.IsChecked() || !dt.displaySel.IsEnabled() || !dt.fitBtn.IsEnabled() || dt.view.overview() {
+		if dt.screens != nil || dt.splitBtn.IsChecked() || !dt.displaySel.IsEnabled() || dt.view.overview() {
 			t.Error("closing the last display window did not end the split")
 		}
 	})
