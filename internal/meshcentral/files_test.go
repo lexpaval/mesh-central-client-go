@@ -73,6 +73,12 @@ func TestFilesUploadDownload(t *testing.T) {
 	if err := s.Download(context.Background(), "/missing", &bytes.Buffer{}, nil); err == nil {
 		t.Fatal("downloaded a missing file")
 	}
+	// A file the agent sends but can't hash still downloads.
+	os.WriteFile(filepath.Join(root, "in-use.locked"), []byte("log"), 0o600)
+	var got bytes.Buffer
+	if err := s.Download(context.Background(), "/in-use.locked", &got, nil); err != nil || got.String() != "log" {
+		t.Fatalf("download of a file in use: %q %v", got.String(), err)
+	}
 }
 
 func TestFilesCancel(t *testing.T) {

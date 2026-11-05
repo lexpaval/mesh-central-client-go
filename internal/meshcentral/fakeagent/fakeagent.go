@@ -34,7 +34,9 @@ func Join(parts ...string) string {
 // binary or text frames like the agent, and sends no reply and swallows the
 // errors of mkdir, rm, rename and copy. consent messages, when given, are
 // sent as the agent's console messages before anything else; two or more
-// end with a refusal, like a local user denying access.
+// end with a refusal, like a local user denying access. Files named *.locked
+// download but can't be hashed, as Windows agents can't hash a file another
+// program holds open.
 func Files(root string, consent ...string) http.HandlerFunc {
 	up := websocket.Upgrader{}
 	return func(w http.ResponseWriter, r *http.Request) {
@@ -181,7 +183,7 @@ func Files(root string, consent ...string) http.HandlerFunc {
 				}
 			case "uploadhash":
 				var hash any
-				if b, err := os.ReadFile(local(cmd.Path)); err == nil {
+				if b, err := os.ReadFile(local(cmd.Path)); err == nil && !strings.HasSuffix(cmd.Path, ".locked") {
 					sum := sha512.Sum384(b)
 					hash = hex.EncodeToString(sum[:])
 				}

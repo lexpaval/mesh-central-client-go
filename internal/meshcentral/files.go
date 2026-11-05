@@ -257,7 +257,9 @@ func (s *FileSession) exists(path string) (bool, error) {
 }
 
 // Download writes the file at path to w and checks it against the agent's
-// hash of the file. progress (may be nil) gets the bytes written so far.
+// hash of the file, when the agent can hash it: Windows agents can't open a
+// file another program holds open to hash it, even where they can send it.
+// Such a download passes unchecked, as the web UI's always do. progress (may be nil) gets the bytes written so far.
 // The protocol has no offset, a broken download has to start over.
 // Canceling ctx stops it after the block in hand.
 func (s *FileSession) Download(ctx context.Context, path string, w io.Writer, progress func(int64)) error {
@@ -320,7 +322,10 @@ func (s *FileSession) Download(ctx context.Context, path string, w io.Writer, pr
 			return err
 		}
 	}
-	return s.checkHash(path, h.Sum(nil), "file changed during the download?")
+	if err := s.checkHash(path, h.Sum(nil), "file changed during the download?"); !errors.Is(err, errNoHash) {
+		return err
+	}
+	return nil
 }
 
 // Upload writes r to path on the device, replacing any file there, and
@@ -400,6 +405,8 @@ func (s *FileSession) Upload(ctx context.Context, path string, r io.Reader, prog
 	}
 }
 
+var errNoHash = errors.New("the agent could not read the file")
+
 // Hash returns the agent's SHA-384 of the file at path, in hex.
 func (s *FileSession) Hash(path string) (string, error) {
 	id := s.nextID()
@@ -411,7 +418,7 @@ func (s *FileSession) Hash(path string) (string, error) {
 		return "", err
 	}
 	if m.Hash == nil {
-		return "", fmt.Errorf("%s: the agent could not read the file", path)
+		return "", fmt.Errorf("%s: %w", path, errNoHash)
 	}
 	return *m.Hash, nil
 }
