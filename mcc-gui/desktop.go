@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode"
@@ -25,8 +26,14 @@ import (
 // local keyboard layout applies, other keys and shortcuts as Windows
 // virtual-key codes by their US position.
 
-// openDesktopSession opens the session, tests replace it.
+// openDesktopSession opens the session, tests replace it and
+// getUserSessions.
 var openDesktopSession = meshcentral.OpenDesktop
+var getUserSessions = meshcentral.UserSessions
+
+// desktopSessionsTimeout bounds the wait for a device's sessions, servers
+// and agents that don't list them get the default session after it.
+const desktopSessionsTimeout = 5 * time.Second
 
 var getDesktopClipboard = meshcentral.GetClipboard
 var setDesktopClipboard = meshcentral.SetClipboard
@@ -68,6 +75,8 @@ type desktopTab struct {
 
 	view       *deskView
 	scroll     *qt.QScrollArea
+	box        *qt.QVBoxLayout
+	sessions   *qt.QWidget // the session picker, while it's up
 	status     *qt.QLabel
 	displaySel *qt.QComboBox
 	qualitySel *qt.QComboBox
@@ -327,10 +336,10 @@ func (dt *desktopTab) build() {
 	dt.scroll.SetWidget(dt.view.QWidget)
 	dt.scroll.SetBackgroundRole(qt.QPalette__Dark)
 
-	l := qt.NewQVBoxLayout(dt.w)
-	l.SetContentsMargins(0, 0, 0, 0)
-	l.AddLayout(bar.QLayout)
-	l.AddWidget2(dt.scroll.QWidget, 1)
+	dt.box = qt.NewQVBoxLayout(dt.w)
+	dt.box.SetContentsMargins(0, 0, 0, 0)
+	dt.box.AddLayout(bar.QLayout)
+	dt.box.AddWidget2(dt.scroll.QWidget, 1)
 	dt.relayout()
 	dt.setLive(false)
 }
@@ -900,6 +909,86 @@ func (dt *desktopTab) connect() {
 	dt.displaySel.Clear()
 	dt.displaySel.SetVisible(false)
 	dt.reconnect.SetVisible(false)
+	if !strings.Contains(strings.ToLower(dt.d.OS), "windows") {
+		dt.open(meshcentral.DefaultSession)
+		return
+	}
+	// Windows has a session per user signed in, remote desktop ones too, and
+	// shows the console's by default, where nobody may be to allow access.
+	// As in the web UI, one of several is the user's to pick.
+	setStatus(dt.status, "Looking for sessions…", false)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), desktopSessionsTimeout)
+		defer cancel()
+		list, err := getUserSessions(ctx, dt.d.Id)
+		mainthread.Start(func() {
+			if dt.closed || attempt != dt.attempt {
+				return
+			}
+			switch {
+			case err != nil:
+				logf("%s: no session list (%v), showing the default session", dt.name, err)
+				dt.open(meshcentral.DefaultSession)
+			case len(list) == 0:
+				dt.open(meshcentral.DefaultSession)
+			case len(list) == 1:
+				dt.open(list[0].ID)
+			default:
+				dt.showSessions(list)
+			}
+		})
+	}()
+}
+
+// showSessions has the user pick the session to show, in place of the
+// screen.
+func (dt *desktopTab) showSessions(list []meshcentral.UserSession) {
+	attempt := dt.attempt
+	setStatus(dt.status, "Choose a session", false)
+	dt.sessions = qt.NewQWidget2()
+	l := qt.NewQVBoxLayout(dt.sessions)
+	l.AddStretch()
+	label := qt.NewQLabel3("The device has more than one session. Which one should the desktop show?")
+	label.SetAlignment(qt.AlignCenter)
+	label.SetWordWrap(true)
+	l.AddWidget(label.QWidget)
+	var first *qt.QPushButton
+	for _, s := range list {
+		text := s.State
+		if s.Station != "" {
+			text += ", " + s.Station
+		}
+		if s.User != "" {
+			text += " · " + s.User
+		}
+		b := qt.NewQPushButton3(text)
+		b.OnClicked(func() {
+			if !dt.closed && attempt == dt.attempt {
+				logf("%s: desktop of session %d (%s)", dt.name, s.ID, text)
+				dt.open(s.ID)
+			}
+		})
+		l.AddWidget3(b.QWidget, 0, qt.AlignHCenter)
+		if first == nil {
+			first = b
+		}
+	}
+	l.AddStretch()
+	dt.scroll.Hide()
+	dt.box.AddWidget2(dt.sessions, 1)
+	first.SetFocus()
+}
+
+// open opens a session showing session, a UserSession's ID or
+// meshcentral.DefaultSession.
+func (dt *desktopTab) open(session int) {
+	attempt := dt.attempt
+	if dt.sessions != nil {
+		dt.sessions.DeleteLater()
+		dt.sessions = nil
+		dt.scroll.Show()
+		dt.view.SetFocus()
+	}
 	setStatus(dt.status, "Connecting…", false)
 	q, scaling := desktopQualities[dt.qualitySel.CurrentIndex()], dt.scaling
 	// Events of this attempt, on the Qt thread while it's the tab's latest.
@@ -962,7 +1051,7 @@ func (dt *desktopTab) connect() {
 	}
 	split := dt.splitBtn.IsChecked()
 	go func() {
-		s, err := openDesktopSession(dt.d.Id, ev)
+		s, err := openDesktopSession(dt.d.Id, session, ev)
 		if err == nil {
 			s.SetQuality(q.quality, q.frame)
 			s.SetScaling(scaling)

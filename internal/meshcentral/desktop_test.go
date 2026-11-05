@@ -44,7 +44,7 @@ func TestDesktopClipboard(t *testing.T) {
 				ws.WriteJSON(map[string]any{"action": "msg", "nodeid": m["nodeid"], "type": "getclip", "tag": m["tag"], "data": clipboard})
 			}
 		}
-	}, handleClipboardCommand)
+	}, handleMsgCommand)
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	for _, text := range []string{"héllo \"remote\"\n世界 👋", ""} {
@@ -160,7 +160,7 @@ func desktopSession(t *testing.T, agent *fakeagent.DesktopAgent) (*Desktop, *des
 		t.Fatal(err)
 	}
 	ev := &desktopEvents{}
-	d, err := NewDesktop(ws, ev.events())
+	d, err := NewDesktop(ws, DefaultSession, ev.events())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -292,7 +292,7 @@ func TestDesktopDropped(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	d, err := NewDesktop(ws, DesktopEvents{})
+	d, err := NewDesktop(ws, DefaultSession, DesktopEvents{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -389,5 +389,68 @@ func TestBlitYCbCr(t *testing.T) {
 		if !bytes.Equal(got, want) {
 			t.Errorf("subsampling %v differs", ratio)
 		}
+	}
+}
+
+func TestDesktopUserSessions(t *testing.T) {
+	controlServer(t, func(ws *websocket.Conn) {
+		var m map[string]interface{}
+		if ws.ReadJSON(&m) != nil {
+			return
+		}
+		if m["action"] != "msg" || m["type"] != "userSessions" || m["nodeid"] != "node" {
+			t.Errorf("request %v", m)
+		}
+		// As a Windows agent's kvm-helper lists them, by session ID.
+		ws.WriteJSON(map[string]any{"action": "msg", "type": "userSessions", "nodeid": "node", "tag": m["tag"], "data": map[string]any{
+			"0": map[string]any{"SessionId": 0, "State": "Disconnected", "StationName": "Services"},
+			"3": map[string]any{"SessionId": 3, "State": "Active", "StationName": "RDP-Tcp#0", "Username": "alice", "Domain": "LAB"},
+			"1": map[string]any{"SessionId": 1, "State": "Connected", "StationName": "Console"},
+			"4": map[string]any{"SessionId": 4, "State": "Disconnected", "StationName": "", "Username": "bob"},
+		}})
+	}, handleMsgCommand)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	got, err := UserSessions(ctx, "node")
+	want := []UserSession{{1, "Connected", "Console", ""}, {3, "Active", "RDP-Tcp#0", `LAB\alice`}}
+	if err != nil || !slices.Equal(got, want) {
+		t.Fatalf("sessions %v %v, want %v", got, err, want)
+	}
+}
+
+// The session to show goes to the agent as options before the protocol.
+func TestDesktopSessionOption(t *testing.T) {
+	var mu sync.Mutex
+	var first []byte
+	agent := &fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(64, 48)}, Input: func(b []byte) {
+		mu.Lock()
+		defer mu.Unlock()
+		if first == nil {
+			first = append([]byte(nil), b...)
+		}
+	}}
+	srv := httptest.NewServer(agent)
+	t.Cleanup(srv.Close)
+	ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewDesktop(ws, 3, DesktopEvents{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer d.Close()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		mu.Lock()
+		got := string(first)
+		mu.Unlock()
+		if got == `{"type":"options","tsid":3}` {
+			break
+		}
+		if got != "" || time.Now().After(deadline) {
+			t.Fatalf("the agent got %q first", got)
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
 }

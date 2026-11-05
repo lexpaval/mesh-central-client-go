@@ -110,7 +110,7 @@ func agentConsole(b []byte) (msg string, failed, ok bool) {
 // joinTunnel waits up to timeout for the device to join a tunnel conn just
 // dialed, then starts protocol p on it. what names the access it needs.
 // recorded is called if the server records the session.
-func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string, recorded func()) error {
+func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string, recorded func(), options []byte) error {
 	for {
 		conn.SetReadDeadline(time.Now().Add(timeout))
 		_, b, err := conn.ReadMessage()
@@ -122,6 +122,12 @@ func joinTunnel(conn *websocket.Conn, p int, timeout time.Duration, what string,
 				recorded()
 			}
 			break
+		}
+	}
+	// Options the agent applies to the session go before the protocol.
+	if options != nil {
+		if err := conn.WriteMessage(websocket.TextMessage, options); err != nil {
+			return err
 		}
 	}
 	return conn.WriteMessage(websocket.TextMessage, []byte(strconv.Itoa(p)))

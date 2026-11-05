@@ -99,7 +99,7 @@ func OpenFiles(nodeID string, ev SessionEvents) (*FileSession, error) {
 // NewFileSession starts a files channel on a relay tunnel conn that was
 // just dialed, waiting for the device to join it.
 func NewFileSession(conn *websocket.Conn, ev SessionEvents) (*FileSession, error) {
-	if err := joinTunnel(conn, 5, fileReplyTimeout, "file", ev.recorded); err != nil {
+	if err := joinTunnel(conn, 5, fileReplyTimeout, "file", ev.recorded, nil); err != nil {
 		return nil, err
 	}
 	return &FileSession{conn: conn, ev: ev}, nil

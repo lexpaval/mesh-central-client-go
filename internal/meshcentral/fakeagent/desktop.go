@@ -29,7 +29,8 @@ type DesktopAgent struct {
 	// Windows does: the agent offers it as the display AllDisplays and
 	// reports the layout, the screens' origins being their positions.
 	Positions map[int]image.Point
-	// Input, when set, gets every binary command the viewer sends.
+	// Input, when set, gets every binary command the viewer sends, and the
+	// options it sends before the protocol.
 	Input func(cmd []byte)
 	// Consent messages are sent as the agent's console messages first.
 	Consent []string
@@ -67,8 +68,20 @@ func (a *DesktopAgent) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer c.Close()
 	c.WriteMessage(websocket.TextMessage, []byte("c"))
-	if _, m, err := c.ReadMessage(); err != nil || string(m) != "2" {
-		return
+	for {
+		_, m, err := c.ReadMessage()
+		if err != nil {
+			return
+		}
+		if string(m) == "2" {
+			break
+		}
+		if !bytes.HasPrefix(m, []byte("{")) {
+			return
+		}
+		if a.Input != nil {
+			a.Input(m)
+		}
 	}
 	for i, msg := range a.Consent {
 		c.WriteMessage(websocket.TextMessage, []byte(`{"ctrlChannel":"102938","type":"console","msg":"`+msg+`","msgid":`+string(rune('1'+i))+`}`))

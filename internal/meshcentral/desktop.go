@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"image"
 	"image/jpeg"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -124,13 +125,56 @@ const (
 // tiles, so edge tiles cover some padding, which blit leaves out.
 const desktopTileSlack = 256
 
-// OpenDesktop opens a remote desktop session to nodeID.
-func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
+// DefaultSession has the agent pick the session shown: the console's on
+// Windows, whoever is signed in there.
+const DefaultSession = -1
+
+// UserSession is a session the desktop can show, on Windows the console's
+// or a remote desktop (RDP) one.
+type UserSession struct {
+	ID      int
+	State   string // Active, Connected
+	Station string // Console, RDP-Tcp#0
+	User    string // DOMAIN\user, empty with nobody signed in
+}
+
+// UserSessions lists nodeID's sessions as the web UI offers them: the
+// active and connected ones, and the console.
+func UserSessions(ctx context.Context, nodeID string) ([]UserSession, error) {
+	tag, _ := randomHex()
+	b, _ := json.Marshal(map[string]any{"action": "msg", "type": "userSessions", "nodeid": nodeID, "tag": tag})
+	m, err := request(ctx, replyKey("userSessions", nodeID), b)
+	if err != nil {
+		return nil, err
+	}
+	data, _ := m["data"].(map[string]any)
+	var list []UserSession
+	for _, v := range data {
+		e, _ := v.(map[string]any)
+		id, ok := e["SessionId"].(float64)
+		s := UserSession{ID: int(id)}
+		s.State, _ = e["State"].(string)
+		s.Station, _ = e["StationName"].(string)
+		s.User, _ = e["Username"].(string)
+		if domain, _ := e["Domain"].(string); s.User != "" && domain != "" {
+			s.User = domain + `\` + s.User
+		}
+		if ok && (s.State == "Active" || s.State == "Connected" || s.Station == "Console") {
+			list = append(list, s)
+		}
+	}
+	slices.SortFunc(list, func(a, b UserSession) int { return a.ID - b.ID })
+	return list, nil
+}
+
+// OpenDesktop opens a remote desktop session to nodeID, showing session,
+// a UserSession's ID or DefaultSession.
+func OpenDesktop(nodeID string, session int, ev DesktopEvents) (*Desktop, error) {
 	conn, err := dialTunnel(nodeID, 2)
 	if err != nil {
 		return nil, fmt.Errorf("unable to connect to server: %w", err)
 	}
-	d, err := NewDesktop(conn, ev)
+	d, err := NewDesktop(conn, session, ev)
 	if err != nil {
 		conn.Close()
 		return nil, err
@@ -140,14 +184,18 @@ func OpenDesktop(nodeID string, ev DesktopEvents) (*Desktop, error) {
 
 // NewDesktop starts a desktop session on a relay tunnel conn that was just
 // dialed, waiting for the device to join it.
-func NewDesktop(conn *websocket.Conn, ev DesktopEvents) (*Desktop, error) {
+func NewDesktop(conn *websocket.Conn, session int, ev DesktopEvents) (*Desktop, error) {
+	var options []byte
+	if session != DefaultSession {
+		options = fmt.Appendf(nil, `{"type":"options","tsid":%d}`, session)
+	}
 	d := &Desktop{conn: conn, ev: ev, out: make(chan []byte, 1024), done: make(chan struct{}), quality: 50, scaling: 1024, frameMs: 100}
 	conn.SetReadLimit(maxTunnelMessage) // dialTunnel's, for conns dialed elsewhere (tests)
 	if err := joinTunnel(conn, 2, desktopJoinTimeout, "desktop", func() {
 		if ev.Recorded != nil {
 			ev.Recorded()
 		}
-	}); err != nil {
+	}, options); err != nil {
 		return nil, err
 	}
 	conn.SetReadDeadline(time.Time{})
@@ -662,6 +710,16 @@ var clipboardRequests = struct {
 	next    uint64
 	pending map[[2]string]clipboardRequest
 }{pending: make(map[[2]string]clipboardRequest)}
+
+// handleMsgCommand takes the agents' replies to desktop requests.
+func handleMsgCommand(m map[string]interface{}) {
+	if m["type"] == "userSessions" {
+		node, _ := m["nodeid"].(string)
+		deliver(replyKey("userSessions", node), m)
+		return
+	}
+	handleClipboardCommand(m)
+}
 
 func handleClipboardCommand(m map[string]interface{}) {
 	node, _ := m["nodeid"].(string)

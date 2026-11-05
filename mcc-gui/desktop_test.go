@@ -36,12 +36,12 @@ func fakeDesktop(t *testing.T, agent *fakeagent.DesktopAgent) func(want []byte) 
 	srv := httptest.NewServer(agent)
 	t.Cleanup(srv.Close)
 	open := openDesktopSession
-	openDesktopSession = func(_ string, ev meshcentral.DesktopEvents) (*meshcentral.Desktop, error) {
+	openDesktopSession = func(_ string, session int, ev meshcentral.DesktopEvents) (*meshcentral.Desktop, error) {
 		ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 		if err != nil {
 			return nil, err
 		}
-		return meshcentral.NewDesktop(ws, ev)
+		return meshcentral.NewDesktop(ws, session, ev)
 	}
 	t.Cleanup(func() { openDesktopSession = open })
 	return func(want []byte) bool {
@@ -642,4 +642,65 @@ func TestDesktopDisplayWindows(t *testing.T) {
 			t.Error("closing the last display window did not end the split")
 		}
 	})
+}
+
+// Windows devices list their sessions: one of several is picked, a single
+// one is shown, and without a list the agent's default is.
+func TestDesktopSessions(t *testing.T) {
+	got := fakeDesktop(t, &fakeagent.DesktopAgent{Screens: map[int]*image.RGBA{1: fakeagent.DemoScreen(64, 48)}})
+	sessions := getUserSessions
+	t.Cleanup(func() { getUserSessions = sessions })
+	var list []meshcentral.UserSession
+	var listErr error
+	getUserSessions = func(context.Context, string) ([]meshcentral.UserSession, error) { return list, listErr }
+	open := func() *desktopTab {
+		var dt *desktopTab
+		ui(t, func() {
+			setConnected(true)
+			setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", OS: "Microsoft Windows 11 Pro", Pwr: 1}})
+			openDesktop(devices[0])
+			dt = desktopTabs[0]
+		})
+		t.Cleanup(func() { mainthread.Wait(func() { dt.close() }) })
+		return dt
+	}
+
+	list = []meshcentral.UserSession{{ID: 1, State: "Connected", Station: "Console"}, {ID: 3, State: "Active", Station: "RDP-Tcp#0", User: `LAB\alice`}}
+	dt := open()
+	var buttons []*qt.QPushButton
+	waitFor(t, "the session picker", func() bool {
+		if dt.sessions == nil {
+			return false
+		}
+		buttons = nil
+		for _, o := range dt.sessions.Children() {
+			if o.Inherits("QPushButton") {
+				buttons = append(buttons, qt.UnsafeNewQPushButton(o.UnsafePointer()))
+			}
+		}
+		return len(buttons) == 2
+	})
+	mainthread.Wait(func() {
+		if text := buttons[1].Text(); text != `Active, RDP-Tcp#0 · LAB\alice` {
+			t.Errorf("button %q", text)
+		}
+		if dt.live || dt.scroll.IsVisible() || dt.status.Text() != "Choose a session" {
+			t.Error("the picker isn't shown in place of the screen")
+		}
+		buttons[1].Click()
+	})
+	waitFor(t, "session 3", func() bool { return dt.status.Text() == "64 × 48" && dt.sessions == nil })
+	if !got([]byte(`{"type":"options","tsid":3}`)) {
+		t.Error("the agent wasn't asked for session 3")
+	}
+	mainthread.Wait(func() { dt.close() })
+
+	list = list[1:]
+	dt = open()
+	waitFor(t, "the only session", func() bool { return dt.status.Text() == "64 × 48" })
+	mainthread.Wait(func() { dt.close() })
+
+	list, listErr = nil, context.DeadlineExceeded
+	dt = open()
+	waitFor(t, "the default session", func() bool { return dt.status.Text() == "64 × 48" })
 }
