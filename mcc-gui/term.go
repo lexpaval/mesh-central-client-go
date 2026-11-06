@@ -584,8 +584,11 @@ func (t *term) key(e *qt.QKeyEvent) bool {
 		t.input(func() { t.emu.SendKey(vt.KeyPressEvent{Code: code, Mod: mod}) })
 		return true
 	}
+	// Ctrl and Alt together are AltGr on Windows, its characters are text.
+	r := []rune(text)
+	altGr := ctrl && alt && len(r) == 1 && unicode.IsPrint(r[0])
 	// Control combinations by the key, the text differs between platforms.
-	if ctrl && k >= 0x20 && k < 0x7f {
+	if ctrl && !altGr && k >= 0x20 && k < 0x7f {
 		code := unicode.ToLower(rune(k))
 		t.input(func() { t.emu.SendKey(vt.KeyPressEvent{Code: code, Mod: mod &^ vt.ModShift}) })
 		return true
@@ -593,7 +596,7 @@ func (t *term) key(e *qt.QKeyEvent) bool {
 	if text == "" {
 		return false
 	}
-	if alt {
+	if alt && !altGr {
 		text = "\x1b" + text
 	}
 	t.input(func() { t.emu.SendText(text) })

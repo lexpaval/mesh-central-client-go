@@ -138,7 +138,9 @@ func TestTermKeys(t *testing.T) {
 		{qt.Key_X, qt.AltModifier, "x", "\x1bx"},
 		{qt.Key_Backtab, qt.ShiftModifier, "", "\x1b[Z"},
 		{qt.Key_Tab, 0, "\t", "\t"},
-		{qt.Key_Bar, qt.GroupSwitchModifier, "|", "|"}, // AltGr on Windows
+		{qt.Key_Bar, qt.GroupSwitchModifier, "|", "|"},                // AltGr on Windows
+		{qt.Key_Bar, ctrlModifier | qt.AltModifier, "|", "|"},         // AltGr undetected
+		{qt.Key_A, ctrlModifier | qt.AltModifier, "\x01", "\x1b\x01"}, // Ctrl+Alt+A
 	} {
 		if got := press(c.key, c.mods, c.text); got != c.want {
 			t.Errorf("key %x mods %x: sent %q, want %q", c.key, c.mods, got, c.want)
