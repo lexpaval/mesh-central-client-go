@@ -83,6 +83,7 @@ type desktopTab struct {
 	scaleBtn   *qt.QPushButton
 	clipBtn    *qt.QPushButton
 	inputBtn   *qt.QPushButton
+	sysKeysBtn *qt.QPushButton
 	fullBtn    *qt.QPushButton
 	windowBtn  *qt.QPushButton
 	splitBtn   *qt.QPushButton
@@ -191,6 +192,9 @@ func (dt *desktopTab) close() {
 	if dt.sess != nil {
 		go dt.sess.Close()
 	}
+	for _, v := range dt.views() {
+		v.dropSysKeys()
+	}
 	desktopTabs = slices.DeleteFunc(desktopTabs, func(x *desktopTab) bool { return x == dt })
 	if !dt.detached {
 		tabs.RemoveTab(tabs.IndexOf(dt.w))
@@ -266,6 +270,22 @@ func (dt *desktopTab) build() {
 		dt.view.SetFocus()
 	})
 
+	// On, Alt+Tab, the Super or Windows key and the like go to the device
+	// while its screen has the keyboard, instead of to the local system.
+	dt.sysKeysBtn = button("System keys", "key", "Send system shortcuts like Alt+Tab and the Super or Windows key to the device while its screen has the keyboard, off they stay with this computer")
+	dt.sysKeysBtn.SetCheckable(true)
+	dt.sysKeysBtn.SetChecked(pref("desktopSysKeys") == "on")
+	dt.sysKeysBtn.SetVisible(sysKeysSupported)
+	dt.sysKeysBtn.OnToggled(func(on bool) {
+		v := ""
+		if on {
+			v = "on"
+		}
+		setPref("desktopSysKeys", v)
+		dt.updateSysKeys()
+		dt.view.SetFocus()
+	})
+
 	dt.typeBtn = button("Type clipboard", "keyboard", "Type the clipboard's text on the device")
 	dt.typeBtn.OnClicked(func() {
 		if dt.live {
@@ -321,10 +341,10 @@ func (dt *desktopTab) build() {
 	bar := hbox(false)
 	bar.SetContentsMargins(6, 4, 0, 4) // the screen goes edge to edge, not the bar
 	bar.AddWidget2(dt.status.QWidget, 1)
-	for _, b := range []*qt.QPushButton{dt.scaleBtn, dt.clipBtn, dt.inputBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
+	for _, b := range []*qt.QPushButton{dt.scaleBtn, dt.clipBtn, dt.inputBtn, dt.sysKeysBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
 		b.SetText("")
 	}
-	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.scaleBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
+	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.scaleBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.sysKeysBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
 		bar.AddWidget(w)
 	}
 
@@ -417,7 +437,12 @@ func (dt *desktopTab) newView(display int) *deskView {
 			dt.key(e, false)
 		}
 	})
-	v.OnFocusOutEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); dt.releaseKeys() })
+	v.OnFocusInEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); v.updateSysKeys(true) })
+	v.OnFocusOutEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) {
+		super(e)
+		v.dropSysKeys()
+		dt.releaseKeys()
+	})
 	v.OnMousePressEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, pressEvent) })
 	v.OnMouseDoubleClickEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, pressEvent) })
 	v.OnMouseReleaseEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { v.mouse(e, releaseEvent) })
@@ -588,6 +613,7 @@ func (dt *desktopTab) openScreen(id int) {
 	v.SetWindowIcon(icon("display"))
 	v.OnCloseEvent(func(super func(*qt.QCloseEvent), e *qt.QCloseEvent) {
 		super(e)
+		v.dropSysKeys()
 		v.DeleteLater()
 		if j := slices.Index(dt.screens, v); j >= 0 {
 			dt.screens = slices.Delete(dt.screens, j, j+1)
@@ -873,9 +899,11 @@ func (dt *desktopTab) setLive(live bool) {
 	for _, w := range []*qt.QWidget{dt.typeBtn.QWidget, dt.cadBtn.QWidget} {
 		w.SetEnabled(dt.inputOn())
 	}
+	dt.sysKeysBtn.SetEnabled(dt.inputOn())
 	for _, v := range dt.views() {
 		v.Update() // an ended session's screen goes
 	}
+	dt.updateSysKeys()
 }
 
 // showSize puts the screen size in the status, after the agent's notice.
@@ -1341,6 +1369,53 @@ func (dt *desktopTab) key(e *qt.QKeyEvent, down bool) {
 	}
 	dt.down[id] = k
 	dt.sendKey(k, true)
+}
+
+// sysKeysView is the view the local system's shortcuts go to.
+var sysKeysView *deskView
+
+// updateSysKeys takes the local system's shortcuts for v while it has the
+// keyboard and passes it on, again with force, as its window may have
+// changed.
+func (v *deskView) updateSysKeys(force bool) {
+	if v.HasFocus() && v.inputOn() && v.dt.sysKeysBtn.IsChecked() {
+		if force || sysKeysView != v {
+			sysKeysView = v
+			grabSysKeys(v.QWidget, v.dt.systemKey)
+		}
+	} else {
+		v.dropSysKeys()
+	}
+}
+
+func (v *deskView) dropSysKeys() {
+	if sysKeysView == v {
+		sysKeysView = nil
+		releaseSysKeys()
+	}
+}
+
+func (dt *desktopTab) updateSysKeys() {
+	for _, v := range dt.views() {
+		v.updateSysKeys(false)
+	}
+}
+
+// systemKey is a key the local system would have kept, as a Windows
+// virtual-key code.
+func (dt *desktopTab) systemKey(vk int, ext, down bool) {
+	if !dt.inputOn() {
+		return
+	}
+	id, k := 2<<32|uint64(vk), sentKey{vk: vk, ext: ext}
+	if down {
+		dt.down[id] = k
+	} else if _, ok := dt.down[id]; !ok {
+		return
+	} else {
+		delete(dt.down, id)
+	}
+	dt.sendKey(k, down)
 }
 
 func (dt *desktopTab) sendKey(k sentKey, down bool) {

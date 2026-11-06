@@ -13,7 +13,7 @@ RUN dpkg --add-architecture arm64 && \
         libxcb-cursor0 libxcb-cursor0:arm64 libxcb-icccm4 libxcb-icccm4:arm64 \
         libxcb-keysyms1 libxcb-keysyms1:arm64 libxcb-shape0 libxcb-shape0:arm64 \
         libxcb-xinerama0 libxcb-xinerama0:arm64 libxcb-xkb1 libxcb-xkb1:arm64 \
-        libdbus-1-3 libdbus-1-3:arm64 libsm6 libsm6:arm64 && apt-get clean
+        libdbus-1-3 libdbus-1-3:arm64 libsm6 libsm6:arm64 libwayland-dev libwayland-dev:arm64 && apt-get clean
 
 ARG QT_VERSION=6.11.3
 RUN python3 -m venv /opt/aqt && /opt/aqt/bin/pip install --no-cache-dir aqtinstall==3.3.0 && \

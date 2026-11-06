@@ -204,6 +204,35 @@ func TestDesktopTab(t *testing.T) {
 		e.Delete()
 	})
 
+	// System keys: on, the view with the keyboard takes them from the local
+	// system, and those it passes on go as virtual keys, let go with input.
+	mainthread.Wait(func() { tabs.Window().ActivateWindow(); dt.view.SetFocus() })
+	waitFor(t, "the view's focus", func() bool { return dt.view.HasFocus() })
+	mainthread.Wait(func() {
+		dt.sysKeysBtn.SetChecked(true)
+		if sysKeysView != dt.view {
+			t.Error("the focused view didn't take the system keys")
+		}
+		dt.systemKey(0x5b, true, true)
+		dt.inputBtn.SetChecked(false)
+		if sysKeysView != nil {
+			t.Error("view only kept the system keys")
+		}
+		dt.systemKey(0x73, true, false)
+		dt.inputBtn.SetChecked(true)
+		if sysKeysView != dt.view {
+			t.Error("input back didn't take the system keys again")
+		}
+		dt.sysKeysBtn.SetChecked(false)
+		if sysKeysView != nil || pref("desktopSysKeys") != "" {
+			t.Error("system keys stayed taken when turned off")
+		}
+	})
+	waitFor(t, "the Windows key", func() bool { return got([]byte{0, 1, 0, 6, 4, 0x5b}) && got([]byte{0, 1, 0, 6, 3, 0x5b}) })
+	if got([]byte{0, 1, 0, 6, 0, 0x73}) {
+		t.Error("a system key went to the device while input was off")
+	}
+
 	// Another display.
 	mainthread.Wait(func() { dt.displaySel.Activated(1) })
 	waitFor(t, "display 2", func() bool { return dt.status.Text() == "200 × 100" })
@@ -307,8 +336,9 @@ func TestDesktopClipboardSync(t *testing.T) {
 	var dt *desktopTab
 	ui(t, func() {
 		tabs.Window().Show()
-		tabs.Window().ActivateWindow()
 		openDesktop(meshcentral.Device{Id: "n", Name: "clipboard"})
+		// After the tab, which can widen the window past the offscreen screen.
+		tabs.Window().ActivateWindow()
 		dt = desktopTabs[0]
 		dt.clipTimer.Stop()
 	})
