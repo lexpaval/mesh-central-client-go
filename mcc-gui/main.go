@@ -1780,6 +1780,7 @@ func showAbout() {
 	// Release builds check for updates, here on demand too.
 	if releaseTag.MatchString(version) {
 		status := qt.NewQLabel2()
+		status.SetTextFormat(qt.RichText) // errors have no tags to tell
 		status.SetOpenExternalLinks(true)
 		check := qt.NewQPushButton3("Check now")
 		check.SetIcon(icon("rotate"))
