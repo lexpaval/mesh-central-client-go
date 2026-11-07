@@ -1532,12 +1532,18 @@ func showAddRoute() {
 		preset.AddItem(fmt.Sprintf("%s (%d)", p.Name, p.Port))
 	}
 	f.add("Preset", preset.QWidget)
-	remotePort := f.entry("Remote port", "22", "", portValidator(false))
+	remotePort := f.entry("Remote port", "", "", portValidator(false))
 	target := f.entry("Target host", "", "the device itself", nil)
-	preset.OnActivated(func(i int) {
+	pick := func(i int) {
 		remotePort.SetText(strconv.Itoa(choices[i].Port))
 		target.SetText(choices[i].Target)
-	})
+	}
+	preset.OnActivated(pick)
+	// It opens on the preset of the last route started, by port as the
+	// user's presets may have moved.
+	last := max(0, slices.IndexFunc(choices, func(p routePreset) bool { return strconv.Itoa(p.Port) == pref("routePreset") }))
+	preset.SetCurrentIndex(last)
+	pick(last)
 	localPort := f.entry("Local port", "", "auto", portValidator(true))
 	bind := f.entry("Bind address", "", "127.0.0.1", nil)
 	// Open on start runs the route's Open action once it listens. The choice
@@ -1553,6 +1559,7 @@ func showAddRoute() {
 	})
 	f.addFooter(openNow.QWidget)
 	f.show(0, func() {
+		setPref("routePreset", strconv.Itoa(choices[preset.CurrentIndex()].Port))
 		rp, _ := strconv.Atoi(remotePort.Text())
 		lp, _ := strconv.Atoi(localPort.Text())
 		t := strings.TrimSpace(target.Text())

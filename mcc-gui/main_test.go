@@ -934,3 +934,57 @@ func TestAbout(t *testing.T) {
 		})
 	}
 }
+
+// Add route opens on the preset of the last route started.
+func TestAddRouteRemembersPreset(t *testing.T) {
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		defer disconnect()
+		selectDevice("n")
+		defer func() {
+			for _, ar := range routes {
+				ar.route.Close()
+			}
+			routes = nil
+		}()
+		// open shows the dialog, its preset combo and remote port.
+		open := func() (*qt.QDialog, *qt.QComboBox, *qt.QLineEdit) {
+			showAddRoute()
+			for _, w := range qt.QApplication_TopLevelWidgets() {
+				if w.WindowTitle() != "Route to dev" || !w.IsVisible() {
+					continue
+				}
+				var c *qt.QComboBox
+				var edits []*qt.QLineEdit
+				for _, o := range w.Children() {
+					if o.Inherits("QComboBox") {
+						c = qt.UnsafeNewQComboBox(o.UnsafePointer())
+					} else if o.Inherits("QLineEdit") {
+						edits = append(edits, qt.UnsafeNewQLineEdit(o.UnsafePointer()))
+					}
+				}
+				return qt.UnsafeNewQDialog(w.UnsafePointer()), c, edits[0]
+			}
+			t.Fatal("no Add route dialog")
+			return nil, nil, nil
+		}
+
+		d, c, port := open()
+		if c.CurrentText() != "SSH (22)" || port.Text() != "22" {
+			t.Errorf("first opened on %q, port %q", c.CurrentText(), port.Text())
+		}
+		c.SetCurrentIndex(c.FindText("RDP (3389)"))
+		c.Activated(c.CurrentIndex())
+		d.Accept()
+		if pref("routePreset") != "3389" {
+			t.Errorf("remembered %q", pref("routePreset"))
+		}
+
+		d, c, port = open()
+		if c.CurrentText() != "RDP (3389)" || port.Text() != "3389" {
+			t.Errorf("reopened on %q, port %q", c.CurrentText(), port.Text())
+		}
+		d.Reject()
+	})
+}
