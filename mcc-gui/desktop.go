@@ -260,11 +260,12 @@ func (dt *desktopTab) build() {
 	dt.clipTimer.Start(1000)
 
 	// Off, the screen is only watched: nothing typed or clicked goes to the
-	// device, and local shortcuts work again.
+	// device, and local shortcuts work again. It starts as Settings say.
 	dt.inputBtn = button("Input", "computer-mouse", "Send the mouse and keyboard to the device, off is view only")
 	dt.inputBtn.SetCheckable(true)
-	dt.inputBtn.SetChecked(true)
-	dt.inputBtn.OnToggled(func(bool) {
+	dt.inputBtn.SetChecked(desktopInputStart())
+	dt.inputBtn.OnToggled(func(on bool) {
+		setPref("desktopInputLast", map[bool]string{true: "", false: "off"}[on])
 		dt.releaseKeys()
 		dt.setLive(dt.live)
 		dt.view.SetFocus()

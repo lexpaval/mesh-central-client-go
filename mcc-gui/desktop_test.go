@@ -181,6 +181,9 @@ func TestDesktopTab(t *testing.T) {
 		if dt.typeBtn.IsEnabled() || dt.cadBtn.IsEnabled() {
 			t.Error("typing and Ctrl+Alt+Del are enabled with input off")
 		}
+		if pref("desktopInputLast") != "off" {
+			t.Error("view only wasn't kept for As last left")
+		}
 		send(qt.QEvent__KeyPress, qt.Key_B, "b")
 		send(qt.QEvent__KeyRelease, qt.Key_B, "b")
 		pos := qt.NewQPointF3(60, 50)

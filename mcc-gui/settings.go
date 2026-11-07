@@ -22,7 +22,21 @@ var (
 	themes        = []choice{{"", "System", ""}, {"light", "Light", ""}, {"dark", "Dark", ""}}
 	deviceActions = []choice{{"", "Shell", "terminal"}, {"files", "Files", "folder"}, {"desktop", "Desktop", "display"},
 		{"ssh", "SSH in a terminal", "terminal"}, {"details", "Details", "circle-info"}}
+	desktopInputs = []choice{{"", "Input on", ""}, {"off", "View only", ""}, {"last", "Input as last left", ""}}
 )
+
+// desktopInputStart is whether a new desktop tab starts with Input on, by
+// the "desktopInput" pref. Input as last left goes by "desktopInputLast", which the
+// Input button of any tab sets.
+func desktopInputStart() bool {
+	switch pref("desktopInput") {
+	case "off":
+		return false
+	case "last":
+		return pref("desktopInputLast") != "off"
+	}
+	return true
+}
 
 // systemStyle is the style Qt picked at start, the System theme goes back
 // to it once forced is set.
@@ -260,7 +274,9 @@ func (sp *settingsPage) build() {
 		return c
 	}
 	section("Appearance").AddRow3("Theme", combo("theme", themes, applyTheme).QWidget)
-	section("Devices").AddRow3("Double-click a device", combo("deviceAction", deviceActions, nil).QWidget)
+	devices := section("Devices")
+	devices.AddRow3("Double-click a device", combo("deviceAction", deviceActions, nil).QWidget)
+	devices.AddRow3("Start desktops with", combo("desktopInput", desktopInputs, nil).QWidget)
 	updates := qt.NewQCheckBox3("Check for new releases once a day")
 	updates.SetToolTip("Asks GitHub for the latest release and shows a newer one beside the Settings button")
 	updates.SetChecked(updatesOn())

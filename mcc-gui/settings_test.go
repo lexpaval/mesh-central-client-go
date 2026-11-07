@@ -140,3 +140,22 @@ func TestRoutePresets(t *testing.T) {
 		}
 	})
 }
+
+// New desktops start with Input as Settings say, As last left by the last
+// toggle in any tab.
+func TestDesktopInputStart(t *testing.T) {
+	ui(t, func() {
+		for _, c := range []struct {
+			start, last string
+			on          bool
+		}{
+			{"", "off", true}, {"off", "", false}, {"last", "", true}, {"last", "off", false},
+		} {
+			setPref("desktopInput", c.start)
+			setPref("desktopInputLast", c.last)
+			if desktopInputStart() != c.on {
+				t.Errorf("%q with last %q: input on is %v", c.start, c.last, !c.on)
+			}
+		}
+	})
+}
