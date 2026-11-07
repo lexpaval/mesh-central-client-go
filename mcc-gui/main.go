@@ -272,6 +272,7 @@ func buildUI() *qt.QWidget {
 	profileSel = qt.NewQComboBox2()
 	profileSel.SetSizeAdjustPolicy(qt.QComboBox__AdjustToContents)
 	profileSel.SetMinimumContentsLength(12)
+	profileSel.OnCurrentIndexChanged(func(int) { applyProfilePrefs() })
 	insecureChk = qt.NewQCheckBox3("Skip TLS verify")
 	connectBtn = qt.NewQPushButton3("Connect")
 	connectBtn.SetDefault(true)
@@ -307,8 +308,7 @@ func buildUI() *qt.QWidget {
 		}
 		confirm("Remove profile", "Remove profile "+name+" and its stored password?", func() {
 			config.RemoveProfile(name)
-			setPref(routesKey(name), "")
-			setPref(recentKey(name), "")
+			removeProfilePrefs(name)
 			refreshProfiles()
 		})
 	})
@@ -565,11 +565,6 @@ func buildUI() *qt.QWidget {
 	showListBtn = iconButton("", "angles-right", "Show the device list (Ctrl+Shift+B)")
 	showListBtn.SetFlat(true)
 	tabs.SetCornerWidget2(showListBtn.QWidget, qt.TopLeftCorner)
-	showDevices := func(show bool) {
-		left.SetVisible(show)
-		showListBtn.SetVisible(!show)
-		setPref("hideDevices", map[bool]string{false: "1"}[show])
-	}
 	hideListBtn.OnClicked(func() { showDevices(false) })
 	showListBtn.OnClicked(func() { showDevices(true) })
 	qt.NewQShortcut2(qt.NewQKeySequence2("Ctrl+Shift+B"), root.QObject).OnActivated(func() {
@@ -577,7 +572,6 @@ func buildUI() *qt.QWidget {
 			showDevices(left.IsHidden())
 		}
 	})
-	showDevices(pref("hideDevices") == "")
 	vsplit := qt.NewQSplitter3(qt.Vertical)
 	vsplit.AddWidget(hsplit.QWidget)
 	vsplit.AddWidget(logView.QWidget)
@@ -585,17 +579,13 @@ func buildUI() *qt.QWidget {
 	vsplit.SetSizes([]int{540, 140})
 	vsplit.SetChildrenCollapsible(false)
 	// The log hides for room the same way, from the top bar or Ctrl+Shift+L.
-	showLog := func(show bool) {
-		logView.SetVisible(show)
-		logBtn.SetChecked(show)
-		setPref("hideLog", map[bool]string{false: "1"}[show])
-	}
 	logBtn.OnToggled(showLog)
 	qt.NewQShortcut2(qt.NewQKeySequence2("Ctrl+Shift+L"), root.QObject).OnActivated(func() {
 		if fullscreenDesktop == nil {
 			showLog(logView.IsHidden())
 		}
 	})
+	showDevices(pref("hideDevices") == "")
 	showLog(pref("hideLog") == "")
 
 	rl := qt.NewQVBoxLayout(root)
@@ -919,6 +909,13 @@ func refreshProfiles() {
 	for _, p := range config.GetProfiles() {
 		names = append(names, p.Name)
 	}
+	migrateLegacyPrefs(names)
+	// Picked without a switch per step, then the profile's preferences apply once.
+	profileSel.BlockSignals(true)
+	defer func() {
+		profileSel.BlockSignals(false)
+		applyProfilePrefs()
+	}()
 	profileSel.Clear()
 	profileSel.AddItems(names)
 	// The last one connected to, then the CLI's default.
@@ -931,6 +928,35 @@ func refreshProfiles() {
 	if len(names) > 0 {
 		profileSel.SetCurrentIndex(0)
 	}
+}
+
+// applyProfilePrefs puts the current profile's preferences in place, after
+// another one was picked: theme, layout, release check and Settings. Not in
+// a desktop's fullscreen, which puts the layout back as it was.
+func applyProfilePrefs() {
+	applyTheme()
+	if fullscreenDesktop == nil {
+		showDevices(pref("hideDevices") == "")
+		showLog(pref("hideLog") == "")
+	}
+	checkUpdates(false)
+	if settingsTab != nil {
+		settingsTab.sync()
+	}
+}
+
+// showDevices shows or hides the device list, back from the tabs' corner.
+func showDevices(show bool) {
+	devicePane.SetVisible(show)
+	showListBtn.SetVisible(!show)
+	setPref("hideDevices", map[bool]string{false: "1"}[show])
+}
+
+// showLog shows or hides the log, its top bar button pressed while shown.
+func showLog(show bool) {
+	logView.SetVisible(show)
+	logBtn.SetChecked(show)
+	setPref("hideLog", map[bool]string{false: "1"}[show])
 }
 
 // routeRow is a route in the Routes tab.
@@ -1639,8 +1665,6 @@ type savedRoute struct {
 	LocalPort, RemotePort               int
 }
 
-func routesKey(profile string) string { return "routes/" + profile }
-
 // saveRoutes remembers the running routes. Adding and stopping one saves,
 // disconnecting doesn't, those are the routes to reopen.
 func saveRoutes() {
@@ -1650,18 +1674,18 @@ func saveRoutes() {
 		saved = append(saved, savedRoute{ar.device, r.NodeID, r.BindAddress, r.Target, r.LocalPort, r.RemotePort})
 	}
 	if len(saved) == 0 {
-		setPref(routesKey(session.profile), "")
+		setProfilePref(session.profile, "routes", "")
 		return
 	}
 	b, _ := json.Marshal(saved)
-	setPref(routesKey(session.profile), string(b))
+	setProfilePref(session.profile, "routes", string(b))
 }
 
 // restoreRoutes reopens the routes running at the last disconnect, one that
 // can't bind its port any more is logged and forgotten.
 func restoreRoutes() {
 	var saved []savedRoute
-	if json.Unmarshal([]byte(pref(routesKey(session.profile))), &saved) != nil {
+	if json.Unmarshal([]byte(profilePref(session.profile, "routes")), &saved) != nil {
 		return
 	}
 	for _, sr := range saved {
@@ -2036,13 +2060,7 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 			p := config.Profile{Name: name.Text(), Server: server.Text(), Username: username.Text(), SSO: sso.IsChecked()}
 			if err = config.UpdateProfile(edit.Name, p, password.Text(), makeDefault.IsChecked()); err == nil && p.Name != edit.Name {
 				// The GUI's own memory of the profile follows a rename.
-				setPref(routesKey(p.Name), pref(routesKey(edit.Name)))
-				setPref(routesKey(edit.Name), "")
-				setPref(recentKey(p.Name), pref(recentKey(edit.Name)))
-				setPref(recentKey(edit.Name), "")
-				if pref("lastProfile") == edit.Name {
-					setPref("lastProfile", p.Name)
-				}
+				renameProfilePrefs(edit.Name, p.Name)
 			}
 		} else {
 			_, err = config.AddProfile(name.Text(), makeDefault.IsChecked(), server.Text(), username.Text(), password.Text(), sso.IsChecked())
@@ -2298,39 +2316,5 @@ func flushLog() {
 	}
 	for _, l := range lines {
 		logView.AppendPlainText(l)
-	}
-}
-
-// Preferences of the GUI itself (last profile, routes to reopen), in a JSON
-// file next to the CLI's config.
-var prefs struct {
-	path string
-	m    map[string]string
-}
-
-func loadPrefs(path string) {
-	prefs.path, prefs.m = path, map[string]string{}
-	if b, err := os.ReadFile(path); err == nil {
-		json.Unmarshal(b, &prefs.m)
-	}
-}
-
-func pref(key string) string { return prefs.m[key] }
-
-// setPref stores a preference, "" removes it.
-func setPref(key, value string) {
-	if prefs.m[key] == value {
-		return
-	}
-	if value == "" {
-		delete(prefs.m, key)
-	} else {
-		prefs.m[key] = value
-	}
-	b, _ := json.MarshalIndent(prefs.m, "", "  ")
-	os.MkdirAll(filepath.Dir(prefs.path), 0o700)
-	tmp := prefs.path + ".tmp"
-	if os.WriteFile(tmp, b, 0o600) == nil {
-		os.Rename(tmp, prefs.path)
 	}
 }

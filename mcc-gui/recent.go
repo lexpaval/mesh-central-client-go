@@ -61,22 +61,20 @@ var (
 	timeNow    = time.Now // tests age actions
 )
 
-func recentKey(profile string) string { return "recent/" + profile }
-
 func loadRecent() {
 	recent = nil
-	json.Unmarshal([]byte(pref(recentKey(session.profile))), &recent)
+	json.Unmarshal([]byte(profilePref(session.profile, "recent")), &recent)
 	sortRecent()
 	rebuildRecent()
 }
 
 func saveRecent() {
 	if len(recent) == 0 {
-		setPref(recentKey(session.profile), "")
+		setProfilePref(session.profile, "recent", "")
 		return
 	}
 	b, _ := json.Marshal(recent)
-	setPref(recentKey(session.profile), string(b))
+	setProfilePref(session.profile, "recent", string(b))
 }
 
 func sortRecent() {

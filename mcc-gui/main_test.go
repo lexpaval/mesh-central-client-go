@@ -404,12 +404,91 @@ func TestPrefsPersist(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "sub", "prefs.json")
 	loadPrefs(path)
 	setPref("lastProfile", "work")
-	setPref("routes/work", `[{"Device":"d"}]`)
-	setPref("routes/work", "")
+	setProfilePref("work", "routes", `[{"Device":"d"}]`)
+	setProfilePref("work", "routes", "")
+	setProfilePref("work", "deviceAction", "files")
 	loadPrefs(path)
-	if pref("lastProfile") != "work" || pref("routes/work") != "" || len(prefs.m) != 1 {
-		t.Fatalf("reloaded %v", prefs.m)
+	if pref("lastProfile") != "work" || profilePref("work", "routes") != "" || profilePref("work", "deviceAction") != "files" ||
+		len(prefs.m) != 1 || len(prefs.profiles) != 1 || len(prefs.profiles["work"]) != 1 {
+		t.Fatalf("reloaded %v %v", prefs.m, prefs.profiles)
 	}
+}
+
+// Each profile has its own settings, those of the profile picked apply.
+func TestProfilePrefs(t *testing.T) {
+	keyring.MockInit()
+	viper.Set("profiles", []map[string]any{{"name": "cli"}, {"name": "gui"}})
+	viper.Set("default_profile", "cli")
+	t.Cleanup(viper.Reset)
+	ui(t, func() {
+		refreshProfiles()
+		setPref("deviceAction", "files")
+		showLog(false)
+		openSettings()
+		// The Settings tab's double-click choice.
+		action := func() string {
+			for _, w := range qt.QApplication_AllWidgets() {
+				if w.Inherits("QComboBox") && settingsTab.w.IsAncestorOf(w) {
+					if c := qt.UnsafeNewQComboBox(w.UnsafePointer()); c.FindText("Details") >= 0 {
+						return c.CurrentText()
+					}
+				}
+			}
+			return ""
+		}
+		if action() != "Files" {
+			t.Errorf("Settings show %q", action())
+		}
+
+		profileSel.SetCurrentIndex(profileSel.FindText("gui"))
+		if pref("deviceAction") != "" || logView.IsHidden() || action() != "Shell" {
+			t.Errorf("gui has action %q, Settings %q, log hidden %v", pref("deviceAction"), action(), logView.IsHidden())
+		}
+		profileSel.SetCurrentIndex(profileSel.FindText("cli"))
+		if pref("deviceAction") != "files" || !logView.IsHidden() || action() != "Files" {
+			t.Errorf("cli back with action %q, Settings %q, log hidden %v", pref("deviceAction"), action(), logView.IsHidden())
+		}
+
+		renameProfilePrefs("cli", "cli2")
+		if profilePref("cli2", "deviceAction") != "files" || profilePref("cli", "deviceAction") != "" {
+			t.Errorf("rename left %v", prefs.profiles)
+		}
+		removeProfilePrefs("cli2")
+		if profilePref("cli2", "deviceAction") != "" {
+			t.Errorf("remove left %v", prefs.profiles)
+		}
+	})
+}
+
+// A file from before profiles had their own settings gives them to every
+// profile, routes and Recent to their own.
+func TestLegacyPrefs(t *testing.T) {
+	keyring.MockInit()
+	viper.Set("profiles", []map[string]any{{"name": "cli"}, {"name": "gui"}})
+	viper.Set("default_profile", "cli")
+	t.Cleanup(viper.Reset)
+	path := filepath.Join(t.TempDir(), "prefs.json")
+	os.WriteFile(path, []byte(`{"lastProfile": "gui", "deviceAction": "files", "hideLog": "1", "updateChecked": "5",
+		"routes/gui": "[r]", "recent/cli": "[c]"}`), 0o600)
+	ui(t, func() {
+		loadPrefs(path)
+		refreshProfiles()
+		loadPrefs(path) // as saved
+		for _, p := range []string{"cli", "gui"} {
+			if profilePref(p, "deviceAction") != "files" || profilePref(p, "hideLog") != "1" {
+				t.Errorf("%s got %v", p, prefs.profiles[p])
+			}
+		}
+		if profilePref("gui", "routes") != "[r]" || profilePref("cli", "recent") != "[c]" || profilePref("cli", "routes") != "" {
+			t.Errorf("routes and Recent moved to %v", prefs.profiles)
+		}
+		if len(prefs.legacy) != 0 || pref("updateChecked") != "5" || pref("lastProfile") != "gui" {
+			t.Errorf("left %v, app's %v", prefs.legacy, prefs.m)
+		}
+		if profileSel.CurrentText() != "gui" || !logView.IsHidden() {
+			t.Error("the last profile's settings didn't apply")
+		}
+	})
 }
 
 func TestRefreshFailureKeepsDevices(t *testing.T) {
@@ -498,8 +577,8 @@ func TestRoutesReopen(t *testing.T) {
 		}
 		defer l.Close()
 		restoreRoutes()
-		if len(routes) != 0 || pref(routesKey("p")) != "" {
-			t.Errorf("routes %d, saved %q", len(routes), pref(routesKey("p")))
+		if len(routes) != 0 || profilePref("p", "routes") != "" {
+			t.Errorf("routes %d, saved %q", len(routes), profilePref("p", "routes"))
 		}
 	})
 }
@@ -897,9 +976,10 @@ func TestHideLog(t *testing.T) {
 		if !logView.IsHidden() || logBtn.IsChecked() || pref("hideLog") == "" {
 			t.Error("the log did not hide")
 		}
+		loadPrefs(prefs.path) // as the next start does
 		buildUI()
 		if !logView.IsHidden() || logBtn.IsChecked() {
-			t.Error("a rebuild showed the hidden log")
+			t.Error("the next start showed the hidden log")
 		}
 		logBtn.Click()
 		if logView.IsHidden() || !logBtn.IsChecked() || pref("hideLog") != "" {

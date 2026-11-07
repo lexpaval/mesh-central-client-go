@@ -209,6 +209,7 @@ func openKind(port int) string {
 type settingsPage struct {
 	w       *qt.QWidget
 	icons   []func() // set again on a palette change
+	syncs   []func() // show another profile's settings
 	presets *qt.QTreeWidget
 	remove  *qt.QPushButton
 }
@@ -239,6 +240,13 @@ func (sp *settingsPage) close() {
 	settingsTab = nil
 }
 
+// sync shows the current profile's settings, after another was picked.
+func (sp *settingsPage) sync() {
+	for _, f := range sp.syncs {
+		f()
+	}
+}
+
 func (sp *settingsPage) retheme() {
 	for _, set := range sp.icons {
 		set()
@@ -257,12 +265,14 @@ func (sp *settingsPage) build() {
 	// combo shows a pref's choices, apply runs after one is picked.
 	combo := func(key string, choices []choice, apply func()) *qt.QComboBox {
 		c := qt.NewQComboBox2()
-		for i, ch := range choices {
+		for _, ch := range choices {
 			c.AddItem(ch.label)
-			if ch.value == pref(key) {
-				c.SetCurrentIndex(i)
-			}
 		}
+		show := func() {
+			c.SetCurrentIndex(max(0, slices.IndexFunc(choices, func(ch choice) bool { return ch.value == pref(key) })))
+		}
+		show()
+		sp.syncs = append(sp.syncs, show)
 		sp.icons = append(sp.icons, func() { setChoiceIcons(c, choices) })
 		setChoiceIcons(c, choices)
 		c.OnActivated(func(i int) {
@@ -280,6 +290,11 @@ func (sp *settingsPage) build() {
 	updates := qt.NewQCheckBox3("Check for new releases once a day")
 	updates.SetToolTip("Asks GitHub for the latest release and shows a newer one beside the Settings button")
 	updates.SetChecked(updatesOn())
+	sp.syncs = append(sp.syncs, func() {
+		updates.BlockSignals(true)
+		updates.SetChecked(updatesOn())
+		updates.BlockSignals(false)
+	})
 	updates.OnToggled(func(on bool) {
 		setPref("updateCheck", map[bool]string{true: "", false: "off"}[on])
 		checkUpdates(false)
@@ -322,6 +337,7 @@ func (sp *settingsPage) build() {
 	bl.AddWidget2(sp.presets.QWidget, 1)
 	v.AddWidget2(box.QWidget, 1) // the list takes the room left
 	sp.fill()
+	sp.syncs = append(sp.syncs, sp.fill)
 
 	scroll := qt.NewQScrollArea2()
 	scroll.SetWidgetResizable(true)
