@@ -78,6 +78,7 @@ var (
 	devicePane    *qt.QWidget // search, tree and device buttons
 	hideListBtn   *qt.QPushButton
 	showListBtn   *qt.QPushButton // the tabs' corner, while the list is hidden
+	logBtn        *qt.QPushButton // shows or hides the log
 	deviceTree    *qt.QTreeWidget
 	treeItems     = map[string]*qt.QTreeWidgetItem{} // group and device rows by ID
 	collapsed     = map[string]bool{}                // groups the user closed
@@ -326,7 +327,11 @@ func buildUI() *qt.QWidget {
 	aboutBtn.OnClicked(showAbout)
 	top := hbox(false, profileBar, connectBtn.QWidget)
 	top.AddWidget2(statusLabel.QWidget, 1)
+	logBtn = iconButton("", "rectangle-list", "Show the log (Ctrl+Shift+L)")
+	logBtn.SetFlat(true)
+	logBtn.SetCheckable(true)
 	top.AddWidget(updateBtn.QWidget)
+	top.AddWidget(logBtn.QWidget)
 	top.AddWidget(settingsBtn.QWidget)
 	top.AddWidget(aboutBtn.QWidget)
 
@@ -579,6 +584,19 @@ func buildUI() *qt.QWidget {
 	vsplit.SetStretchFactor(0, 1)
 	vsplit.SetSizes([]int{540, 140})
 	vsplit.SetChildrenCollapsible(false)
+	// The log hides for room the same way, from the top bar or Ctrl+Shift+L.
+	showLog := func(show bool) {
+		logView.SetVisible(show)
+		logBtn.SetChecked(show)
+		setPref("hideLog", map[bool]string{false: "1"}[show])
+	}
+	logBtn.OnToggled(showLog)
+	qt.NewQShortcut2(qt.NewQKeySequence2("Ctrl+Shift+L"), root.QObject).OnActivated(func() {
+		if fullscreenDesktop == nil {
+			showLog(logView.IsHidden())
+		}
+	})
+	showLog(pref("hideLog") == "")
 
 	rl := qt.NewQVBoxLayout(root)
 	topPane := qt.NewQWidget2()

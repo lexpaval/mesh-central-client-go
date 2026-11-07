@@ -888,6 +888,26 @@ func TestHideDevices(t *testing.T) {
 	})
 }
 
+func TestHideLog(t *testing.T) {
+	ui(t, func() {
+		if logView.IsHidden() || !logBtn.IsChecked() {
+			t.Error("the log started hidden")
+		}
+		logBtn.Click()
+		if !logView.IsHidden() || logBtn.IsChecked() || pref("hideLog") == "" {
+			t.Error("the log did not hide")
+		}
+		buildUI()
+		if !logView.IsHidden() || logBtn.IsChecked() {
+			t.Error("a rebuild showed the hidden log")
+		}
+		logBtn.Click()
+		if logView.IsHidden() || !logBtn.IsChecked() || pref("hideLog") != "" {
+			t.Error("the log did not come back")
+		}
+	})
+}
+
 // About shows the app icon, and links a release's own notes, other builds
 // the list of releases.
 func TestAbout(t *testing.T) {
