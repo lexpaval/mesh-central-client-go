@@ -84,6 +84,7 @@ type desktopTab struct {
 	clipBtn    *qt.QPushButton
 	inputBtn   *qt.QPushButton
 	sysKeysBtn *qt.QPushButton
+	keyMapBtn  *qt.QPushButton
 	fullBtn    *qt.QPushButton
 	windowBtn  *qt.QPushButton
 	splitBtn   *qt.QPushButton
@@ -287,6 +288,16 @@ func (dt *desktopTab) build() {
 		dt.view.SetFocus()
 	})
 
+	// On, keys go by their place on the keyboard and the device's layout
+	// types them, off as the characters this computer's layout makes.
+	dt.keyMapBtn = button("Remote keyboard map", "globe", "Send keys by their place on the keyboard for the device's own layout to type, off they type what this computer's layout makes them")
+	dt.keyMapBtn.SetCheckable(true)
+	dt.keyMapBtn.SetChecked(pref("desktopKeyMap") == "remote")
+	dt.keyMapBtn.OnToggled(func(on bool) {
+		setPref("desktopKeyMap", map[bool]string{true: "remote", false: ""}[on])
+		dt.view.SetFocus()
+	})
+
 	dt.typeBtn = button("Type clipboard", "keyboard", "Type the clipboard's text on the device")
 	dt.typeBtn.OnClicked(func() {
 		if dt.live {
@@ -342,10 +353,10 @@ func (dt *desktopTab) build() {
 	bar := hbox(false)
 	bar.SetContentsMargins(6, 4, 0, 4) // the screen goes edge to edge, not the bar
 	bar.AddWidget2(dt.status.QWidget, 1)
-	for _, b := range []*qt.QPushButton{dt.scaleBtn, dt.clipBtn, dt.inputBtn, dt.sysKeysBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
+	for _, b := range []*qt.QPushButton{dt.scaleBtn, dt.clipBtn, dt.inputBtn, dt.sysKeysBtn, dt.keyMapBtn, dt.typeBtn, dt.cadBtn, dt.fullBtn, dt.windowBtn, dt.splitBtn} {
 		b.SetText("")
 	}
-	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.scaleBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.sysKeysBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
+	for _, w := range []*qt.QWidget{dt.displaySel.QWidget, dt.qualitySel.QWidget, dt.scaleBtn.QWidget, dt.clipBtn.QWidget, dt.inputBtn.QWidget, dt.sysKeysBtn.QWidget, dt.keyMapBtn.QWidget, dt.typeBtn.QWidget, dt.cadBtn.QWidget, dt.fullBtn.QWidget, dt.windowBtn.QWidget, dt.splitBtn.QWidget, dt.reconnect.QWidget} {
 		bar.AddWidget(w)
 	}
 
@@ -901,6 +912,7 @@ func (dt *desktopTab) setLive(live bool) {
 		w.SetEnabled(dt.inputOn())
 	}
 	dt.sysKeysBtn.SetEnabled(dt.inputOn())
+	dt.keyMapBtn.SetEnabled(dt.inputOn())
 	for _, v := range dt.views() {
 		v.Update() // an ended session's screen goes
 	}
@@ -1364,7 +1376,7 @@ func (dt *desktopTab) key(e *qt.QKeyEvent, down bool) {
 		dt.sendKey(k, true)
 		return
 	}
-	k, ok := keyFor(e)
+	k, ok := keyFor(e, dt.keyMapBtn.IsChecked())
 	if !ok {
 		return
 	}
@@ -1443,13 +1455,18 @@ func (dt *desktopTab) releaseKeys() {
 
 func (dt *desktopTab) releaseKeysLocal() { clear(dt.down) }
 
-// keyFor picks what a key press sends: text as characters, unless a
-// shortcut modifier is held (Ctrl and Alt together are AltGr on Windows),
-// everything else as a key.
-func keyFor(e *qt.QKeyEvent) (sentKey, bool) {
+// keyFor picks what a key press sends. With the remote keyboard map keys
+// go by their place on the keyboard. Otherwise text goes as characters,
+// unless a shortcut modifier is held (Ctrl and Alt together are AltGr on
+// Windows), everything else as a key.
+func keyFor(e *qt.QKeyEvent, remoteMap bool) (sentKey, bool) {
 	mods := e.Modifiers()
 	ctrl, alt, super := mods&ctrlModifier != 0, mods&qt.AltModifier != 0, mods&superModifier != 0
-	if r := []rune(e.Text()); len(r) == 1 && unicode.IsPrint(r[0]) && !super && ctrl == alt {
+	if remoteMap {
+		if k, ok := placedKey(runtime.GOOS, e.NativeScanCode(), e.NativeVirtualKey()); ok {
+			return k, true
+		}
+	} else if r := []rune(e.Text()); len(r) == 1 && unicode.IsPrint(r[0]) && !super && ctrl == alt {
 		return sentKey{r: r[0]}, true
 	}
 	vk, ext, ok := virtualKey(e.Key(), mods&qt.KeypadModifier != 0)

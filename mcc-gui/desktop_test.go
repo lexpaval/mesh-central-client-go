@@ -516,12 +516,65 @@ func TestDesktopKeys(t *testing.T) {
 			{qt.Key_Eacute, qt.NoModifier, "é", sentKey{r: 'é'}},
 		} {
 			e := qt.NewQKeyEvent3(qt.QEvent__KeyPress, int(c.key), c.mods, c.text)
-			if got, ok := keyFor(e); !ok || got != c.want {
+			if got, ok := keyFor(e, false); !ok || got != c.want {
 				t.Errorf("key %x mods %x %q: %+v %v, want %+v", c.key, c.mods, c.text, got, ok, c.want)
 			}
 			e.Delete()
 		}
 	})
+}
+
+// With the remote keyboard map keys go by their place, Qt's names stand in
+// for the place where the platform doesn't report it.
+func TestDesktopRemoteKeyMap(t *testing.T) {
+	mainthread.Wait(func() {
+		for _, c := range []struct {
+			key    qt.Key
+			text   string
+			sc, vk uint
+			want   sentKey
+			ok     bool
+		}{
+			{qt.Key_A, "a", 0, 0, sentKey{vk: 'A'}, true},
+			{qt.Key_Exclam, "!", 0, 0, sentKey{vk: '1'}, true},
+			{qt.Key_F5, "", 0, 0, sentKey{vk: 0x74}, true},
+			{qt.Key_Eacute, "é", 0, 0, sentKey{}, false}, // no place on a US keyboard
+		} {
+			e := qt.NewQKeyEvent6(qt.QEvent__KeyPress, int(c.key), qt.NoModifier, c.sc, c.vk, 0, c.text)
+			if got, ok := keyFor(e, true); ok != c.ok || got != c.want {
+				t.Errorf("key %x %q: %+v %v, want %+v %v", c.key, c.text, got, ok, c.want, c.ok)
+			}
+			e.Delete()
+		}
+	})
+	for _, c := range []struct {
+		goos   string
+		sc, vk uint
+		want   sentKey
+		ok     bool
+	}{
+		{"linux", 44 + 8, 0x79, sentKey{vk: 'Z'}, true},           // Y on a German keyboard
+		{"linux", 100 + 8, 0, sentKey{vk: 0x12, ext: true}, true}, // AltGr
+		{"linux", 86 + 8, 0, sentKey{vk: 0xe2}, true},
+		{"linux", 41 + 8, 0, sentKey{vk: 0xc0}, true},
+		{"linux", 59 + 8, 0, sentKey{}, false}, // F1, by name
+		{"linux", 0, 0, sentKey{}, false},
+		{"windows", 0x2c, 0x59, sentKey{vk: 'Z'}, true},
+		{"windows", 0x138, 0x12, sentKey{vk: 0x12, ext: true}, true},
+		{"windows", 0x15b, 0x5b, sentKey{vk: 0x5b, ext: true}, true},
+		{"windows", 0x0d, 0, sentKey{vk: 0xbb}, true},
+		{"darwin", 0, 0x06, sentKey{vk: 'Z'}, true},
+		{"darwin", 0, 0x00, sentKey{vk: 'A'}, true},
+		{"darwin", 0, 0x0a, sentKey{vk: 0xe2}, true},
+		{"darwin", 0, 0x32, sentKey{vk: 0xc0}, true},
+		{"darwin", 0, 0x3d, sentKey{vk: 0x12, ext: true}, true},
+		{"darwin", 0, 0x24, sentKey{}, false}, // Return, by name
+		{"darwin", 0, 0x7a, sentKey{}, false},
+	} {
+		if got, ok := placedKey(c.goos, c.sc, c.vk); ok != c.ok || got != c.want {
+			t.Errorf("%s %#x %#x: %+v %v, want %+v %v", c.goos, c.sc, c.vk, got, ok, c.want, c.ok)
+		}
+	}
 }
 
 // Once the local user allowed access the agent takes its message back, the
