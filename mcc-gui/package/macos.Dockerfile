@@ -290,8 +290,9 @@ RUN ln -sf /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework/Ve
     ln -sf /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtPrintSupport.framework/Versions/A/Headers /opt/local/libexec/qt6/include/QtPrintSupport && \
     ln -sf /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtXml.framework/Versions/A/Headers /opt/local/libexec/qt6/include/QtXml
 
-ARG GO_VERSION=1.26.2
-RUN curl -sL -o /tmp/golang.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
+ARG GO_VERSION=1.27.3 GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
+RUN curl -sfL -o /tmp/golang.tar.gz "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
+    echo "${GO_SHA256}  /tmp/golang.tar.gz" | sha256sum -c && \
     tar -C /usr/local -xzf /tmp/golang.tar.gz && rm /tmp/golang.tar.gz
 
 ARG RCODESIGN_VERSION=0.29.0

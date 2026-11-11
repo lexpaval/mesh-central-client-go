@@ -23,8 +23,9 @@ RUN python3 -m venv /opt/aqt && /opt/aqt/bin/pip install --no-cache-dir aqtinsta
     ln -s /opt/qt/${QT_VERSION}/gcc_arm64 /opt/qt/arm64 && \
     sed -i 's|^prefix=.*|prefix=/opt/qt/arm64|' /opt/qt/arm64/lib/pkgconfig/*.pc
 
-ARG GO_VERSION=1.26.2
+ARG GO_VERSION=1.27.3 GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
+    echo "${GO_SHA256}  go${GO_VERSION}.linux-amd64.tar.gz" | sha256sum -c && \
     tar x -C /usr/local -f "go${GO_VERSION}.linux-amd64.tar.gz" && \
     rm "go${GO_VERSION}.linux-amd64.tar.gz"
 

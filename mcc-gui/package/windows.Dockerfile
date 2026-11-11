@@ -23,8 +23,9 @@ COPY msys-pc.sh /
 RUN sh /msys-pc.sh /msys/clang64 && sh /msys-pc.sh /msys/clangarm64 && \
     PKG_CONFIG_PATH=/msys/clangarm64/qt6-static/lib/pkgconfig pkg-config --modversion Qt6Widgets
 
-ARG GO_VERSION=1.26.2
+ARG GO_VERSION=1.27.3 GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \
+    echo "${GO_SHA256}  go${GO_VERSION}.linux-amd64.tar.gz" | sha256sum -c && \
     tar x -C /usr/local -f "go${GO_VERSION}.linux-amd64.tar.gz" && rm "go${GO_VERSION}.linux-amd64.tar.gz"
 
 ENV PATH=/usr/local/go/bin:/llvm-mingw/bin:/usr/local/sbin:/usr/local/bin:/usr/bin
