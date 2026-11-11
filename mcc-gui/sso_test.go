@@ -86,7 +86,7 @@ func TestRouterLinkLogin(t *testing.T) {
 			}
 		})
 	}
-	p := config.Profile{Name: "sso"}
+	p := config.Profile{Name: "sso", Server: host}
 	if u, pw, _ := p.GetLoginToken(); u != "~t:u" || pw != "tp" {
 		t.Errorf("stored login token %q/%q", u, pw)
 	}

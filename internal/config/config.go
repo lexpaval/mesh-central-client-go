@@ -7,7 +7,6 @@ import (
 
 	"github.com/adrg/xdg"
 	"github.com/spf13/viper"
-	"github.com/zalando/go-keyring"
 )
 
 var configPath = xdg.ConfigHome + "/mcc"
@@ -49,7 +48,8 @@ func CreateConfig(server string, username string, password string, sso bool) err
 	if password == "" {
 		return nil
 	}
-	return keyring.Set(keyringService, "default", password)
+	p := Profile{Name: "default", Server: server, Username: username}
+	return p.SetPassword(password)
 }
 
 func LoadConfig() error {
@@ -69,7 +69,11 @@ func LoadConfig() error {
 		},
 	})
 
-	return viper.ReadInConfig()
+	if err := viper.ReadInConfig(); err != nil {
+		return err
+	}
+	migrateKeyring()
+	return nil
 }
 
 func GetConfigPath() string {

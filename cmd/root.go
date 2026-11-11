@@ -8,7 +8,6 @@ import (
 	"github.com/pterm/pterm"
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
-	"github.com/zalando/go-keyring"
 )
 
 // rootCmd represents the base command when called without any subcommands
@@ -58,8 +57,11 @@ func migratePasswords() error {
 	for i, p := range profiles {
 		if pwd, ok := p["password"].(string); ok && pwd != "" {
 			// Store in keyring
-			name := p["name"].(string)
-			if err := keyring.Set("meshcentral-client", name, pwd); err != nil {
+			name, _ := p["name"].(string)
+			server, _ := p["server"].(string)
+			username, _ := p["username"].(string)
+			prof := config.Profile{Name: name, Server: server, Username: username}
+			if err := prof.SetPassword(pwd); err != nil {
 				return err
 			}
 			// Remove from config

@@ -1,6 +1,9 @@
 package config
 
 import (
+	"errors"
+	"fmt"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -17,39 +20,46 @@ type Profile struct {
 	SSO      bool   // log in through the web UI's single sign-on, see GetLoginToken
 }
 
+// account is where p's secret of kind ("", "/2fa" or "/sso") is kept in the
+// keyring: with the user and server it belongs to, so a profile of the same
+// name in another config file, pointing at another server, doesn't get it.
+func (p *Profile) account(kind string) string {
+	return p.Name + " (" + p.Username + "@" + p.Server + ")" + kind
+}
+
 // GetPassword retrieves password from system keyring
 func (p *Profile) GetPassword() (string, error) {
-	return keyring.Get(keyringService, p.Name)
+	return keyring.Get(keyringService, p.account(""))
 }
 
 // SetPassword stores password in system keyring
 func (p *Profile) SetPassword(password string) error {
-	return keyring.Set(keyringService, p.Name, password)
+	return keyring.Set(keyringService, p.account(""), password)
 }
 
 // DeletePassword removes password from system keyring
 func (p *Profile) DeletePassword() error {
-	return keyring.Delete(keyringService, p.Name)
+	return keyring.Delete(keyringService, p.account(""))
 }
 
 // The 2FA cookie is MeshCentral's "remember this device" cookie, kept in the
 // keyring next to the password so later logins skip the token prompt.
 func (p *Profile) GetTwoFactorCookie() (string, error) {
-	return keyring.Get(keyringService, p.Name+"/2fa")
+	return keyring.Get(keyringService, p.account("/2fa"))
 }
 
 func (p *Profile) SetTwoFactorCookie(cookie string) error {
-	return keyring.Set(keyringService, p.Name+"/2fa", cookie)
+	return keyring.Set(keyringService, p.account("/2fa"), cookie)
 }
 
 func (p *Profile) DeleteTwoFactorCookie() error {
-	return keyring.Delete(keyringService, p.Name+"/2fa")
+	return keyring.Delete(keyringService, p.account("/2fa"))
 }
 
 // SSO profiles log in with a MeshCentral login token minted from a browser
 // session, stored as "<token user> <token password>" (neither has spaces).
 func (p *Profile) GetLoginToken() (user, pass string, err error) {
-	t, err := keyring.Get(keyringService, p.Name+"/sso")
+	t, err := keyring.Get(keyringService, p.account("/sso"))
 	if err != nil {
 		return "", "", err
 	}
@@ -58,11 +68,45 @@ func (p *Profile) GetLoginToken() (user, pass string, err error) {
 }
 
 func (p *Profile) SetLoginToken(user, pass string) error {
-	return keyring.Set(keyringService, p.Name+"/sso", user+" "+pass)
+	return keyring.Set(keyringService, p.account("/sso"), user+" "+pass)
 }
 
 func (p *Profile) DeleteLoginToken() error {
-	return keyring.Delete(keyringService, p.Name+"/sso")
+	return keyring.Delete(keyringService, p.account("/sso"))
+}
+
+// keyringVersion 2 keeps secrets by profile, user and server, 1 by profile
+// name alone.
+const keyringVersion = 2
+
+// migrateKeyring moves the secrets kept by profile name alone to their
+// profile's user and server, once. Only for the default config file, the
+// one they were saved from: a file passed with -C could otherwise claim them
+// for a profile of the same name on another server.
+func migrateKeyring() {
+	if viper.GetInt("keyring") >= keyringVersion || filepath.Clean(viper.ConfigFileUsed()) != filepath.Clean(DefaultConfigPath) {
+		return
+	}
+	var profiles []Profile
+	viper.UnmarshalKey("profiles", &profiles)
+	for _, p := range profiles {
+		for _, kind := range []string{"", "/2fa", "/sso"} {
+			v, err := keyring.Get(keyringService, p.Name+kind)
+			if errors.Is(err, keyring.ErrNotFound) {
+				continue
+			} else if err != nil {
+				return // the keyring is locked or missing, try again next time
+			}
+			if _, err := keyring.Get(keyringService, p.account(kind)); errors.Is(err, keyring.ErrNotFound) {
+				if keyring.Set(keyringService, p.account(kind), v) != nil {
+					return
+				}
+			}
+			keyring.Delete(keyringService, p.Name+kind)
+		}
+	}
+	viper.Set("keyring", keyringVersion)
+	viper.WriteConfig()
 }
 
 func GetProfiles() []Profile {
@@ -127,6 +171,9 @@ func SetDefaultProfile(name string, commit bool) error {
 func AddProfile(name string, isDefault bool, server string, username string, password string, sso bool) (*Profile, error) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
+	if slices.ContainsFunc(profiles, func(p Profile) bool { return p.Name == name }) {
+		return nil, fmt.Errorf("a profile called %s already exists", name)
+	}
 
 	newProfile := Profile{
 		Name:     name,
@@ -157,10 +204,10 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 }
 
 // UpdateProfile replaces profile oldName with p. An empty password keeps the
-// stored one. On a rename the password, 2FA cookie and login token move with
-// the profile. The cookie and token are dropped when the server, username or
-// SSO setting change, since they belong to that account. The default profile
-// follows a rename.
+// stored one, also when the name, server or username change. On a rename the
+// 2FA cookie and login token move with the profile. They are dropped when the
+// server, username or SSO setting change, since they belong to that account.
+// The default profile follows a rename.
 func UpdateProfile(oldName string, p Profile, password string, isDefault bool) error {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
@@ -169,9 +216,9 @@ func UpdateProfile(oldName string, p Profile, password string, isDefault bool) e
 		return &ProfileNotFoundError{oldName}
 	}
 	old := profiles[i]
-	renamed := p.Name != oldName
+	moved := p.account("") != old.account("") // kept under another keyring entry
 
-	if password == "" && renamed {
+	if password == "" && moved {
 		password, _ = old.GetPassword()
 	}
 	if password != "" {
@@ -182,7 +229,7 @@ func UpdateProfile(oldName string, p Profile, password string, isDefault bool) e
 	if p.Server != old.Server || p.Username != old.Username || p.SSO != old.SSO {
 		old.DeleteTwoFactorCookie()
 		old.DeleteLoginToken()
-	} else if renamed {
+	} else if moved {
 		if c, err := old.GetTwoFactorCookie(); err == nil {
 			p.SetTwoFactorCookie(c)
 		}
@@ -190,7 +237,7 @@ func UpdateProfile(oldName string, p Profile, password string, isDefault bool) e
 			p.SetLoginToken(u, pw)
 		}
 	}
-	if renamed {
+	if moved {
 		old.DeletePassword()
 		old.DeleteTwoFactorCookie()
 		old.DeleteLoginToken()

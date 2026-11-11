@@ -18,6 +18,8 @@ import (
 
 	"github.com/gorilla/websocket"
 	"github.com/zalando/go-keyring"
+
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 )
 
 // Run the real command in a subprocess: proxy mode calls os.Exit, and its
@@ -27,7 +29,8 @@ func TestSSHProxyProcess(t *testing.T) {
 		return
 	}
 	keyring.MockInit()
-	if err := keyring.Set("meshcentral-client", "test", "test-password"); err != nil {
+	p := config.Profile{Name: "test", Server: os.Getenv("MCC_TEST_SSH_SERVER"), Username: "test-user"}
+	if err := p.SetPassword("test-password"); err != nil {
 		t.Fatal(err)
 	}
 	for i, arg := range os.Args {
@@ -165,7 +168,7 @@ func TestSSHProxy(t *testing.T) {
 				args = append(args, "root@"+tc.target)
 			}
 			process := exec.CommandContext(ctx, executable, args...)
-			process.Env = append(os.Environ(), "MCC_TEST_SSH_PROXY=1")
+			process.Env = append(os.Environ(), "MCC_TEST_SSH_PROXY=1", "MCC_TEST_SSH_SERVER="+strings.TrimPrefix(server.URL, "https://"))
 			var stdout, stderr bytes.Buffer
 			process.Stdout, process.Stderr = &stdout, &stderr
 			stdin, err := process.StdinPipe()

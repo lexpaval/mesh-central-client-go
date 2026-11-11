@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"github.com/gorilla/websocket"
+
+	"github.com/lexpaval/mesh-central-client-go/internal/config"
 )
 
 type Device struct {
@@ -64,7 +66,7 @@ type Settings struct {
 	groups                map[string]string // mesh ID -> device group name
 	groupChan             chan struct{}
 	Insecure              bool
-	profileName           string // profile StartSocket logged in with, for the 2FA cookie and login token
+	profile               config.Profile // StartSocket logged in with, keeps the 2FA cookie and login token
 	replyMu               sync.Mutex
 	replyChan             chan struct{} // closed by replied, guarded by replyMu
 	debug                 bool

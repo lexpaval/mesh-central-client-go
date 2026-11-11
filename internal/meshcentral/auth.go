@@ -51,7 +51,7 @@ func StartSocket() error { return StartSocketAs(config.GetDefaultProfile()) }
 // StartSocketAs logs in with p and keeps the control socket open, reconnecting
 // after drops.
 func StartSocketAs(p config.Profile) error {
-	settings.profileName = p.Name
+	settings.profile = p
 
 	// SSO profiles log in with a stored login token. Without one (first login,
 	// expired, revoked) the user signs in in the browser and hands over the
@@ -197,7 +197,7 @@ func StartSocketAs(p config.Profile) error {
 					return errors.New("the Router link was not accepted: it expires after an hour and works only from the IP address of the browser it was copied from")
 				}
 				// The login token expired or was revoked, sign in again.
-				p.DeleteLoginToken()
+				settings.profile.DeleteLoginToken() // p's user is the token's now
 				settings.Username, settings.Password = "", ""
 				if err := promptSSO(p.Server); err != nil {
 					return err
@@ -208,7 +208,7 @@ func StartSocketAs(p config.Profile) error {
 				return err
 			}
 			if usingCookie {
-				p.DeleteTwoFactorCookie()
+				settings.profile.DeleteTwoFactorCookie()
 				ApplyAuth("", false, false)
 				usingCookie = false
 			}
@@ -373,8 +373,7 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 		case "twoFactorCookie":
 			if c, _ := command["cookie"].(string); c != "" {
 				ApplyAuth("cookie="+c, false, false)
-				p := config.Profile{Name: settings.profileName}
-				if err := p.SetTwoFactorCookie(c); err != nil && settings.debug {
+				if err := settings.profile.SetTwoFactorCookie(c); err != nil && settings.debug {
 					fmt.Fprintln(os.Stderr, "Unable to store 2FA cookie:", err)
 				}
 			}
@@ -382,12 +381,11 @@ func onServerWebSocket(conn *websocket.Conn, dial func() (*websocket.Conn, error
 		case "createLoginToken":
 			user, _ := command["tokenUser"].(string)
 			pass, _ := command["tokenPass"].(string)
-			p := config.Profile{Name: settings.profileName}
 			if user == "" || pass == "" {
 				// Disabled on the server or for this user. The renewed auth
 				// cookie keeps this session going, the next one signs in again.
 				OnStatus(fmt.Sprintf("Unable to create a login token (%v), the next login will need the browser again", command["result"]))
-			} else if err := p.SetLoginToken(user, pass); err != nil {
+			} else if err := settings.profile.SetLoginToken(user, pass); err != nil {
 				OnStatus(fmt.Sprintf("Unable to store the login token: %v", err))
 			} else {
 				// Reconnects use the token, the auth cookie expires.
