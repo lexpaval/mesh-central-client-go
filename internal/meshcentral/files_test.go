@@ -246,3 +246,14 @@ func TestRemotePaths(t *testing.T) {
 		}
 	}
 }
+
+func TestEntryName(t *testing.T) {
+	for n, want := range map[string]bool{
+		"a.txt": true, `C:\`: true, `a\b`: true, "..a": true,
+		"": false, ".": false, "..": false, "../x": false, "a/b": false, "a\x00b": false,
+	} {
+		if entryName(n) != want {
+			t.Errorf("%q: %v, want %v", n, !want, want)
+		}
+	}
+}

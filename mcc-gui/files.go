@@ -9,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -598,6 +599,13 @@ func (ft *filesTab) selected() []meshcentral.FileEntry {
 	return sel
 }
 
+// localName is whether the device's file name is a file name here, one
+// that stays in the folder it's saved to: with a separator or as .. it would
+// write elsewhere.
+func localName(name string) bool {
+	return name != "." && filepath.IsLocal(name) && filepath.Base(name) == name
+}
+
 func onlyFiles(es []meshcentral.FileEntry) bool {
 	for _, e := range es {
 		if e.IsDir() {
@@ -826,6 +834,16 @@ func (ft *filesTab) uploadFiles(paths []string) {
 
 func (ft *filesTab) askDownload(sel []meshcentral.FileEntry) {
 	if !onlyFiles(sel) {
+		return
+	}
+	var bad []string
+	for _, e := range sel {
+		if !localName(e.Name) {
+			bad = append(bad, strconv.Quote(e.Name))
+		}
+	}
+	if len(bad) > 0 {
+		showError(fmt.Errorf("the device listed names that can't be saved on this computer, or would be saved outside the folder: %s", strings.Join(bad, ", ")))
 		return
 	}
 	dir := pref("files/downloadDir")

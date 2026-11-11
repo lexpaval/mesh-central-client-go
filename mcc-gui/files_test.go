@@ -4,6 +4,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strings"
 	"testing"
@@ -304,4 +305,20 @@ func TestFilesFilter(t *testing.T) {
 		ft.activate(e) // another folder clears it
 	})
 	waitFor(t, "logs", func() bool { return ft.cur == "/logs" && ft.filter.Text() == "" && ft.status.Text() == "Empty folder" })
+}
+
+// A device's file names only download into the folder chosen.
+func TestLocalName(t *testing.T) {
+	cases := map[string]bool{"a.txt": true, "..a": true, ".": false, "..": false, "": false,
+		"../x": false, "a/b": false, "/abs": false}
+	if runtime.GOOS == "windows" {
+		cases[`a\b`], cases[`..\x`], cases["C:x"], cases["NUL"] = false, false, false, false
+	} else {
+		cases[`a\b`] = true
+	}
+	for n, want := range cases {
+		if localName(n) != want {
+			t.Errorf("%q: %v, want %v", n, !want, want)
+		}
+	}
 }

@@ -177,6 +177,13 @@ func (s *FileSession) await(match func(*fileMsg) bool) (*fileMsg, error) {
 	}
 }
 
+// entryName is whether a listed name can be a file's. No file system has
+// the others, a device listing them is up to something: they reach outside
+// the folder. Backslashes stay, Linux allows them and drives end in one.
+func entryName(n string) bool {
+	return n != "" && n != "." && n != ".." && !strings.ContainsAny(n, "/\x00")
+}
+
 // List returns the entries of dir. An empty dir lists the drives on Windows
 // agents and / elsewhere.
 func (s *FileSession) List(dir string) ([]FileEntry, error) {
@@ -193,6 +200,9 @@ func (s *FileSession) List(dir string) ([]FileEntry, error) {
 	}
 	entries := make([]FileEntry, 0, len(*m.Dir))
 	for _, d := range *m.Dir {
+		if !entryName(d.N) {
+			continue
+		}
 		entries = append(entries, FileEntry{Name: d.N, Type: d.T, Size: d.S, Free: d.F, Mod: parseFileTime(d.D)})
 	}
 	return entries, nil
