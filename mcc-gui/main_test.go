@@ -1088,3 +1088,16 @@ func TestAddRouteRemembersPreset(t *testing.T) {
 		d.Reject()
 	})
 }
+
+// A server's node ID can't end the snippet's quoting or add config lines.
+func TestSSHConfigSafe(t *testing.T) {
+	for s, want := range map[string]bool{
+		"node//abc$def@ghi": true, "node/my.domain/x-Y_z": true, "default": true, "my profile": true,
+		"": false, "node//x' ; touch /tmp/p ; '": false, "node//x\nMatch all": false, `a\b`: false,
+		`a"b`: false, "node//%h": false, "a\tb": false,
+	} {
+		if sshConfigSafe(s) != want {
+			t.Errorf("%q: %v, want %v", s, !want, want)
+		}
+	}
+}

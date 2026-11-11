@@ -24,6 +24,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 
 	qt "github.com/mappu/miqt/qt6"
 	"github.com/mappu/miqt/qt6/mainthread"
@@ -1740,6 +1741,16 @@ func showSSHConfig() {
 	if !ok {
 		return
 	}
+	// The node ID comes from the server and ssh runs ProxyCommand through
+	// the shell, a quote would let it add commands, a newline config lines.
+	if !sshConfigSafe(d.Id) {
+		showError(fmt.Errorf("the server gave %s a device ID the SSH config can't hold safely: %q", deviceName(d), d.Id))
+		return
+	}
+	if !sshConfigSafe(session.profile) {
+		showError(fmt.Errorf("the profile name %q can't go in an SSH config, rename the profile without quotes, backslashes or %%", session.profile))
+		return
+	}
 	f := newForm("SSH config for "+deviceName(d), "Copy")
 	host := f.entry("Host alias", sshAlias(d), "", nil)
 	// Same default as ssh itself: the local user. Windows reports DOMAIN\user.
@@ -1791,6 +1802,13 @@ func showSSHConfig() {
 		qt.QGuiApplication_Clipboard().SetText(snippet())
 		logf("Copied SSH config for %s, paste it into ~/.ssh/config", deviceName(d))
 	})
+}
+
+// sshConfigSafe is whether s can go in a ProxyCommand, quoted: no quotes or
+// backslashes to end the quoting, no % for ssh to expand and no newlines or
+// other control characters.
+func sshConfigSafe(s string) bool {
+	return s != "" && !strings.ContainsFunc(s, func(r rune) bool { return strings.ContainsRune(`'"\%`, r) || unicode.IsControl(r) })
 }
 
 // releaseTag is a release's version, as tagged.
