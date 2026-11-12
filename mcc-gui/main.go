@@ -907,7 +907,8 @@ func scheduleReload() {
 
 func refreshProfiles() {
 	var names []string
-	for _, p := range config.GetProfiles() {
+	profiles := config.GetProfiles()
+	for _, p := range profiles {
 		names = append(names, p.Name)
 	}
 	migrateLegacyPrefs(names)
@@ -919,6 +920,11 @@ func refreshProfiles() {
 	}()
 	profileSel.Clear()
 	profileSel.AddItems(names)
+	for i, p := range profiles {
+		if p.Description != "" {
+			profileSel.SetItemData2(i, qt.NewQVariant11(p.Description), int(qt.ToolTipRole))
+		}
+	}
 	// The last one connected to, then the CLI's default.
 	for _, n := range []string{pref("lastProfile"), config.GetDefaultProfileName()} {
 		if i := slices.Index(names, n); i >= 0 {
@@ -935,6 +941,7 @@ func refreshProfiles() {
 // another one was picked: theme, layout, release check and Settings. Not in
 // a desktop's fullscreen, which puts the layout back as it was.
 func applyProfilePrefs() {
+	profileSel.SetToolTip(profileSel.CurrentDataWithRole(int(qt.ToolTipRole)).ToString())
 	applyTheme()
 	if fullscreenDesktop == nil {
 		showDevices(pref("hideDevices") == "")
@@ -2009,8 +2016,8 @@ func showAbout() {
 }
 
 // showProfileDialog adds a profile, or edits one when edit is set. The first
-// run goes through CreateConfig, which writes the config file and always names
-// the profile "default".
+// run goes through CreateConfig, which writes the config file with this
+// profile as its default.
 func showProfileDialog(firstRun bool, edit *config.Profile) {
 	title := "Set up MeshCentral server"
 	switch {
@@ -2024,18 +2031,19 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 	for i := range profileSel.Count() {
 		existing = append(existing, profileSel.ItemText(i))
 	}
-	name := qt.NewQLineEdit2()
-	if !firstRun {
-		name = f.entry("Name", "", "", func(s string) error {
-			if strings.TrimSpace(s) == "" {
-				return errors.New("required")
-			}
-			if slices.Contains(existing, s) && (edit == nil || s != edit.Name) {
-				return errors.New("already exists")
-			}
-			return nil
-		})
+	name := f.entry("Name", "", "", func(s string) error {
+		if strings.TrimSpace(s) == "" {
+			return errors.New("required")
+		}
+		if slices.Contains(existing, s) && (edit == nil || s != edit.Name) {
+			return errors.New("already exists")
+		}
+		return nil
+	})
+	if firstRun {
+		name.SetText("default")
 	}
+	description := f.entry("Description", "", "optional", nil)
 	required := func(s string) error {
 		if strings.TrimSpace(s) == "" {
 			return errors.New("required")
@@ -2058,6 +2066,7 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 	}
 	if edit != nil {
 		name.SetText(edit.Name)
+		description.SetText(edit.Description)
 		server.SetText(edit.Server)
 		username.SetText(edit.Username)
 		password.SetPlaceholderText("unchanged")
@@ -2070,27 +2079,26 @@ func showProfileDialog(firstRun bool, edit *config.Profile) {
 			username.SetText("")
 			password.SetText("")
 		}
+		p := config.Profile{Name: name.Text(), Server: server.Text(), Username: username.Text(), SSO: sso.IsChecked(),
+			Description: strings.TrimSpace(description.Text())}
 		if firstRun {
-			if err = config.CreateConfig(server.Text(), username.Text(), password.Text(), sso.IsChecked()); err == nil {
+			if err = config.CreateConfig(p, password.Text()); err == nil {
 				err = config.LoadConfig()
 			}
 		} else if edit != nil {
-			p := config.Profile{Name: name.Text(), Server: server.Text(), Username: username.Text(), SSO: sso.IsChecked()}
 			if err = config.UpdateProfile(edit.Name, p, password.Text(), makeDefault.IsChecked()); err == nil && p.Name != edit.Name {
 				// The GUI's own memory of the profile follows a rename.
 				renameProfilePrefs(edit.Name, p.Name)
 			}
 		} else {
-			_, err = config.AddProfile(name.Text(), makeDefault.IsChecked(), server.Text(), username.Text(), password.Text(), sso.IsChecked())
+			_, err = config.AddProfile(p, password.Text(), makeDefault.IsChecked())
 		}
 		if err != nil {
 			showError(err)
 			return
 		}
 		refreshProfiles()
-		if !firstRun {
-			profileSel.SetCurrentIndex(profileSel.FindText(name.Text()))
-		}
+		profileSel.SetCurrentIndex(profileSel.FindText(name.Text()))
 	})
 }
 

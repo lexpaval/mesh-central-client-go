@@ -122,7 +122,7 @@ func initializeSetup() {
 			password, _ = pterm.DefaultInteractiveTextInput.WithMask("*").Show("Enter the MeshCentral password")
 		}
 
-		err := config.CreateConfig(server, username, password, sso)
+		err := config.CreateConfig(config.Profile{Server: server, Username: username, SSO: sso}, password)
 		if err != nil {
 			pterm.Error.Println("Error creating config file:", err)
 			os.Exit(1)

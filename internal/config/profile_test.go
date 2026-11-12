@@ -13,7 +13,7 @@ func TestUpdateProfile(t *testing.T) {
 	keyring.MockInit()
 	viper.Reset()
 	viper.SetConfigFile(filepath.Join(t.TempDir(), "config.json"))
-	if err := CreateConfig("mesh.example.com", "alice", "pw1", false); err != nil {
+	if err := CreateConfig(Profile{Server: "mesh.example.com", Username: "alice"}, "pw1"); err != nil {
 		t.Fatal(err)
 	}
 	def := Profile{Name: "default", Server: "mesh.example.com", Username: "alice"}
@@ -77,7 +77,7 @@ func TestProfileSecretsPerServer(t *testing.T) {
 	keyring.MockInit()
 	viper.Reset()
 	viper.SetConfigFile(filepath.Join(t.TempDir(), "config.json"))
-	if err := CreateConfig("mesh.example.com", "alice", "pw1", false); err != nil {
+	if err := CreateConfig(Profile{Server: "mesh.example.com", Username: "alice"}, "pw1"); err != nil {
 		t.Fatal(err)
 	}
 	a := GetDefaultProfile()
@@ -95,7 +95,7 @@ func TestProfileSecretsPerServer(t *testing.T) {
 	if c, err := b.GetTwoFactorCookie(); err == nil {
 		t.Errorf("profile on another server got 2FA cookie %q", c)
 	}
-	if _, err := AddProfile("default", false, "evil.example.com", "bob", "pw2", false); err == nil {
+	if _, err := AddProfile(Profile{Name: "default", Server: "evil.example.com", Username: "bob"}, "pw2", false); err == nil {
 		t.Error("added a second profile called default")
 	}
 }
@@ -135,5 +135,31 @@ func TestMigrateKeyring(t *testing.T) {
 	}
 	if viper.GetInt("keyring") != keyringVersion {
 		t.Error("migration not recorded in the config")
+	}
+}
+
+// The first profile can have its own name, and a description stays through
+// a reload and an edit.
+func TestProfileNameAndDescription(t *testing.T) {
+	keyring.MockInit()
+	viper.Reset()
+	viper.SetConfigFile(filepath.Join(t.TempDir(), "config.json"))
+	if err := CreateConfig(Profile{Name: "office", Server: "mesh.example.com", Username: "alice", Description: "main site"}, "pw1"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := AddProfile(Profile{Name: "lab", Server: "lab.example.com", Username: "bob", Description: "test bench"}, "pw2", false); err != nil {
+		t.Fatal(err)
+	}
+	if err := LoadConfig(); err != nil {
+		t.Fatal(err)
+	}
+	if p := GetDefaultProfile(); p.Name != "office" || p.Description != "main site" || p.Password != "pw1" {
+		t.Errorf("first profile = %+v", p)
+	}
+	if err := UpdateProfile("lab", Profile{Name: "lab", Server: "lab.example.com", Username: "bob", Description: "bench 2"}, "", false); err != nil {
+		t.Fatal(err)
+	}
+	if p, _ := GetProfile("lab"); p.Description != "bench 2" || p.Password != "pw2" {
+		t.Errorf("edited profile = %+v", p)
 	}
 }

@@ -127,14 +127,14 @@ func handleRouterLink(link string) {
 		var err error
 		if _, statErr := os.Stat(config.DefaultConfigPath); errors.Is(statErr, os.ErrNotExist) {
 			name = "default"
-			if err = config.CreateConfig(server, "", "", true); err == nil {
+			if err = config.CreateConfig(config.Profile{Server: server, SSO: true}, ""); err == nil {
 				err = config.LoadConfig()
 			}
 		} else {
 			for i := 2; profileSel.FindText(name) >= 0; i++ {
 				name = fmt.Sprintf("%s (%d)", server, i)
 			}
-			_, err = config.AddProfile(name, false, server, "", "", true)
+			_, err = config.AddProfile(config.Profile{Name: name, Server: server, SSO: true}, "", false)
 		}
 		if err != nil {
 			showError(err)

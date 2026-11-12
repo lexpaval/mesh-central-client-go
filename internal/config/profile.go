@@ -18,6 +18,8 @@ type Profile struct {
 	Username string
 	Password string `json:"-"` // Don't serialize password
 	SSO      bool   // log in through the web UI's single sign-on, see GetLoginToken
+	// Description is a short free-form note shown next to the name.
+	Description string `json:",omitempty"`
 }
 
 // account is where p's secret of kind ("", "/2fa" or "/sso") is kept in the
@@ -168,18 +170,20 @@ func SetDefaultProfile(name string, commit bool) error {
 	return &ProfileNotFoundError{name}
 }
 
-func AddProfile(name string, isDefault bool, server string, username string, password string, sso bool) (*Profile, error) {
+// AddProfile saves p as a new profile, its password in the keyring.
+func AddProfile(p Profile, password string, isDefault bool) (*Profile, error) {
 	var profiles []Profile
 	viper.UnmarshalKey("profiles", &profiles)
-	if slices.ContainsFunc(profiles, func(p Profile) bool { return p.Name == name }) {
-		return nil, fmt.Errorf("a profile called %s already exists", name)
+	if slices.ContainsFunc(profiles, func(x Profile) bool { return x.Name == p.Name }) {
+		return nil, fmt.Errorf("a profile called %s already exists", p.Name)
 	}
 
 	newProfile := Profile{
-		Name:     name,
-		Server:   server,
-		Username: username,
-		SSO:      sso,
+		Name:        p.Name,
+		Server:      p.Server,
+		Username:    p.Username,
+		SSO:         p.SSO,
+		Description: p.Description,
 	}
 
 	if password != "" {
@@ -191,7 +195,7 @@ func AddProfile(name string, isDefault bool, server string, username string, pas
 	profiles = append(profiles, newProfile)
 
 	if isDefault {
-		viper.Set("default_profile", name)
+		viper.Set("default_profile", p.Name)
 	}
 
 	viper.Set("profiles", profiles)
@@ -246,7 +250,7 @@ func UpdateProfile(oldName string, p Profile, password string, isDefault bool) e
 	if isDefault || viper.GetString("default_profile") == oldName {
 		viper.Set("default_profile", p.Name)
 	}
-	profiles[i] = Profile{Name: p.Name, Server: p.Server, Username: p.Username, SSO: p.SSO}
+	profiles[i] = Profile{Name: p.Name, Server: p.Server, Username: p.Username, SSO: p.SSO, Description: p.Description}
 	viper.Set("profiles", profiles)
 	return viper.WriteConfig()
 }
