@@ -1,4 +1,4 @@
-# Cross-builds mcc-gui for macOS 14+ (the oldest MacPorts builds its newest
+# Cross-builds mcc-gui for macOS 15+ (the oldest MacPorts builds its newest
 # Qt 6 for) with osxcross and MacPorts' qt6-qtbase port,
 # TARGET_ARCH x86_64 or arm64. Taken from miqt's
 # docker/ffmpeg-macos-cross-*-sdk14.5-go1.25-qt6.7-dynamic.Dockerfile (MIT),
@@ -7,9 +7,10 @@
 
 ARG TARGET_ARCH=arm64
 
-FROM docker.io/crazymax/osxcross:14.5-debian AS osxcross
+FROM docker.io/crazymax/osxcross:15.5-debian AS osxcross
 
-FROM docker.io/library/debian:bookworm
+# Trixie: the 15.5 toolchain's tools need glibc 2.38+.
+FROM docker.io/library/debian:trixie
 
 COPY --from=osxcross /osxcross /osxcross
 
@@ -43,28 +44,34 @@ ENV PATH="/osxcross/bin:$PATH"
 ENV LD_LIBRARY_PATH="/osxcross/lib"
 
 # VERSIONS
-ENV TARGET=14.0
+ENV TARGET=15.0
 # Toolchain Version
-ENV VER=23.6
+ENV VER=24.5
 # MacOS SDK Version
-ENV SDK_VER=14.5
+ENV SDK_VER=15.5
 # Architecture
 ARG TARGET_ARCH
 ENV TARGET_ARCH=${TARGET_ARCH}
 
 ENV MACOSX_DEPLOYMENT_TARGET=${TARGET}
 
-# Preemptively mark some dependencies as installed that don't seem to download properly
-# osxcross-macports knows deployment targets up to macOS 13.
-RUN sed -i 's/^  13\.\*   ) OSXVERSION="darwin_22" ;;/&\n  14.*   ) OSXVERSION="darwin_23" ;;\n  15.*   ) OSXVERSION="darwin_24" ;;/' /osxcross/bin/osxcross-macports && \
-    grep -q darwin_23 /osxcross/bin/osxcross-macports
+# The MacPorts mirror the packages come from, each checked against MacPorts'
+# signing key. Not packages.macports.org: in November 2026 it answered 501 to
+# whatever its CDN hadn't cached, which osxcross-mp reports as "no package
+# found".
+ARG MACPORTS_MIRROR=https://lil.fr.packages.macports.org
+ENV OSXCROSS_MACPORTS_MIRROR=${MACPORTS_MIRROR}
 
+# Preemptively mark some dependencies as installed that don't seem to download properly
 RUN /usr/bin/env UNATTENDED=1 osxcross-macports update-cache && UNATTENDED=1 osxcross-macports \
     fake-install py313 py313-packaging xorg xrender curl-ca-bundle graphviz librsvg
 
-# Install Qt 6 and dependencies, the version is printed
+# Install Qt 6 and dependencies, the version is printed. osxcross-mp only
+# tries the newest version MacPorts has, which may not be built for TARGET:
+# the build stops here then, not at a missing /opt later.
 RUN if [ "$TARGET_ARCH" = arm64 ]; then MP_ARCH=-arm64; fi && /usr/bin/env UNATTENDED=1 osxcross-mp $MP_ARCH install qt6-qtbase && \
-    grep -h 'define QT_VERSION_STR' /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework/Versions/A/Headers/qtversion.h /osxcross/macports/pkgs/opt/local/libexec/qt6/include/QtCore/qtversion.h 2>/dev/null || true
+    test -d /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework && \
+    { grep -h 'define QT_VERSION_STR' /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework/Versions/A/Headers/qtversion.h /osxcross/macports/pkgs/opt/local/libexec/qt6/include/QtCore/qtversion.h 2>/dev/null || true; }
 
 RUN rmdir /opt/ && \
 	ln -s /osxcross/macports/pkgs/opt /opt
@@ -195,7 +202,7 @@ mkspecsdir=${prefix}/mkspecs
 Name: Qt6 Platform
 Description: Qt Platform module
 Version: 6
-Cflags: -I${mkspecsdir}/macx-clang -I${includedir}
+Cflags: -I${mkspecsdir}/macx-clang -I${includedir} -F${libdir}
 EOF
 
 RUN cat > /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/pkgconfig/Qt6PrintSupport.pc <<'EOF'

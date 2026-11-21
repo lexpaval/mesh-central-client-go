@@ -22,7 +22,7 @@ APP_BUILD := $(shell git rev-list --count HEAD 2>/dev/null || echo 1)
 # first use: Linux amd64/arm64 AppImages with Qt 6.11 (glibc 2.39+), packed
 # with the latest continuous appimagetool and runtime, downloaded per build,
 # Windows amd64/arm64 static exes (Qt 6.11) as a .zip and a per-user .msi
-# installer that also puts the mcc CLI on PATH, macOS 14+ arm64/x86_64 as
+# installer that also puts the mcc CLI on PATH, macOS 15+ arm64/x86_64 as
 # .dmg images of the .app with Qt and the mcc CLI inside, ad-hoc signed.
 # gui-all and gui-release build all of them.
 # The build cache is per image: cgo caches by flags, not Qt's headers, so a

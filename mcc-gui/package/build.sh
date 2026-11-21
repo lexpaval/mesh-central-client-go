@@ -154,7 +154,7 @@ macos)
 			<key>CFBundlePackageType</key><string>APPL</string>
 			<key>CFBundleShortVersionString</key><string>$APP_VERSION</string>
 			<key>CFBundleVersion</key><string>$APP_BUILD</string>
-			<key>LSMinimumSystemVersion</key><string>14.0</string>
+			<key>LSMinimumSystemVersion</key><string>15.0</string>
 			<key>NSHighResolutionCapable</key><true/>
 			<key>NSPrincipalClass</key><string>NSApplication</string>
 			<!-- Router links from the web UI's single sign-on, see mcc-gui/sso.go -->
