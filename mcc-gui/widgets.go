@@ -220,6 +220,11 @@ func tabButton(icons *[]func(), text, iconName, tip string) *qt.QPushButton {
 	return b
 }
 
+// tip is a tooltip with a bold title over a plain description.
+func tip(title, desc string) string {
+	return "<b>" + html.EscapeString(title) + "</b><br>" + html.EscapeString(desc)
+}
+
 // setPlainToolTip sets a tooltip of remote text, escaped since Qt renders
 // tooltips that look like HTML.
 func setPlainToolTip(w *qt.QWidget, text string) {

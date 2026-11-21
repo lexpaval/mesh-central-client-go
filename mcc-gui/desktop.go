@@ -209,7 +209,7 @@ func (dt *desktopTab) build() {
 	button := func(text, iconName, tip string) *qt.QPushButton { return tabButton(&dt.icons, text, iconName, tip) }
 	dt.status = newElidedLabel("Connecting…")
 	dt.displaySel = qt.NewQComboBox2()
-	dt.displaySel.SetToolTip("The display shown")
+	dt.displaySel.SetToolTip(tip("Display", "The device's display shown here"))
 	dt.displaySel.SetVisible(false)
 	dt.displaySel.OnActivated(func(i int) {
 		if dt.live && i < len(dt.displays) {
@@ -218,7 +218,7 @@ func (dt *desktopTab) build() {
 		dt.view.SetFocus()
 	})
 	dt.qualitySel = qt.NewQComboBox2()
-	dt.qualitySel.SetToolTip("Image quality and frame rate")
+	dt.qualitySel.SetToolTip(tip("Quality", "Image quality and frame rate"))
 	for _, q := range desktopQualities {
 		dt.qualitySel.AddItem(q.name)
 	}
@@ -235,7 +235,7 @@ func (dt *desktopTab) build() {
 		}
 		dt.view.SetFocus()
 	})
-	dt.scaleBtn = button("Scaling", "arrows-left-right-to-line", "How the screen fits the window, and the resolution the device sends")
+	dt.scaleBtn = button("Scaling", "arrows-left-right-to-line", tip("Scaling", "Fit, stretch or actual size, and the resolution the device sends"))
 	dt.scaleBtn.OnClicked(dt.scaleMenu)
 	for i, v := range desktopViews {
 		if v.pref == pref("desktopView") {
@@ -248,7 +248,7 @@ func (dt *desktopTab) build() {
 	}
 	// Off until asked for: on, the local clipboard goes to the device right
 	// away, and whatever the device copies replaces it.
-	dt.clipBtn = button("Clipboard sync", "clipboard", clipTip)
+	dt.clipBtn = button("Sync clipboard", "clipboard", clipTip)
 	dt.clipBtn.SetCheckable(true)
 	dt.clipBtn.OnToggled(func(bool) {
 		dt.resetClipboard()
@@ -262,10 +262,13 @@ func (dt *desktopTab) build() {
 
 	// Off, the screen is only watched: nothing typed or clicked goes to the
 	// device, and local shortcuts work again. It starts as Settings say.
-	dt.inputBtn = button("Input", "computer-mouse", "Send the mouse and keyboard to the device, off is view only")
+	dt.inputBtn = button("Control", "", "")
 	dt.inputBtn.SetCheckable(true)
 	dt.inputBtn.SetChecked(desktopInputStart())
+	dt.icons = append(dt.icons, dt.inputLook)
+	dt.inputLook()
 	dt.inputBtn.OnToggled(func(on bool) {
+		dt.inputLook()
 		setPref("desktopInputLast", map[bool]string{true: "", false: "off"}[on])
 		dt.releaseKeys()
 		dt.setLive(dt.live)
@@ -274,7 +277,7 @@ func (dt *desktopTab) build() {
 
 	// On, Alt+Tab, the Super or Windows key and the like go to the device
 	// while its screen has the keyboard, instead of to the local system.
-	dt.sysKeysBtn = button("System keys", "key", "Send system shortcuts like Alt+Tab and the Super or Windows key to the device while its screen has the keyboard, off they stay with this computer")
+	dt.sysKeysBtn = button("Capture system keys", "keyboard", tip("Capture system keys", "Alt+Tab, the Super or Windows key and other system shortcuts go to the device instead of this computer"))
 	dt.sysKeysBtn.SetCheckable(true)
 	dt.sysKeysBtn.SetChecked(pref("desktopSysKeys") == "on")
 	dt.sysKeysBtn.SetVisible(sysKeysSupported)
@@ -290,7 +293,7 @@ func (dt *desktopTab) build() {
 
 	// On, keys go by their place on the keyboard and the device's layout
 	// types them, off as the characters this computer's layout makes.
-	dt.keyMapBtn = button("Remote keyboard map", "globe", "Send keys by their place on the keyboard for the device's own layout to type, off they type what this computer's layout makes them")
+	dt.keyMapBtn = button("Use the device's keyboard layout", "language", tip("Use the device's keyboard layout", "Keys type what the device's layout puts in their place. Off, they type what this computer's layout shows. Best with Windows devices"))
 	dt.keyMapBtn.SetCheckable(true)
 	dt.keyMapBtn.SetChecked(pref("desktopKeyMap") == "remote")
 	dt.keyMapBtn.OnToggled(func(on bool) {
@@ -298,7 +301,7 @@ func (dt *desktopTab) build() {
 		dt.view.SetFocus()
 	})
 
-	dt.typeBtn = button("Type clipboard", "keyboard", "Type the clipboard's text on the device")
+	dt.typeBtn = button("Paste as keystrokes", "paste", tip("Paste as keystrokes", "Type the clipboard's text on the device, for screens that don't accept a paste, like a sign-in screen"))
 	dt.typeBtn.OnClicked(func() {
 		if dt.live {
 			for _, r := range qt.QGuiApplication_Clipboard().Text() {
@@ -313,27 +316,28 @@ func (dt *desktopTab) build() {
 		}
 		dt.view.SetFocus()
 	})
-	dt.cadBtn = button("Ctrl+Alt+Del", "shield-halved", "Send Ctrl+Alt+Del, which the local system keeps")
+	dt.cadBtn = button("Ctrl+Alt+Del", "shield-halved", tip("Send Ctrl+Alt+Del", "Pressed here, this computer keeps it"))
 	dt.cadBtn.OnClicked(func() {
 		if dt.live {
 			dt.sess.CtrlAltDel()
 		}
 		dt.view.SetFocus()
 	})
-	dt.reconnect = button("Reconnect", "rotate", "Open the desktop again")
+	dt.reconnect = button("Reconnect", "rotate", tip("Reconnect", "Open the desktop again"))
 	dt.reconnect.OnClicked(dt.connect)
-	dt.fullBtn = button("Fullscreen", "expand", "Desktop-only fullscreen (Ctrl+Alt+Enter)")
+	dt.fullBtn = button("Fullscreen", "expand", "")
 	dt.fullBtn.SetCheckable(true)
+	dt.fullscreenTip(false)
 	dt.fullBtn.OnToggled(dt.fullscreen)
 	dt.icons = append(dt.icons, func() {
 		if dt.fullBtn.IsChecked() {
 			dt.fullBtn.SetIcon(icon("compress"))
 		}
 	})
-	dt.windowBtn = button("Separate window", "window-restore", "Move the desktop to a window of its own")
+	dt.windowBtn = button("Separate window", "arrow-up-right-from-square", tip("Separate window", "Move the desktop out of its tab"))
 	dt.windowBtn.SetCheckable(true)
 	dt.windowBtn.OnToggled(dt.detach)
-	dt.splitBtn = button("Window per display", "table-columns", "Show each of the device's displays in a window of its own, Ctrl+Alt+Enter in one makes it fullscreen")
+	dt.splitBtn = button("Window per display", "window-restore", tip("Window per display", "Each of the device's displays in a window of its own. Ctrl+Alt+Enter in one makes it fullscreen"))
 	dt.splitBtn.SetCheckable(true)
 	dt.splitBtn.SetVisible(false)
 	dt.splitBtn.OnToggled(dt.split)
@@ -534,12 +538,24 @@ func (dt *desktopTab) fullscreen(on bool) {
 	dt.view.SetFocus()
 }
 
+// inputLook shows whether the device gets the mouse and keyboard or is only
+// watched.
+func (dt *desktopTab) inputLook() {
+	if dt.inputBtn.IsChecked() {
+		dt.inputBtn.SetIcon(icon("computer-mouse"))
+		dt.inputBtn.SetToolTip(tip("Control", "The mouse and keyboard go to the device. Click for view only"))
+	} else {
+		dt.inputBtn.SetIcon(icon("eye"))
+		dt.inputBtn.SetToolTip(tip("View only", "Nothing typed or clicked reaches the device. Click to take control"))
+	}
+}
+
 func (dt *desktopTab) fullscreenTip(on bool) {
 	if on {
-		dt.fullBtn.SetToolTip("Leave fullscreen (Ctrl+Alt+Enter)")
+		dt.fullBtn.SetToolTip(tip("Leave fullscreen", "Ctrl+Alt+Enter"))
 		dt.fullBtn.SetAccessibleName("Leave fullscreen")
 	} else {
-		dt.fullBtn.SetToolTip("Desktop-only fullscreen (Ctrl+Alt+Enter)")
+		dt.fullBtn.SetToolTip(tip("Fullscreen", "Hide the client's panels and show only the desktop. Ctrl+Alt+Enter"))
 		dt.fullBtn.SetAccessibleName("Fullscreen")
 	}
 }
@@ -561,13 +577,13 @@ func (dt *desktopTab) detach(on bool) {
 		dt.w.Resize(max(size.Width(), 800), max(size.Height(), 600))
 		dt.w.Show()
 		dt.w.ActivateWindow()
-		dt.windowBtn.SetToolTip("Put the desktop back in a tab")
+		dt.windowBtn.SetToolTip(tip("Back to a tab", "Put the desktop back in the main window"))
 		logf("%s: desktop moved to its own window", dt.name)
 	} else {
 		dt.detached = false
 		tabs.SetCurrentIndex(tabs.AddTab2(dt.w, icon("display"), dt.title()))
 		tabs.Window().ActivateWindow()
-		dt.windowBtn.SetToolTip("Move the desktop to a window of its own")
+		dt.windowBtn.SetToolTip(tip("Separate window", "Move the desktop out of its tab"))
 		logf("%s: desktop moved back to a tab", dt.name)
 	}
 	dt.relayout()
@@ -810,7 +826,7 @@ func (dt *desktopTab) resetClipboard() {
 	dt.clipSendError = ""
 }
 
-const clipTip = "Automatically sync text with this device while its Desktop tab or window is active"
+var clipTip = tip("Sync clipboard", "Copied text goes both ways while this desktop is active")
 
 func (dt *desktopTab) syncClipboard() {
 	if !dt.clipboardActive() {
@@ -863,7 +879,7 @@ func (dt *desktopTab) syncClipboard() {
 						logf("%s: %s; receiving remains enabled", dt.name, message)
 					}
 					dt.clipSendError = message
-					dt.clipBtn.SetToolTip(message + ". Toggle clipboard sync off and on to retry.")
+					dt.clipBtn.SetToolTip(tip("Sync clipboard", message+". Turn sync off and on to retry"))
 					dt.showSize()
 					return
 				}
@@ -871,9 +887,9 @@ func (dt *desktopTab) syncClipboard() {
 					return
 				}
 				if errors.Is(err, context.DeadlineExceeded) {
-					dt.clipBtn.SetToolTip("Clipboard sync: no reply (clipboard may be empty or unavailable)")
+					dt.clipBtn.SetToolTip(tip("Sync clipboard", "No reply, the device's clipboard may be empty or unavailable"))
 				} else if !errors.Is(err, context.Canceled) {
-					dt.clipBtn.SetToolTip("Clipboard sync: " + err.Error())
+					dt.clipBtn.SetToolTip(tip("Sync clipboard", err.Error()))
 				}
 				return
 			}

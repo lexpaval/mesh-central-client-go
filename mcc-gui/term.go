@@ -124,10 +124,10 @@ func newTerm() *term {
 		}
 		m := qt.NewQMenu(t.w)
 		m.SetAttribute(qt.WA_DeleteOnClose)
-		cp := m.AddActionWithText("Copy")
+		cp := m.AddAction2(icon("copy"), "Copy")
 		cp.SetEnabled(t.sel.on)
 		cp.OnTriggered(t.copySelection)
-		m.AddActionWithText("Paste").OnTriggered(func() { t.paste(qt.QClipboard__Clipboard) })
+		m.AddAction2(icon("paste"), "Paste").OnTriggered(func() { t.paste(qt.QClipboard__Clipboard) })
 		m.Popup(e.GlobalPos())
 	})
 	t.w.OnChangeEvent(func(super func(*qt.QEvent), e *qt.QEvent) {

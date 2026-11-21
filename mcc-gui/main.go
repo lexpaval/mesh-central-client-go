@@ -421,8 +421,8 @@ func buildUI() *qt.QWidget {
 	copyAct = action("Copy", "copy", "Copy the device's node ID or SSH config", func() {
 		m := qt.NewQMenu(deviceBar.QWidget)
 		m.SetAttribute(qt.WA_DeleteOnClose)
-		m.AddActionWithText("Node ID").OnTriggered(copyNodeID)
-		m.AddActionWithText("SSH config…").OnTriggered(showSSHConfig)
+		m.AddAction2(icon("copy"), "Node ID").OnTriggered(copyNodeID)
+		m.AddAction2(icon("file-code"), "SSH config…").OnTriggered(showSSHConfig)
 		popupFor(m, copyAct)
 	})
 	// Names go beside the icons from the left as far as they fit.
@@ -701,7 +701,7 @@ func buildTree() {
 		m.AddAction2(icon("note-sticky"), "Notes…").OnTriggered(func() { showNotes(d.Id, deviceName(d), false) })
 		m.AddSeparator()
 		m.AddAction2(icon("copy"), "Copy node ID").OnTriggered(copyNodeID)
-		m.AddActionWithText("Copy SSH config…").OnTriggered(showSSHConfig)
+		m.AddAction2(icon("file-code"), "Copy SSH config…").OnTriggered(showSSHConfig)
 		m.Popup(gp)
 	})
 }
@@ -716,8 +716,8 @@ func shellMenu(d meshcentral.Device) *qt.QMenu {
 	}
 	m := qt.NewQMenu2()
 	m.SetAttribute(qt.WA_DeleteOnClose)
-	m.AddActionWithText("Command prompt").OnTriggered(func() { openShell(d, 1) })
-	m.AddActionWithText("PowerShell").OnTriggered(func() { openShell(d, 6) })
+	m.AddAction2(icon("terminal"), "Command prompt").OnTriggered(func() { openShell(d, 1) })
+	m.AddAction2(icon("terminal"), "PowerShell").OnTriggered(func() { openShell(d, 6) })
 	return m
 }
 
