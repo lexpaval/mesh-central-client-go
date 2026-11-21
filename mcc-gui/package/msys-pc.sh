@@ -34,7 +34,7 @@ module() { # name, requires, cflags
 
 		Name: Qt6 $1
 		Description: Qt $1 module
-		Version: $(sed -n 's/.*define QT_VERSION_STR "\(.*\)"/\1/p' "$prefix/include/qt6/QtCore/qtversion.h")
+		Version: $(sed -n 's/.*define QT_VERSION_STR "\(.*\)"/\1/p' "$prefix/include/qt6/QtCore/qtversion.h" "$prefix/include/qt6/QtCore/qconfig.h" | head -n1)
 		Requires: $2
 		Libs: -L\${libdir} -lQt6$1
 		Cflags: -I\${includedir}/Qt$1 -I\${includedir} $3

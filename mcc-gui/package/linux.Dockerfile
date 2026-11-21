@@ -1,4 +1,4 @@
-# Qt 6.11 SDKs on Ubuntu 24.04 keep the AppImage baseline at glibc 2.39.
+# Qt's own SDKs on Ubuntu 24.04 keep the AppImage baseline at glibc 2.39.
 # Both architectures are built on amd64; arm64 uses the cross compiler.
 FROM docker.io/library/ubuntu:24.04
 
@@ -15,7 +15,8 @@ RUN dpkg --add-architecture arm64 && \
         libxcb-xinerama0 libxcb-xinerama0:arm64 libxcb-xkb1 libxcb-xkb1:arm64 \
         libdbus-1-3 libdbus-1-3:arm64 libsm6 libsm6:arm64 libwayland-dev libwayland-dev:arm64 && apt-get clean
 
-ARG QT_VERSION=6.11.3
+# The Makefile's QT_VERSION, which also names the image.
+ARG QT_VERSION
 RUN python3 -m venv /opt/aqt && /opt/aqt/bin/pip install --no-cache-dir aqtinstall==3.3.0 && \
     /opt/aqt/bin/aqt install-qt linux desktop ${QT_VERSION} linux_gcc_64 --outputdir /opt/qt --archives qtbase qtwayland qtsvg icu && \
     /opt/aqt/bin/aqt install-qt linux_arm64 desktop ${QT_VERSION} linux_gcc_arm64 --outputdir /opt/qt --archives qtbase qtwayland qtsvg icu && \

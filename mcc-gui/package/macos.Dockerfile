@@ -66,12 +66,15 @@ ENV OSXCROSS_MACPORTS_MIRROR=${MACPORTS_MIRROR}
 RUN /usr/bin/env UNATTENDED=1 osxcross-macports update-cache && UNATTENDED=1 osxcross-macports \
     fake-install py313 py313-packaging xorg xrender curl-ca-bundle graphviz librsvg
 
-# Install Qt 6 and dependencies, the version is printed. osxcross-mp only
-# tries the newest version MacPorts has, which may not be built for TARGET:
-# the build stops here then, not at a missing /opt later.
+# Install Qt 6 and dependencies. osxcross-mp only tries the newest version
+# MacPorts has, which may not be built for TARGET: the build stops here then,
+# not at a missing /opt later. It also stops when that Qt isn't the
+# Makefile's QT_VERSION, which names the image: bump QT_VERSION.
+ARG QT_VERSION
 RUN if [ "$TARGET_ARCH" = arm64 ]; then MP_ARCH=-arm64; fi && /usr/bin/env UNATTENDED=1 osxcross-mp $MP_ARCH install qt6-qtbase && \
-    test -d /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework && \
-    { grep -h 'define QT_VERSION_STR' /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework/Versions/A/Headers/qtversion.h /osxcross/macports/pkgs/opt/local/libexec/qt6/include/QtCore/qtversion.h 2>/dev/null || true; }
+    v=$(sed -n 's/.*define QT_VERSION_STR "\(.*\)"/\1/p' /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework/Versions/A/Headers/qtversion.h /osxcross/macports/pkgs/opt/local/libexec/qt6/lib/QtCore.framework/Versions/A/Headers/qconfig.h | head -n1) && \
+    echo "Qt $v" && \
+    [ "$v" = "$QT_VERSION" ] || { echo "MacPorts has Qt $v, not QT_VERSION $QT_VERSION" >&2; exit 1; }
 
 RUN rmdir /opt/ && \
 	ln -s /osxcross/macports/pkgs/opt /opt

@@ -19,9 +19,15 @@ RUN printf '[options]\nArchitecture = any\nSigLevel = Never\n[clang64]\nServer =
             echo mingw-w64-clang-$a-$p; done; done) && \
     rm -rf /tmp/msyscache
 
+# The Makefile's QT_VERSION, which names the image. MSYS2 only serves its
+# newest Qt, so the build stops when that is another one: bump QT_VERSION.
+ARG QT_VERSION
 COPY msys-pc.sh /
 RUN sh /msys-pc.sh /msys/clang64 && sh /msys-pc.sh /msys/clangarm64 && \
-    PKG_CONFIG_PATH=/msys/clangarm64/qt6-static/lib/pkgconfig pkg-config --modversion Qt6Widgets
+    for e in clang64 clangarm64; do \
+        v=$(PKG_CONFIG_PATH=/msys/$e/qt6-static/lib/pkgconfig pkg-config --modversion Qt6Widgets) && echo "$e: Qt $v" && \
+        [ "$v" = "$QT_VERSION" ] || { echo "MSYS2 has Qt $v, not QT_VERSION $QT_VERSION" >&2; exit 1; }; \
+    done
 
 ARG GO_VERSION=1.27.3 GO_SHA256=65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40
 RUN wget -q "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" && \

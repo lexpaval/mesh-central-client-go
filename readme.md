@@ -89,7 +89,7 @@ make gui-release  # GUI packages for all three platforms
 make release      # CLI binaries + GUI packages + sha256sums.txt
 ```
 
-Linux releases are Type 2 AppImages containing Qt 6.11.3, X11 and Wayland plugins, supporting libraries, and fallback fonts. GNOME integration includes Adwaita window decorations and the GTK/GSettings backend for desktop theme preferences. Download the matching architecture, make the file executable, and run it; no Qt installation or root access is needed:
+Linux releases are Type 2 AppImages containing Qt 6.12.0, X11 and Wayland plugins, supporting libraries, and fallback fonts. GNOME integration includes Adwaita window decorations and the GTK/GSettings backend for desktop theme preferences. Download the matching architecture, make the file executable, and run it; no Qt installation or root access is needed:
 
 ```bash
 chmod +x mcc-gui-linux-amd64-<version>.AppImage
