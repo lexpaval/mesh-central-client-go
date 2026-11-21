@@ -4,8 +4,8 @@ go 1.26.2
 
 require (
 	github.com/adrg/xdg v0.5.3
-	github.com/charmbracelet/ultraviolet v0.0.0-20261023060817-a45b7c86333f
-	github.com/charmbracelet/x/ansi v0.11.9
+	github.com/charmbracelet/ultraviolet v0.0.0-20261119151026-8ecbcf0e188c
+	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/charmbracelet/x/vt v0.1.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/mappu/miqt v0.15.0
@@ -15,8 +15,8 @@ require (
 	github.com/srwiley/oksvg v0.0.0-20221011165216-be6e8873101c
 	github.com/srwiley/rasterx v0.0.0-20220730225603-2ab79fcdd4ef
 	github.com/zalando/go-keyring v0.2.8
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 )
 
 require (
@@ -45,13 +45,13 @@ require (
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
-	github.com/spf13/pflag v1.0.10 // indirect
+	github.com/spf13/pflag v1.1.0 // indirect
 	github.com/stretchr/testify v1.12.1 // indirect
 	github.com/subosito/gotenv v1.6.0 // indirect
 	github.com/xo/terminfo v1.3.1 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
-	golang.org/x/image v0.47.0 // indirect
-	golang.org/x/net v0.62.0 // indirect
-	golang.org/x/sync v0.24.0 // indirect
-	golang.org/x/text v0.43.0 // indirect
+	golang.org/x/image v0.48.0 // indirect
+	golang.org/x/net v0.63.0 // indirect
+	golang.org/x/sync v0.25.0 // indirect
+	golang.org/x/text v0.44.0 // indirect
 )
