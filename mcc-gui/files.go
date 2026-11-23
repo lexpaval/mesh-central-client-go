@@ -949,6 +949,8 @@ func (ft *filesTab) startNext() {
 			ft.navigate(ft.cur)
 		} else if err == nil {
 			setStatus(ft.status, "Done", false)
+		} else if errors.Is(err, context.Canceled) {
+			setStatus(ft.status, "Canceled", false)
 		}
 		ft.startNext()
 	})

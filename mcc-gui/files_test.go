@@ -245,6 +245,35 @@ func TestTransferSpeed(t *testing.T) {
 	})
 }
 
+func TestFilesCancel(t *testing.T) {
+	root := fakeFiles(t)
+	os.WriteFile(filepath.Join(root, "big.bin"), make([]byte, 4<<20), 0o644)
+	var ft *filesTab
+	ui(t, func() {
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		openFilesTab(devices[0])
+		ft = filesTabs[0]
+	})
+	t.Cleanup(func() { mainthread.Wait(func() { ft.close() }) })
+	waitFor(t, "the listing", func() bool { return slices.Equal(shownNames(ft), []string{"big.bin"}) })
+	local := t.TempDir()
+	mainthread.Wait(func() {
+		e, _ := ft.entryNamed("big.bin")
+		ft.downloadTo([]meshcentral.FileEntry{e}, local, "")
+		ft.cancelTransfers()
+	})
+	waitFor(t, "the cancel", func() bool { return ft.running == nil })
+	mainthread.Wait(func() {
+		if got := ft.status.Text(); got != "Canceled" || ft.cancelBtn.IsVisible() || ft.progress.IsVisible() {
+			t.Errorf("status %q, cancel shown %v, progress shown %v", got, ft.cancelBtn.IsVisible(), ft.progress.IsVisible())
+		}
+	})
+	if _, err := os.Stat(filepath.Join(local, "big.bin")); !os.IsNotExist(err) {
+		t.Errorf("left the partial download: %v", err)
+	}
+}
+
 func TestFilesFilter(t *testing.T) {
 	root := fakeFiles(t)
 	os.Mkdir(filepath.Join(root, "logs"), 0o755)
