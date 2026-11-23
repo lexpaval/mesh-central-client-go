@@ -123,6 +123,49 @@ func selectionColors(pal *qt.QPalette, r *qt.QRect, paintBg func(*qt.QPainter)) 
 	return ok
 }
 
+// selectionDelegate sets a delegate on view that paints items as the stock
+// one does, then calls paint, if not nil, with whether the item is painted in
+// the selection's colors. Where the style's selected background doesn't take
+// the highlighted text color (a faint grey tint), selected items get a light
+// highlight color under text and icons in their normal colors instead, so
+// they stand out and icons aren't white on white.
+func selectionDelegate(view *qt.QAbstractItemView, paint func(p *qt.QPainter, opt *qt.QStyleOptionViewItem, idx *qt.QModelIndex, selected bool)) *qt.QStyledItemDelegate {
+	d := qt.NewQStyledItemDelegate2(view.QObject)
+	bare := false // items without text and icon, to sample the background
+	d.OnInitStyleOption(func(super func(*qt.QStyleOptionViewItem, *qt.QModelIndex), opt *qt.QStyleOptionViewItem, idx *qt.QModelIndex) {
+		super(opt, idx)
+		if bare {
+			none := qt.NewQIcon()
+			opt.SetText("")
+			opt.SetIcon(*none)
+			none.Delete()
+		}
+	})
+	d.OnPaint(func(super func(*qt.QPainter, *qt.QStyleOptionViewItem, *qt.QModelIndex), p *qt.QPainter, opt *qt.QStyleOptionViewItem, idx *qt.QModelIndex) {
+		selected := opt.State()&qt.QStyle__State_Selected != 0
+		if selected && !selectionColors(opt.Palette(), opt.Rect(), func(p *qt.QPainter) {
+			bare = true
+			super(p, opt, idx)
+			bare = false
+		}) {
+			c := qt.NewQColor10(opt.Palette().ColorWithCr(qt.QPalette__Highlight))
+			c.SetAlphaF(0.3)
+			p.FillRect6(opt.Rect(), c)
+			c.Delete()
+			plain := qt.NewQStyleOptionViewItem2(opt)
+			defer plain.Delete()
+			plain.SetState(plain.State() &^ qt.QStyle__State_Selected)
+			opt, selected = plain, false
+		}
+		super(p, opt, idx)
+		if paint != nil {
+			paint(p, opt, idx, selected)
+		}
+	})
+	view.SetItemDelegate(d.QAbstractItemDelegate)
+	return d
+}
+
 // contrast is the WCAG contrast ratio of two colors, from 1 to 21.
 func contrast(a, b *qt.QColor) float64 {
 	la, lb := luminance(a), luminance(b)

@@ -248,6 +248,7 @@ func (ft *filesTab) build() {
 	ft.list.SetRootIsDecorated(false)
 	ft.list.SetUniformRowHeights(true)
 	ft.list.SetSelectionMode(qt.QAbstractItemView__ExtendedSelection)
+	selectionDelegate(ft.list.QAbstractItemView, nil)
 	ft.list.SetContextMenuPolicy(qt.CustomContextMenu)
 	ft.list.SetAcceptDrops(true)
 	ft.list.Viewport().SetAcceptDrops(true)

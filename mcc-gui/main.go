@@ -613,7 +613,11 @@ func buildTree() {
 	deviceTree.SetAnimated(false)
 	deviceTree.SetSelectionMode(qt.QAbstractItemView__SingleSelection)
 	deviceTree.SetContextMenuPolicy(qt.CustomContextMenu)
-	delegate := qt.NewQStyledItemDelegate2(deviceTree.QObject)
+	// The stock paint draws the background and selection, rows have no text
+	// of their own.
+	delegate := selectionDelegate(deviceTree.QAbstractItemView, func(p *qt.QPainter, opt *qt.QStyleOptionViewItem, idx *qt.QModelIndex, selected bool) {
+		paintRow(p, opt.Rect(), opt.Palette(), selected, treeRowData(itemID(idx)))
+	})
 	deviceSize, groupSize := qt.NewQSize2(0, rowHeight(false)), qt.NewQSize2(0, rowHeight(true))
 	delegate.OnSizeHint(func(_ func(*qt.QStyleOptionViewItem, *qt.QModelIndex) *qt.QSize, _ *qt.QStyleOptionViewItem, idx *qt.QModelIndex) *qt.QSize {
 		if _, ok := groupChildren[itemID(idx)]; ok {
@@ -621,13 +625,6 @@ func buildTree() {
 		}
 		return deviceSize
 	})
-	delegate.OnPaint(func(super func(*qt.QPainter, *qt.QStyleOptionViewItem, *qt.QModelIndex), p *qt.QPainter, opt *qt.QStyleOptionViewItem, idx *qt.QModelIndex) {
-		super(p, opt, idx) // the background and selection, rows have no text of their own
-		selected := opt.State()&qt.QStyle__State_Selected != 0 &&
-			selectionColors(opt.Palette(), opt.Rect(), func(p *qt.QPainter) { super(p, opt, idx) })
-		paintRow(p, opt.Rect(), opt.Palette(), selected, treeRowData(itemID(idx)))
-	})
-	deviceTree.SetItemDelegate(delegate.QAbstractItemDelegate)
 
 	deviceTree.OnItemSelectionChanged(func() {
 		if treeBuilding {
