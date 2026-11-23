@@ -42,6 +42,7 @@ const appID = "com.github.lexpaval.mcc-gui"
 type activeRoute struct {
 	route  *meshcentral.Route
 	device string
+	user   string // ssh login for an SSH route, "" for ssh's default
 }
 
 // UI state, only touched from the Qt thread (background work hands results
@@ -991,12 +992,12 @@ func rebuildRoutes() {
 		rr.w.SetLayout(row.QLayout)
 		r := ar.route
 		open.OnClicked(func() {
-			if err := openCmd(r)(); err != nil {
+			if err := openCmd(r, ar.user)(); err != nil {
 				showError(err)
 			}
 		})
 		cp.OnClicked(func() {
-			s := copyText(r)
+			s := copyText(r, ar.user)
 			qt.QGuiApplication_Clipboard().SetText(s)
 			logf("Copied %q", s)
 		})
@@ -1585,7 +1586,28 @@ func showAddRoute() {
 	}
 	f.add("Preset", preset.QWidget)
 	remotePort := f.entry("Remote port", "", "", portValidator(false))
-	target := f.entry("Target host", "", "the device itself", nil)
+	// User is only for routes that open with SSH, shown while the port does.
+	isSSH := func() bool {
+		p, err := strconv.Atoi(remotePort.Text())
+		return err == nil && openKind(p) == "ssh"
+	}
+	// user@host, as mcc ssh takes it, would fail only once connecting.
+	target := f.entry("Target host", "", "the device itself", func(s string) error {
+		if !strings.Contains(s, "@") {
+			return nil
+		}
+		if isSSH() {
+			return errors.New("no @ here, put the SSH user in User")
+		}
+		return errors.New("a host name has no @")
+	})
+	user := f.entry("User", lastSSHUser(d.Id), "your local user", func(s string) error {
+		if isSSH() {
+			return sshUserValid(s)
+		}
+		return nil
+	})
+	remotePort.OnTextChanged(func(string) { f.fl.SetRowVisible2(user.QWidget, isSSH()) })
 	pick := func(i int) {
 		remotePort.SetText(strconv.Itoa(choices[i].Port))
 		target.SetText(choices[i].Target)
@@ -1618,21 +1640,26 @@ func showAddRoute() {
 		if t == "127.0.0.1" { // same as the device itself, matches the CLI
 			t = ""
 		}
+		u := ""
+		if isSSH() {
+			u = strings.TrimSpace(user.Text())
+		}
 		useRoute(name, &meshcentral.Route{
 			NodeID:      d.Id,
 			BindAddress: strings.TrimSpace(bind.Text()),
 			LocalPort:   lp,
 			Target:      t,
 			RemotePort:  rp,
-		}, openNow.IsChecked())
+		}, u, openNow.IsChecked())
 		tabs.SetCurrentWidget(routesTab)
 	})
 }
 
 // useRoute starts r, or reuses a running route to the same place, records
-// it in Recent and opens it if asked.
-func useRoute(device string, r *meshcentral.Route, open bool) {
-	a := recentAction{Kind: "route", NodeID: r.NodeID, Device: device, BindAddress: r.BindAddress, LocalPort: r.LocalPort, Target: r.Target, RemotePort: r.RemotePort}
+// it in Recent and opens it if asked. user is the ssh login of an SSH route,
+// a reused route takes it.
+func useRoute(device string, r *meshcentral.Route, user string, open bool) {
+	a := recentAction{Kind: "route", NodeID: r.NodeID, Device: device, BindAddress: r.BindAddress, LocalPort: r.LocalPort, Target: r.Target, RemotePort: r.RemotePort, User: user}
 	i := slices.IndexFunc(routes, func(ar *activeRoute) bool {
 		x := ar.route
 		return x.NodeID == r.NodeID && x.BindAddress == r.BindAddress && x.Target == r.Target && x.RemotePort == r.RemotePort &&
@@ -1640,8 +1667,12 @@ func useRoute(device string, r *meshcentral.Route, open bool) {
 	})
 	if i >= 0 {
 		r = routes[i].route
+		if routes[i].user != user {
+			routes[i].user = user
+			saveRoutes()
+		}
 	} else {
-		if err := startRoute(device, r); err != nil {
+		if err := startRoute(device, user, r); err != nil {
 			showError(err)
 			return
 		}
@@ -1649,18 +1680,18 @@ func useRoute(device string, r *meshcentral.Route, open bool) {
 	}
 	recordRecent(a)
 	if open {
-		if err := openCmd(r)(); err != nil {
+		if err := openCmd(r, user)(); err != nil {
 			showError(err)
 		}
 	}
 }
 
-func startRoute(device string, r *meshcentral.Route) error {
+func startRoute(device, user string, r *meshcentral.Route) error {
 	r.Out = logWriter(device)
 	if err := r.Start(); err != nil {
 		return err
 	}
-	routes = append(routes, &activeRoute{route: r, device: device})
+	routes = append(routes, &activeRoute{route: r, device: device, user: user})
 	rebuildRoutes()
 	logf("%s: listening on %s for port %d", device, localAddr(r), r.RemotePort)
 	return nil
@@ -1671,6 +1702,7 @@ func startRoute(device string, r *meshcentral.Route) error {
 type savedRoute struct {
 	Device, NodeID, BindAddress, Target string
 	LocalPort, RemotePort               int
+	User                                string `json:",omitempty"`
 }
 
 // saveRoutes remembers the running routes. Adding and stopping one saves,
@@ -1679,7 +1711,7 @@ func saveRoutes() {
 	var saved []savedRoute
 	for _, ar := range routes {
 		r := ar.route
-		saved = append(saved, savedRoute{ar.device, r.NodeID, r.BindAddress, r.Target, r.LocalPort, r.RemotePort})
+		saved = append(saved, savedRoute{ar.device, r.NodeID, r.BindAddress, r.Target, r.LocalPort, r.RemotePort, ar.user})
 	}
 	if len(saved) == 0 {
 		setProfilePref(session.profile, "routes", "")
@@ -1697,7 +1729,7 @@ func restoreRoutes() {
 		return
 	}
 	for _, sr := range saved {
-		err := startRoute(sr.Device, &meshcentral.Route{NodeID: sr.NodeID, BindAddress: sr.BindAddress, LocalPort: sr.LocalPort, Target: sr.Target, RemotePort: sr.RemotePort})
+		err := startRoute(sr.Device, sr.User, &meshcentral.Route{NodeID: sr.NodeID, BindAddress: sr.BindAddress, LocalPort: sr.LocalPort, Target: sr.Target, RemotePort: sr.RemotePort})
 		if err != nil {
 			logf("%s: route for port %d not reopened, %v", sr.Device, sr.RemotePort, err)
 		}
@@ -2194,16 +2226,45 @@ func sshAlias(d meshcentral.Device) string {
 	}, strings.ToLower(cmp.Or(d.Name, deviceName(d))))
 }
 
-// sshArgs is the ssh command for an SSH route. The host key is stored under
-// the device, like with the SSH config snippet, not under 127.0.0.1:port,
-// which later routes to other devices reuse.
-func sshArgs(r *meshcentral.Route) []string {
+// sshArgs is the ssh command for an SSH route, logging in as user unless
+// "". The host key is stored under the device, like with the SSH config
+// snippet, not under 127.0.0.1:port, which later routes to other devices
+// reuse.
+func sshArgs(r *meshcentral.Route, user string) []string {
 	host, port, _ := net.SplitHostPort(localAddr(r))
 	args := []string{"ssh", "-p", port}
+	if user != "" { // -l, not user@host: the name can't pass as an option
+		args = append(args, "-l", user)
+	}
 	if i, ok := deviceIdx[r.NodeID]; ok {
 		args = append(args, "-o", "HostKeyAlias="+sshAlias(devices[i]))
 	}
 	return append(args, host)
+}
+
+// sshUserValid checks an SSH route's user, "" for ssh's default. macOS
+// pastes the ssh command into a script unquoted, so no quotes, backslashes
+// or spaces, and nothing ssh would read as an option or expand.
+func sshUserValid(s string) error {
+	if s != "" && (!sshConfigSafe(s) || strings.HasPrefix(s, "-") || strings.ContainsFunc(s, unicode.IsSpace)) {
+		return errors.New("no spaces, quotes, backslashes or %, and no leading -")
+	}
+	return nil
+}
+
+// lastSSHUser is the user of the device's last SSH route in Recent, for
+// the next one.
+func lastSSHUser(nodeID string) string {
+	var last *recentAction
+	for _, a := range recent {
+		if a.Kind == "route" && a.NodeID == nodeID && openKind(a.RemotePort) == "ssh" && (last == nil || a.Last > last.Last) {
+			last = a
+		}
+	}
+	if last == nil {
+		return ""
+	}
+	return last.User
 }
 
 // terminals are tried in order on Linux, with the flag that runs a command.
@@ -2238,10 +2299,10 @@ func startCommand(cmd *exec.Cmd) error {
 	return nil
 }
 
-func copyText(r *meshcentral.Route) string {
+func copyText(r *meshcentral.Route, user string) string {
 	switch openKind(r.RemotePort) {
 	case "ssh":
-		return strings.Join(sshArgs(r), " ")
+		return strings.Join(sshArgs(r, user), " ")
 	case "http", "https":
 		return webURL(r).String()
 	}
@@ -2258,11 +2319,11 @@ func webURL(r *meshcentral.Route) *url.URL {
 }
 
 // openCmd returns the action for the route's Open button: a terminal for
-// SSH, the RDP client for RDP and the browser for any other port.
-func openCmd(r *meshcentral.Route) func() error {
+// SSH as user, the RDP client for RDP and the browser for any other port.
+func openCmd(r *meshcentral.Route, user string) func() error {
 	switch openKind(r.RemotePort) {
 	case "ssh":
-		return func() error { return openTerminal(sshArgs(r)) }
+		return func() error { return openTerminal(sshArgs(r, user)) }
 	case "rdp":
 		if runtime.GOOS == "windows" { // mstsc doesn't register rdp://
 			return func() error { return startCommand(exec.Command("mstsc", "/v:"+localAddr(r))) }

@@ -64,7 +64,7 @@ func TestScreenshot(t *testing.T) {
 			{NodeID: "2", RemotePort: 3389},
 			{NodeID: "4", Target: "192.0.2.50", RemotePort: 443},
 		} {
-			if err := startRoute(deviceName(devices[deviceIdx[r.NodeID]]), r); err != nil {
+			if err := startRoute(deviceName(devices[deviceIdx[r.NodeID]]), "", r); err != nil {
 				t.Error(err)
 			}
 		}

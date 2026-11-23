@@ -555,7 +555,7 @@ func TestRoutesReopen(t *testing.T) {
 		defer closeAll()
 
 		// An automatic local port is remembered as the one it got.
-		if err := startRoute("dev", &meshcentral.Route{NodeID: "node//1", RemotePort: 22}); err != nil {
+		if err := startRoute("dev", "root", &meshcentral.Route{NodeID: "node//1", RemotePort: 22}); err != nil {
 			t.Error(err)
 			return
 		}
@@ -563,7 +563,7 @@ func TestRoutesReopen(t *testing.T) {
 		port := routes[0].route.LocalPort
 		closeAll() // as disconnect does, without saving
 		restoreRoutes()
-		if len(routes) != 1 || routes[0].route.LocalPort != port || routes[0].device != "dev" || routes[0].route.NodeID != "node//1" || len(routeRows) != 1 {
+		if len(routes) != 1 || routes[0].route.LocalPort != port || routes[0].device != "dev" || routes[0].route.NodeID != "node//1" || routes[0].user != "root" || len(routeRows) != 1 {
 			t.Errorf("reopened %+v, %d rows", routes, len(routeRows))
 			return
 		}
@@ -591,7 +591,7 @@ func TestRDPURL(t *testing.T) {
 	if got := rdpURL(r, "darwin").String(); got != "rdp://full%20address=s:127.0.0.1:40123" {
 		t.Errorf("darwin: %s", got)
 	}
-	if openCmd(r) == nil {
+	if openCmd(r, "") == nil {
 		t.Error("RDP route has no Open action")
 	}
 }
@@ -630,12 +630,12 @@ func TestRouteClientAddresses(t *testing.T) {
 				t.Errorf("local address = %q, want %q", got, tc.addr)
 			}
 			wantSSH := "ssh -p 40123 " + tc.host
-			if got := copyText(r); got != wantSSH {
+			if got := copyText(r, ""); got != wantSSH {
 				t.Errorf("SSH command = %q, want %q", got, wantSSH)
 			}
 			for _, port := range []int{80, 443, 3389} {
 				r.RemotePort = port
-				link := copyText(r)
+				link := copyText(r, "")
 				scheme := "http"
 				if port == 443 {
 					scheme = "https"
@@ -659,8 +659,8 @@ func TestSSHOpen(t *testing.T) {
 		setDevices([]meshcentral.Device{{Id: "node//1", MeshID: "m", Name: "Lab-Bench_1", Pwr: 1}})
 	})
 	r := &meshcentral.Route{NodeID: "node//1", LocalPort: 40123, RemotePort: 22}
-	want := "ssh -p 40123 -o HostKeyAlias=lab-bench-1 127.0.0.1"
-	if got := copyText(r); got != want {
+	want := "ssh -p 40123 -l root -o HostKeyAlias=lab-bench-1 127.0.0.1"
+	if got := copyText(r, "root"); got != want {
 		t.Fatalf("copy %q, want %q", got, want)
 	}
 	if runtime.GOOS != "linux" {
@@ -670,7 +670,7 @@ func TestSSHOpen(t *testing.T) {
 	dir := t.TempDir()
 	os.WriteFile(filepath.Join(dir, "ptyxis"), []byte("#!/bin/sh\necho \"$@\" > \"$0.args\"\n"), 0o755)
 	t.Setenv("PATH", dir)
-	if err := openCmd(r)(); err != nil {
+	if err := openCmd(r, "root")(); err != nil {
 		t.Fatal(err)
 	}
 	var got []byte
@@ -684,7 +684,7 @@ func TestSSHOpen(t *testing.T) {
 		t.Fatalf("terminal got %q", got)
 	}
 	t.Setenv("PATH", t.TempDir())
-	if err := openCmd(r)(); err == nil {
+	if err := openCmd(r, "root")(); err == nil {
 		t.Fatal("no error without a terminal")
 	}
 }
@@ -855,7 +855,7 @@ func TestRecentRouteReplay(t *testing.T) {
 		defer closeAll()
 
 		// A running route is reused, the automatic local port stays automatic.
-		useRoute("a", &meshcentral.Route{NodeID: "a", RemotePort: 5900}, false)
+		useRoute("a", &meshcentral.Route{NodeID: "a", RemotePort: 5900}, "", false)
 		replayRecent(recent[0])
 		if len(routes) != 1 || len(recent) != 1 || recent[0].Uses != 2 || recent[0].LocalPort != 0 {
 			t.Errorf("%d routes, recent %+v", len(routes), recent)
@@ -1087,6 +1087,101 @@ func TestAddRouteRemembersPreset(t *testing.T) {
 		}
 		d.Reject()
 	})
+}
+
+// Add route asks for the user only for SSH, Recent remembers it for the
+// device's next SSH route and a reused route takes the new one.
+func TestAddRouteSSHUser(t *testing.T) {
+	ui(t, func() {
+		session.profile = "p"
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		defer disconnect()
+		selectDevice("n")
+		defer func() {
+			for _, ar := range routes {
+				ar.route.Close()
+			}
+			routes = nil
+		}()
+		// open shows the dialog with its Start button, remote port, target
+		// host and user.
+		open := func() (*qt.QDialog, *qt.QPushButton, *qt.QLineEdit, *qt.QLineEdit, *qt.QLineEdit) {
+			showAddRoute()
+			for _, w := range qt.QApplication_TopLevelWidgets() {
+				if w.WindowTitle() != "Route to dev" || !w.IsVisible() {
+					continue
+				}
+				var start *qt.QPushButton
+				var edits []*qt.QLineEdit
+				for _, o := range w.Children() {
+					if o.Inherits("QDialogButtonBox") {
+						start = qt.UnsafeNewQDialogButtonBox(o.UnsafePointer()).Button(qt.QDialogButtonBox__Ok)
+					} else if o.Inherits("QLineEdit") {
+						edits = append(edits, qt.UnsafeNewQLineEdit(o.UnsafePointer()))
+					}
+				}
+				return qt.UnsafeNewQDialog(w.UnsafePointer()), start, edits[0], edits[1], edits[2]
+			}
+			t.Fatal("no Add route dialog")
+			return nil, nil, nil, nil, nil
+		}
+
+		setPref("routePreset", "22")
+		d, start, port, target, user := open()
+		// user@host in Target host, as mcc ssh takes it, doesn't start.
+		target.SetText("root@10.0.0.5")
+		if start.IsEnabled() {
+			t.Error("Start enabled with a user in Target host")
+		}
+		target.SetText("")
+		if user.IsHidden() || user.Text() != "" {
+			t.Errorf("SSH: user hidden %v, %q", user.IsHidden(), user.Text())
+		}
+		port.SetText("3389")
+		if !user.IsHidden() {
+			t.Error("user shown for RDP")
+		}
+		user.SetText("-oProxyCommand=x")
+		if !start.IsEnabled() {
+			t.Error("a hidden user blocks Start")
+		}
+		port.SetText("22")
+		if start.IsEnabled() {
+			t.Error("Start enabled with an invalid user")
+		}
+		user.SetText("root")
+		d.Accept()
+		if len(routes) != 1 || routes[0].user != "root" || recent[0].User != "root" {
+			t.Fatalf("routes %+v, recent %+v", routes, recent[0])
+		}
+
+		// The next one opens on root, a changed user goes to the running route.
+		// Recent keeps whole seconds, the second route is a minute later.
+		clock := timeNow
+		defer func() { timeNow = clock }()
+		timeNow = func() time.Time { return clock().Add(time.Minute) }
+		d, _, _, _, user = open()
+		if user.Text() != "root" {
+			t.Errorf("reopened with user %q", user.Text())
+		}
+		user.SetText("admin")
+		d.Accept()
+		if len(routes) != 1 || routes[0].user != "admin" || lastSSHUser("n") != "admin" {
+			t.Errorf("%d routes, user %q, last user %q", len(routes), routes[0].user, lastSSHUser("n"))
+		}
+	})
+}
+
+func TestSSHUserValid(t *testing.T) {
+	for s, ok := range map[string]bool{
+		"": true, "root": true, "first.last": true, "user@corp.example": true, "svc_1-a": true,
+		"-oProxyCommand=x": false, "a b": false, `a"b`: false, "a'b": false, `DOM\user`: false, "%u": false, "a\nb": false,
+	} {
+		if (sshUserValid(s) == nil) != ok {
+			t.Errorf("%q: valid %v, want %v", s, !ok, ok)
+		}
+	}
 }
 
 // A server's node ID can't end the snippet's quoting or add config lines.

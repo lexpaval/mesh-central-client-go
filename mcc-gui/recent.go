@@ -29,6 +29,7 @@ type recentAction struct {
 	Target      string `json:",omitempty"`
 	LocalPort   int    `json:",omitempty"` // route, 0 for automatic
 	RemotePort  int    `json:",omitempty"`
+	User        string `json:",omitempty"` // SSH route's login
 	Command     string `json:",omitempty"`
 	AsUser      bool   `json:",omitempty"`
 	Uses        int
@@ -223,6 +224,9 @@ func recentRowData(a *recentAction) rowData {
 		if a.Target != "" {
 			detail = fmt.Sprintf("%s:%d", a.Target, a.RemotePort)
 		}
+		if a.User != "" {
+			detail = "as " + a.User + " · " + detail
+		}
 	case "command":
 		what, ic, detail = "Run command", "play", a.Command
 	}
@@ -272,7 +276,7 @@ func replayRecent(a *recentAction) {
 	case "desktop":
 		openDesktop(d)
 	case "route":
-		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, BindAddress: a.BindAddress, LocalPort: a.LocalPort, Target: a.Target, RemotePort: a.RemotePort}, true)
+		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, BindAddress: a.BindAddress, LocalPort: a.LocalPort, Target: a.Target, RemotePort: a.RemotePort}, a.User, true)
 	case "command":
 		showRunCommandFor(d, a.Command, a.AsUser)
 	}

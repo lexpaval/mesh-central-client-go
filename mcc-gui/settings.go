@@ -129,7 +129,7 @@ func openDefault(d meshcentral.Device) {
 	case "details":
 		openDetails(d)
 	case "ssh":
-		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, RemotePort: 22}, true)
+		useRoute(deviceName(d), &meshcentral.Route{NodeID: d.Id, RemotePort: 22}, lastSSHUser(d.Id), true)
 		tabs.SetCurrentWidget(routesTab)
 	default:
 		openShell(d, 1)

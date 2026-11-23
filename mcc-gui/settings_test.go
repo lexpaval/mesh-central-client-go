@@ -101,19 +101,19 @@ func TestRoutePresets(t *testing.T) {
 			t.Errorf("port 22 is %q", name)
 		}
 		r := &meshcentral.Route{NodeID: "n", LocalPort: 40000, RemotePort: 4443}
-		if got := copyText(r); got != "https://127.0.0.1:40000" {
+		if got := copyText(r, ""); got != "https://127.0.0.1:40000" {
 			t.Errorf("copy %q", got)
 		}
 		r.RemotePort = 3000
-		if got := copyText(r); got != "http://127.0.0.1:40000" {
+		if got := copyText(r, ""); got != "http://127.0.0.1:40000" {
 			t.Errorf("copy %q", got)
 		}
 		r.RemotePort = 2222
-		if got := copyText(r); !strings.HasPrefix(got, "ssh -p 40000 ") {
+		if got := copyText(r, ""); !strings.HasPrefix(got, "ssh -p 40000 ") {
 			t.Errorf("copy %q", got)
 		}
 		r.RemotePort = 5055 // no preset, the address alone
-		if got := copyText(r); got != "127.0.0.1:40000" {
+		if got := copyText(r, ""); got != "127.0.0.1:40000" {
 			t.Errorf("copy %q", got)
 		}
 
