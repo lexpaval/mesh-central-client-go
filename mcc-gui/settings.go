@@ -5,9 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
+	"os/exec"
+	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
+	"unicode"
 
 	qt "github.com/mappu/miqt/qt6"
 
@@ -140,15 +145,83 @@ func openDefault(d meshcentral.Device) {
 // besides the built-in ones. Routes to its port take its name, and Open
 // starts its client.
 type routePreset struct {
-	Name   string
-	Port   int
-	Target string `json:",omitempty"` // "" for the device itself
-	Open   string // an openKinds value
+	Name    string
+	Port    int
+	Target  string `json:",omitempty"` // "" for the device itself
+	Open    string // an openKinds value
+	Scheme  string `json:",omitempty"` // Open "link": scheme://address:port in its default app
+	Program string `json:",omitempty"` // Open "program": a path, or a name looked up in PATH
+	Args    string `json:",omitempty"` // the program's arguments, see programArgs
 }
 
 // openKinds are the clients a route can open with.
 var openKinds = []choice{{"http", "Browser (http://)", "globe"}, {"https", "Browser (https://)", "globe"},
-	{"ssh", "SSH in a terminal", "terminal"}, {"rdp", "RDP client", "desktop"}}
+	{"ssh", "SSH in a terminal", "terminal"}, {"rdp", "RDP client", "desktop"},
+	{"link", "Link (scheme://)", "arrow-up-right-from-square"}, {"program", "Program", "window-restore"}}
+
+// openLabel says what a preset opens with, in the Settings list.
+func openLabel(p routePreset) string {
+	switch p.Open {
+	case "link":
+		return "Link (" + p.Scheme + "://)"
+	case "program":
+		return strings.TrimSpace(filepath.Base(p.Program) + " " + p.Args)
+	}
+	if i := slices.IndexFunc(openKinds, func(c choice) bool { return c.value == p.Open }); i >= 0 {
+		return openKinds[i].label
+	}
+	return p.Open
+}
+
+// schemeRe is a URL scheme as RFC 3986 has it.
+var schemeRe = regexp.MustCompile(`^[a-zA-Z][a-zA-Z0-9+.-]*$`)
+
+// argsHelp is how the Arguments field says what it takes.
+const argsHelp = "%L local address, %P local port, %N device name. Quote an argument with spaces in \"\"."
+
+// programArgs splits a program's arguments on spaces, "" quotes one with
+// spaces (no escapes, Windows paths keep their \), then puts the route in
+// each: %L its local address, %P its local port, %N the device's name and
+// %% a %. No shell runs it, a name with spaces stays one argument.
+func programArgs(s, host, port, device string) []string {
+	var args []string
+	var cur strings.Builder
+	in, started := false, false
+	for _, c := range s {
+		switch {
+		case c == '"':
+			in, started = !in, true
+		case !in && unicode.IsSpace(c):
+			if started {
+				args = append(args, cur.String())
+				cur.Reset()
+				started = false
+			}
+		default:
+			cur.WriteRune(c)
+			started = true
+		}
+	}
+	if started {
+		args = append(args, cur.String())
+	}
+	rep := strings.NewReplacer("%%", "%", "%L", host, "%P", port, "%N", device)
+	for i, a := range args {
+		args[i] = rep.Replace(a)
+	}
+	return args
+}
+
+// programCmd runs a preset's program for a route on device. A macOS app
+// bundle starts through open, a new instance so it gets the arguments.
+func programCmd(p routePreset, r *meshcentral.Route, device, goos string) *exec.Cmd {
+	host, port, _ := net.SplitHostPort(localAddr(r))
+	args := programArgs(p.Args, host, port, device)
+	if goos == "darwin" && strings.HasSuffix(strings.TrimRight(p.Program, "/"), ".app") {
+		return exec.Command("open", append([]string{"-n", "-a", p.Program, "--args"}, args...)...)
+	}
+	return exec.Command(p.Program, args...)
+}
 
 // The user's presets, parsed again when the pref changes.
 var presetCache struct {
@@ -366,11 +439,7 @@ func (sp *settingsPage) selected() int {
 func (sp *settingsPage) fill() {
 	sp.presets.Clear()
 	for _, p := range customPresets() {
-		open := p.Open
-		if i := slices.IndexFunc(openKinds, func(c choice) bool { return c.value == p.Open }); i >= 0 {
-			open = openKinds[i].label
-		}
-		sp.presets.AddTopLevelItem(qt.NewQTreeWidgetItem2([]string{p.Name, strconv.Itoa(p.Port), cmp.Or(p.Target, "device"), open}))
+		sp.presets.AddTopLevelItem(qt.NewQTreeWidgetItem2([]string{p.Name, strconv.Itoa(p.Port), cmp.Or(p.Target, "device"), openLabel(p)}))
 	}
 	for i := range 4 {
 		sp.presets.ResizeColumnToContents(i)
@@ -418,9 +487,58 @@ func (sp *settingsPage) editPreset(i int) {
 		}
 	}
 	f.add("Open with", open.QWidget)
+	kind := func() string { return openKinds[open.CurrentIndex()].value }
+	// Scheme for a link, Program and Arguments for a program, shown while
+	// Open with is one.
+	scheme := f.entry("Scheme", p.Scheme, "e.g. sftp, vnc, ftp, smb", func(s string) error {
+		if kind() == "link" && !schemeRe.MatchString(strings.TrimSuffix(strings.TrimSpace(s), "://")) {
+			return errors.New("a letter, then letters, digits, +, - or .")
+		}
+		return nil
+	})
+	scheme.SetToolTip("Opens scheme://address:port in the app your system has for it, on any OS")
+	program := f.lineEdit("Program", p.Program, "path, or a name found in PATH", func(s string) error {
+		if kind() == "program" && strings.TrimSpace(s) == "" {
+			return errors.New("required")
+		}
+		return nil
+	})
+	browse := qt.NewQPushButton4(icon("folder"), "Browse…")
+	browse.OnClicked(func() {
+		if path := qt.QFileDialog_GetOpenFileName3(f.d.QWidget, "Program", program.Text()); path != "" {
+			program.SetText(path)
+		}
+	})
+	programRow := qt.NewQWidget2()
+	pl := hbox(false, program.QWidget, browse.QWidget)
+	pl.SetContentsMargins(0, 0, 0, 0)
+	programRow.SetLayout(pl.QLayout)
+	f.add("Program", programRow)
+	args := f.entry("Arguments", p.Args, "e.g. sftp://%L:%P/", nil)
+	args.SetToolTip(argsHelp)
+	argsHint := qt.NewQLabel3(argsHelp)
+	argsHint.SetWordWrap(true)
+	argsHint.SetForegroundRole(qt.QPalette__PlaceholderText)
+	f.add("", argsHint.QWidget)
+	showRows := func() {
+		f.fl.SetRowVisible2(scheme.QWidget, kind() == "link")
+		for _, w := range []*qt.QWidget{programRow, args.QWidget, argsHint.QWidget} {
+			f.fl.SetRowVisible2(w, kind() == "program")
+		}
+		f.validate()
+	}
+	open.OnCurrentIndexChanged(func(int) { showRows() })
+	showRows()
 	name.SetMinimumWidth(240)
 	f.show(0, func() {
-		p.Name, p.Target, p.Open = strings.TrimSpace(name.Text()), strings.TrimSpace(target.Text()), openKinds[open.CurrentIndex()].value
+		p.Name, p.Target, p.Open = strings.TrimSpace(name.Text()), strings.TrimSpace(target.Text()), kind()
+		p.Scheme, p.Program, p.Args = "", "", ""
+		switch p.Open {
+		case "link":
+			p.Scheme = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(scheme.Text()), "://"))
+		case "program":
+			p.Program, p.Args = strings.TrimSpace(program.Text()), strings.TrimSpace(args.Text())
+		}
 		p.Port, _ = strconv.Atoi(port.Text())
 		if p.Target == "127.0.0.1" { // the device itself, as Add route takes it
 			p.Target = ""

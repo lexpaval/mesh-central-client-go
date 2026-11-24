@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	qt "github.com/mappu/miqt/qt6"
 
@@ -139,6 +140,140 @@ func TestRoutePresets(t *testing.T) {
 			t.Errorf("%d tabs after closing Settings", tabs.Count())
 		}
 	})
+}
+
+// A program's arguments split like a command line without a shell, the
+// route filled in after, so a device name with spaces stays one argument.
+func TestProgramArgs(t *testing.T) {
+	for in, want := range map[string][]string{
+		"":                              nil,
+		"sftp://%L:%P/":                 {"sftp://127.0.0.1:40000/"},
+		`-P %P  %L -title "%N"`:         {"-P", "40000", "127.0.0.1", "-title", "Lab PC 1"},
+		`/ini="C:\Program Files\x.ini"`: {`/ini=C:\Program Files\x.ini`},
+		`"" 100%% %%P`:                  {"", "100%", "%P"},
+		`%N`:                            {"Lab PC 1"},
+	} {
+		if got := programArgs(in, "127.0.0.1", "40000", "Lab PC 1"); !slices.Equal(got, want) {
+			t.Errorf("%s: %q, want %q", in, got, want)
+		}
+	}
+	r := &meshcentral.Route{LocalPort: 40000, RemotePort: 5900}
+	p := routePreset{Program: "/Applications/TigerVNC Viewer.app", Args: "%L::%P"}
+	if got := programCmd(p, r, "", "darwin").Args; !slices.Equal(got, []string{"open", "-n", "-a", p.Program, "--args", "127.0.0.1::40000"}) {
+		t.Errorf("darwin app: %q", got)
+	}
+	if got := programCmd(p, r, "", "linux").Args; !slices.Equal(got, []string{p.Program, "127.0.0.1::40000"}) {
+		t.Errorf("linux: %q", got)
+	}
+}
+
+// Link and program presets open their client and Copy gives the link or
+// the address. The preset dialog shows each one's own fields.
+func TestCustomClientPresets(t *testing.T) {
+	ui(t, func() {
+		setDevices([]meshcentral.Device{{Id: "node//1", MeshID: "m", Name: "Lab PC", Pwr: 1}})
+		saveCustomPresets([]routePreset{
+			{Name: "Files", Port: 22, Open: "link", Scheme: "sftp"},
+			{Name: "VNC", Port: 5900, Open: "program", Program: "vncviewer", Args: `%L::%P -title "%N"`},
+		})
+		r := &meshcentral.Route{NodeID: "node//1", LocalPort: 40000, RemotePort: 22}
+		if got := copyText(r, ""); got != "sftp://127.0.0.1:40000" {
+			t.Errorf("link copy %q", got)
+		}
+		if name, ic := service(22); name != "Files" || ic != "arrow-up-right-from-square" {
+			t.Errorf("link preset is %q with %q", name, ic)
+		}
+		r.RemotePort = 5900
+		if got := copyText(r, ""); got != "127.0.0.1:40000" {
+			t.Errorf("program copy %q", got)
+		}
+		openSettings()
+		if got := settingsTab.presets.TopLevelItem(0).Text(3); got != "Link (sftp://)" {
+			t.Errorf("link listed as %q", got)
+		}
+		if got := settingsTab.presets.TopLevelItem(1).Text(3); got != `vncviewer %L::%P -title "%N"` {
+			t.Errorf("program listed as %q", got)
+		}
+
+		// The dialog's Open with, its line edits in order (Name, Remote
+		// port, Target host, Scheme, Arguments; Program sits in a row with
+		// Browse) and its form.
+		settingsTab.editPreset(-1)
+		var d *qt.QDialog
+		var open *qt.QComboBox
+		var edits []*qt.QLineEdit
+		var ok *qt.QPushButton
+		for _, w := range qt.QApplication_TopLevelWidgets() {
+			if w.WindowTitle() != "Add route preset" || !w.IsVisible() {
+				continue
+			}
+			d = qt.UnsafeNewQDialog(w.UnsafePointer())
+			for _, o := range w.Children() {
+				switch {
+				case o.Inherits("QComboBox"):
+					open = qt.UnsafeNewQComboBox(o.UnsafePointer())
+				case o.Inherits("QLineEdit"):
+					edits = append(edits, qt.UnsafeNewQLineEdit(o.UnsafePointer()))
+				case o.Inherits("QDialogButtonBox"):
+					ok = qt.UnsafeNewQDialogButtonBox(o.UnsafePointer()).Button(qt.QDialogButtonBox__Ok)
+				}
+			}
+		}
+		if d == nil || open == nil || ok == nil || len(edits) != 5 {
+			t.Fatalf("dialog %v, combo %v, %d line edits", d != nil, open != nil, len(edits))
+		}
+		fl := qt.UnsafeNewQFormLayout(d.Layout().ItemAt(0).Layout().UnsafePointer())
+		shown := func(e *qt.QLineEdit) bool { return fl.IsRowVisibleWithWidget(e.QWidget) }
+		scheme, args := edits[3], edits[4]
+		edits[0].SetText("Share")
+		edits[1].SetText("445")
+		if shown(scheme) || shown(args) {
+			t.Error("link or program rows shown for a browser")
+		}
+		open.SetCurrentIndex(slices.IndexFunc(openKinds, func(c choice) bool { return c.value == "program" }))
+		if shown(scheme) || !shown(args) || ok.IsEnabled() {
+			t.Errorf("program: scheme %v, args %v, OK %v without a program", shown(scheme), shown(args), ok.IsEnabled())
+		}
+		open.SetCurrentIndex(slices.IndexFunc(openKinds, func(c choice) bool { return c.value == "link" }))
+		if !shown(scheme) || shown(args) || ok.IsEnabled() {
+			t.Errorf("link: scheme %v, args %v, OK %v without a scheme", shown(scheme), shown(args), ok.IsEnabled())
+		}
+		args.SetText("left from program")
+		scheme.SetText("SMB://")
+		if !ok.IsEnabled() {
+			t.Error("OK disabled with a scheme")
+		}
+		d.Accept()
+		if got := customPresets(); len(got) != 3 || got[2] != (routePreset{Name: "Share", Port: 445, Open: "link", Scheme: "smb"}) {
+			t.Errorf("saved %+v", got)
+		}
+	})
+	if runtime.GOOS != "linux" {
+		return
+	}
+	// The program gets the route's address and port, and the device's name
+	// as one argument.
+	dir := t.TempDir()
+	os.WriteFile(filepath.Join(dir, "vncviewer"), []byte("#!/bin/sh\nprintf '%s|' \"$@\" > \"$0.args\"\n"), 0o755)
+	t.Setenv("PATH", dir)
+	r := &meshcentral.Route{NodeID: "node//1", LocalPort: 40000, RemotePort: 5900}
+	if err := openCmd(r, "")(); err != nil {
+		t.Fatal(err)
+	}
+	var got []byte
+	for range 50 {
+		if got, _ = os.ReadFile(filepath.Join(dir, "vncviewer.args")); len(got) > 0 {
+			break
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if string(got) != "127.0.0.1::40000|-title|Lab PC|" {
+		t.Errorf("program got %q", got)
+	}
+	t.Setenv("PATH", t.TempDir())
+	if err := openCmd(r, "")(); err == nil || !strings.HasPrefix(err.Error(), "VNC: ") {
+		t.Errorf("missing program: %v", err)
+	}
 }
 
 // New desktops start with Input as Settings say, As last left by the last

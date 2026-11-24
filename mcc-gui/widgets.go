@@ -358,6 +358,13 @@ func (f *form) add(label string, w *qt.QWidget) {
 
 // entry adds a line edit, validate (may be nil) checks its text.
 func (f *form) entry(label, text, placeholder string, validate func(string) error) *qt.QLineEdit {
+	e := f.lineEdit(label, text, placeholder, validate)
+	f.add(label, e.QWidget)
+	return e
+}
+
+// lineEdit is entry's line edit, for the caller to lay out.
+func (f *form) lineEdit(label, text, placeholder string, validate func(string) error) *qt.QLineEdit {
 	e := qt.NewQLineEdit3(text)
 	e.SetPlaceholderText(placeholder)
 	edited := false
@@ -372,7 +379,6 @@ func (f *form) entry(label, text, placeholder string, validate func(string) erro
 	}
 	e.OnTextEdited(func(string) { edited = true })
 	e.OnTextChanged(func(string) { f.validate() })
-	f.add(label, e.QWidget)
 	return e
 }
 

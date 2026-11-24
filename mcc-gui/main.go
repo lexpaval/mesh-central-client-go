@@ -1047,7 +1047,10 @@ func bindRouteRow(rr *routeRow) {
 // service names a remote port and picks its icon, a preset's by its client.
 func service(port int) (name, icon string) {
 	if p, ok := presetFor(port); ok {
-		return p.Name, map[string]string{"http": "globe", "https": "globe", "ssh": "terminal", "rdp": "desktop"}[p.Open]
+		if i := slices.IndexFunc(openKinds, func(c choice) bool { return c.value == p.Open }); i >= 0 {
+			icon = openKinds[i].icon
+		}
+		return p.Name, icon
 	}
 	switch port {
 	case 22:
@@ -2302,8 +2305,16 @@ func copyText(r *meshcentral.Route, user string) string {
 		return strings.Join(sshArgs(r, user), " ")
 	case "http", "https":
 		return webURL(r).String()
+	case "link":
+		return linkURL(r).String()
 	}
 	return localAddr(r)
+}
+
+// linkURL is a link preset's scheme://address:port for a route.
+func linkURL(r *meshcentral.Route) *url.URL {
+	p, _ := presetFor(r.RemotePort)
+	return &url.URL{Scheme: p.Scheme, Host: localAddr(r)}
 }
 
 // webURL is the browser link for a route, https for the ports that serve TLS.
@@ -2316,7 +2327,8 @@ func webURL(r *meshcentral.Route) *url.URL {
 }
 
 // openCmd returns the action for the route's Open button: a terminal for
-// SSH as user, the RDP client for RDP and the browser for any other port.
+// SSH as user, the RDP client for RDP, a link or program preset's client
+// and the browser for any other port.
 func openCmd(r *meshcentral.Route, user string) func() error {
 	switch openKind(r.RemotePort) {
 	case "ssh":
@@ -2326,15 +2338,43 @@ func openCmd(r *meshcentral.Route, user string) func() error {
 			return func() error { return startCommand(exec.Command("mstsc", "/v:"+localAddr(r))) }
 		}
 		return func() error {
-			if runtime.GOOS == "linux" { // xdg-open fails silently without a handler
-				if out, err := exec.Command("xdg-mime", "query", "default", "x-scheme-handler/rdp").Output(); err == nil && len(bytes.TrimSpace(out)) == 0 {
-					return errors.New("no application opens rdp:// links, install an RDP client such as Remmina")
-				}
+			if !hasHandler("rdp") {
+				return errors.New("no application opens rdp:// links, install an RDP client such as Remmina")
 			}
 			return openURL(rdpURL(r, runtime.GOOS))
 		}
+	case "link":
+		return func() error {
+			u := linkURL(r)
+			if !hasHandler(u.Scheme) {
+				return fmt.Errorf("no application opens %s:// links", u.Scheme)
+			}
+			return openURL(u)
+		}
+	case "program":
+		return func() error {
+			p, _ := presetFor(r.RemotePort)
+			device := ""
+			if i, ok := deviceIdx[r.NodeID]; ok {
+				device = deviceName(devices[i])
+			}
+			if err := startCommand(programCmd(p, r, device, runtime.GOOS)); err != nil {
+				return fmt.Errorf("%s: %w", p.Name, err)
+			}
+			return nil
+		}
 	}
 	return func() error { return openURL(webURL(r)) }
+}
+
+// hasHandler is false when Linux has no application for scheme:// links,
+// xdg-open would fail silently. Other systems say so themselves.
+func hasHandler(scheme string) bool {
+	if runtime.GOOS != "linux" {
+		return true
+	}
+	out, err := exec.Command("xdg-mime", "query", "default", "x-scheme-handler/"+scheme).Output()
+	return err != nil || len(bytes.TrimSpace(out)) > 0
 }
 
 // openURL opens a link in its default application. macOS gets it through

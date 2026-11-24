@@ -79,6 +79,19 @@ func TestScreenshot(t *testing.T) {
 		saveDialog(t, filepath.Join(dir, variant+"-profile.png"))
 		showAbout()
 		saveDialog(t, filepath.Join(dir, variant+"-about.png"))
+		saveCustomPresets([]routePreset{
+			{Name: "Grafana", Port: 3000, Open: "http"},
+			{Name: "Files", Port: 2222, Open: "link", Scheme: "sftp"},
+			{Name: "VNC", Port: 5900, Open: "program", Program: "vncviewer", Args: `%L::%P -title "%N"`},
+		})
+		openSettings()
+		settle()
+		save(t, win.QWidget, filepath.Join(dir, variant+"-settings.png"))
+		settingsTab.editPreset(1)
+		saveDialog(t, filepath.Join(dir, variant+"-preset-link.png"))
+		settingsTab.editPreset(2)
+		saveDialog(t, filepath.Join(dir, variant+"-preset-program.png"))
+		settingsTab.close()
 		selectDevice("1")
 		showNotes("1", deviceName(devices[deviceIdx["1"]]), false)
 	})
