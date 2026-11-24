@@ -194,18 +194,7 @@ func main() {
 		}
 		refreshRows()
 	})
-	win.OnChangeEvent(func(super func(*qt.QEvent), e *qt.QEvent) {
-		super(e)
-		if e.Type() == qt.QEvent__PaletteChange {
-			resetIcons()
-			highlightOK = nil
-			for _, set := range iconSetters {
-				set()
-			}
-			rebuildRoutes()
-			rebuildRecent()
-		}
-	})
+	watchPalette(win)
 
 	// Active-connection counts change without any UI event.
 	timer := qt.NewQTimer2(win.QObject)
@@ -228,6 +217,23 @@ func main() {
 		handleRouterLink(link)
 	}
 	qt.QApplication_Exec()
+}
+
+// watchPalette tints the icons again when w's palette changes: a theme
+// picked, a profile with another one, or the system's scheme switching.
+func watchPalette(w *qt.QMainWindow) {
+	w.OnChangeEvent(func(super func(*qt.QEvent), e *qt.QEvent) {
+		super(e)
+		if e.Type() == qt.QEvent__PaletteChange {
+			resetIcons()
+			highlightOK = nil
+			for _, set := range iconSetters {
+				set()
+			}
+			rebuildRoutes()
+			rebuildRecent()
+		}
+	})
 }
 
 // themed runs set now and again after a palette change, for icons of

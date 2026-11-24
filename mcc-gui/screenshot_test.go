@@ -33,10 +33,12 @@ func TestScreenshot(t *testing.T) {
 	defer viper.Reset()
 	loadPrefs(filepath.Join(t.TempDir(), "prefs.json"))
 	mainthread.Wait(func() {
-		setPref("theme", variant)
+		// The profile's theme, picking it applies it again.
+		setProfilePref("Demo", "theme", variant)
 		applyTheme()
 		win = qt.NewQMainWindow2()
 		win.SetCentralWidget(buildUI())
+		watchPalette(win) // as the app's window, icons follow the theme
 		win.Resize(1200, 760)
 		win.Show()
 		offlineChk.SetChecked(true)

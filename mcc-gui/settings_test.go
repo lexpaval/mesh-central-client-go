@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -80,6 +81,105 @@ func TestTheme(t *testing.T) {
 			t.Error("no System theme")
 		}
 	})
+}
+
+// Every icon in the window reads on what's behind it (WCAG's 3:1 for
+// graphics) after any theme change: tinted again for the new palette, none
+// left in the old one's colors.
+func TestIconContrast(t *testing.T) {
+	ui(t, func() {
+		win = qt.NewQMainWindow2()
+		win.SetCentralWidget(buildUI())
+		watchPalette(win)
+		win.Resize(1200, 760)
+		win.Show()
+		defer func() { win.Close(); setPref("theme", ""); applyTheme() }()
+		setConnected(true)
+		setDevices([]meshcentral.Device{{Id: "n", MeshID: "m", Group: "G", Name: "dev", Pwr: 1}})
+		selectDevice("n")
+		openSettings()
+		for _, theme := range []string{"dark", "light", "dark", "", "dark", "light"} {
+			setPref("theme", theme)
+			applyTheme()
+			settle()
+			for _, bad := range lowContrastIcons(win.QWidget) {
+				t.Errorf("theme %q: %s", theme, bad)
+			}
+			// Rows paint their pixmaps on the list's base, or its highlight once selected.
+			pal := qt.QGuiApplication_Palette()
+			for _, name := range []string{"terminal", "globe", "folder"} {
+				if c := contrast(iconColor(rowPixmap(name, qt.QIcon__Normal)), pal.ColorWithCr(qt.QPalette__Base)); c < 3 {
+					t.Errorf("theme %q: row icon %s %.1f:1", theme, name, c)
+				}
+				if c := contrast(iconColor(rowPixmap(name, qt.QIcon__Selected)), pal.ColorWithCr(qt.QPalette__Highlight)); c < 3 {
+					t.Errorf("theme %q: selected row icon %s %.1f:1", theme, name, c)
+				}
+			}
+		}
+	})
+}
+
+// lowContrastIcons lists the enabled buttons, tabs and combo items under w
+// whose icon is under 3:1 against their background.
+func lowContrastIcons(w *qt.QWidget) []string {
+	var bad []string
+	check := func(what string, ic *qt.QIcon, bg *qt.QColor) {
+		if ic.IsNull() {
+			return
+		}
+		if c := contrast(iconColor(ic.Pixmap7(16, 16, qt.QIcon__Normal)), bg); c < 3 {
+			bad = append(bad, fmt.Sprintf("%s %.1f:1", what, c))
+		}
+	}
+	var walk func(o *qt.QObject)
+	walk = func(o *qt.QObject) {
+		for _, c := range o.Children() {
+			walk(c)
+		}
+		if !o.IsWidgetType() {
+			return
+		}
+		cw := qt.UnsafeNewQWidget(o.UnsafePointer())
+		if !cw.IsVisible() || !cw.IsEnabled() {
+			return
+		}
+		bg := cw.Palette().ColorWithCr(cw.BackgroundRole())
+		name := o.MetaObject().ClassName()
+		switch {
+		case o.Inherits("QAbstractButton"):
+			b := qt.UnsafeNewQAbstractButton(o.UnsafePointer())
+			check(fmt.Sprintf("%s %q %q", name, b.Text(), b.ToolTip()), b.Icon(), bg)
+		case o.Inherits("QTabBar"):
+			tb := qt.UnsafeNewQTabBar(o.UnsafePointer())
+			for i := range tb.Count() {
+				check(fmt.Sprintf("tab %q", tb.TabText(i)), tb.TabIcon(i), bg)
+			}
+		case o.Inherits("QComboBox"):
+			cb := qt.UnsafeNewQComboBox(o.UnsafePointer())
+			for i := range cb.Count() {
+				check(fmt.Sprintf("combo item %q", cb.ItemText(i)), cb.ItemIcon(i), bg)
+			}
+		}
+	}
+	walk(w.QObject)
+	return bad
+}
+
+// iconColor is the average color of an icon's opaque pixels.
+func iconColor(pm *qt.QPixmap) *qt.QColor {
+	img := pm.ToImage()
+	var r, g, b, n int
+	for y := range img.Height() {
+		for x := range img.Width() {
+			if c := img.PixelColor(x, y); c.Alpha() > 192 {
+				r, g, b, n = r+c.Red(), g+c.Green(), b+c.Blue(), n+1
+			}
+		}
+	}
+	if n == 0 {
+		return qt.NewQColor11(0, 0, 0, 0)
+	}
+	return qt.NewQColor3(r/n, g/n, b/n)
 }
 
 // The user's route presets are offered by Add route, name the routes to
