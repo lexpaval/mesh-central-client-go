@@ -285,6 +285,8 @@ type settingsPage struct {
 	syncs   []func() // show another profile's settings
 	presets *qt.QTreeWidget
 	remove  *qt.QPushButton
+
+	connectOnStart *qt.QCheckBox
 }
 
 var settingsTab *settingsPage
@@ -373,6 +375,14 @@ func (sp *settingsPage) build() {
 		checkUpdates(false)
 	})
 	section("Updates").AddRowWithWidget(updates.QWidget)
+
+	// The app's, not the profile's: it opens on the last profile.
+	connectStart := qt.NewQCheckBox3("Connect to the last profile when the app opens")
+	connectStart.SetToolTip("Logs in as Connect does, its routes from the last session open again")
+	connectStart.SetChecked(pref("connectOnStart") != "")
+	connectStart.OnToggled(func(on bool) { setPref("connectOnStart", map[bool]string{true: "1", false: ""}[on]) })
+	section("Startup").AddRowWithWidget(connectStart.QWidget)
+	sp.connectOnStart = connectStart
 
 	box := qt.NewQGroupBox3("Route presets")
 	bl := qt.NewQVBoxLayout(box.QWidget)

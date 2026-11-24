@@ -212,11 +212,23 @@ func main() {
 	} else {
 		refreshProfiles()
 		benchStart()
+		if link == "" { // a link logs in its own profile
+			connectAtStart()
+		}
 	}
 	if link != "" {
 		handleRouterLink(link)
 	}
 	qt.QApplication_Exec()
+}
+
+// connectAtStart logs in to the profile the app opened on, the last one
+// connected, when Settings says to. Its routes from the last session open
+// again with it.
+func connectAtStart() {
+	if pref("connectOnStart") != "" && profileSel.CurrentText() != "" {
+		connect(insecureChk.IsChecked())
+	}
 }
 
 // watchPalette tints the icons again when w's palette changes: a theme

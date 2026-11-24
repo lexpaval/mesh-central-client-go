@@ -2,6 +2,8 @@ package main
 
 import (
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -10,7 +12,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/gorilla/websocket"
 	qt "github.com/mappu/miqt/qt6"
+	"github.com/mappu/miqt/qt6/mainthread"
+	"github.com/spf13/viper"
+	"github.com/zalando/go-keyring"
 
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral"
 )
@@ -393,4 +399,75 @@ func TestDesktopInputStart(t *testing.T) {
 			}
 		}
 	})
+}
+
+// Connect on start logs in to the last profile when the app opens, its
+// routes from the last session open again. Off, the app waits for Connect.
+func TestConnectAtStart(t *testing.T) {
+	keyring.MockInit()
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := (&websocket.Upgrader{}).Upgrade(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.Close()
+		ws.WriteMessage(websocket.TextMessage, []byte(`{"action":"authcookie","cookie":"c","rcookie":"r"}`))
+		for {
+			_, msg, err := ws.ReadMessage()
+			if err != nil {
+				return
+			}
+			for req, reply := range map[string]string{
+				`"meshes"`: `{"action":"meshes","meshes":[]}`,
+				`"nodes"`:  `{"action":"nodes","nodes":{}}`,
+			} {
+				if strings.Contains(string(msg), req) {
+					ws.WriteMessage(websocket.TextMessage, []byte(reply))
+				}
+			}
+		}
+	}))
+	defer server.Close()
+	host := strings.TrimPrefix(server.URL, "https://")
+	viper.Set("profiles", []map[string]any{{"name": "home", "server": host}, {"name": "work", "server": host}})
+	t.Cleanup(viper.Reset)
+
+	ui(t, func() {
+		setPref("lastProfile", "work")
+		setProfilePref("work", "routes", `[{"Device":"dev","NodeID":"n","RemotePort":22}]`)
+		refreshProfiles()
+		insecureChk.SetChecked(true)
+		connectAtStart()
+		if !connectBtn.IsEnabled() || connected {
+			t.Error("connected with the setting off")
+		}
+		openSettings()
+		settingsTab.connectOnStart.Click()
+		if prefs.m["connectOnStart"] != "1" {
+			t.Errorf("app prefs %v", prefs.m)
+		}
+		settingsTab.close()
+		connectAtStart()
+	})
+	defer mainthread.Wait(func() {
+		for _, ar := range routes {
+			ar.route.Close()
+		}
+		disconnect()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	for done := false; !done; time.Sleep(10 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("did not connect")
+		}
+		mainthread.Wait(func() {
+			if !connected || session.loading {
+				return
+			}
+			done = true
+			if session.profile != "work" || len(routes) != 1 || routes[0].route.RemotePort != 22 {
+				t.Errorf("connected %q with %d routes", session.profile, len(routes))
+			}
+		})
+	}
 }

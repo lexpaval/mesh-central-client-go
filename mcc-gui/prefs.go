@@ -22,7 +22,7 @@ var prefs struct {
 }
 
 // appPrefs are the app's rather than a profile's.
-var appPrefs = []string{"lastProfile", "updateChecked", "updateLatest", "updateURL"}
+var appPrefs = []string{"lastProfile", "updateChecked", "updateLatest", "updateURL", "connectOnStart"}
 
 // The file's layout: the app's preferences, then each profile's.
 //
