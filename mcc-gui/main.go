@@ -715,6 +715,7 @@ func buildTree() {
 		m.AddAction2(icon("plus"), "Add route…").OnTriggered(showAddRoute)
 		m.AddAction2(icon("play"), "Run command…").OnTriggered(showRunCommand)
 		m.AddAction2(icon("note-sticky"), "Notes…").OnTriggered(func() { showNotes(d.Id, deviceName(d), false) })
+		addPowerMenu(m, d)
 		m.AddSeparator()
 		m.AddAction2(icon("copy"), "Copy node ID").OnTriggered(copyNodeID)
 		m.AddAction2(icon("file-code"), "Copy SSH config…").OnTriggered(showSSHConfig)

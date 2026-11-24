@@ -81,6 +81,25 @@ func TestScreenshot(t *testing.T) {
 		saveDialog(t, filepath.Join(dir, variant+"-profile.png"))
 		showAbout()
 		saveDialog(t, filepath.Join(dir, variant+"-about.png"))
+		// The device's menu, then its Power submenu beside it.
+		selectDevice("1")
+		deviceTree.CustomContextMenuRequested(deviceTree.VisualItemRect(treeItems["1"]).Center())
+		for _, w := range qt.QApplication_TopLevelWidgets() {
+			if w.IsVisible() && w.Inherits("QMenu") {
+				menu := qt.UnsafeNewQMenu(w.UnsafePointer())
+				settle()
+				save(t, w, filepath.Join(dir, variant+"-device-menu.png"))
+				for _, a := range menu.Actions() {
+					if sub := qt.QMenu_MenuInAction(a); a.Text() == "Power" && sub != nil {
+						sub.Popup(w.Geometry().TopRight())
+						settle()
+						save(t, sub.QWidget, filepath.Join(dir, variant+"-power-menu.png"))
+						sub.Close()
+					}
+				}
+				menu.Close()
+			}
+		}
 		saveCustomPresets([]routePreset{
 			{Name: "Grafana", Port: 3000, Open: "http"},
 			{Name: "Files", Port: 2222, Open: "link", Scheme: "sftp"},

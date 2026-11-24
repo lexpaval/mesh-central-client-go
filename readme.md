@@ -9,6 +9,7 @@ Simple client for [MeshCentral](https://github.com/Ylianst/MeshCentral) using th
 * SSH connections with proxy mode support
 * Direct shell access (cmd/powershell/bash)
 * Run a command on a node, fire and forget
+* Power: wake-on-LAN, sleep, restart, power off
 * Device details: system, hardware, network and security status, as in the web UI
 * File management: list, upload, download, copy, move, delete
 * Multi-profile management
@@ -38,6 +39,8 @@ go build -o mcc
 **Details** (the info button under the device list, or right-click) opens a tab with what the web UI's General and Details tabs show, the same as `mcc details`: group, description, tags and logged-in users, security status (firewall, antivirus, updates, Defender) colored like the web UI, operating system, agent and last connection, network interfaces, BIOS, motherboard, TPM, battery, memory, disks and volumes. Hardware and network details need the *Device details* right and an agent that has reported them. **Refresh** (or F5) reads them again.
 
 Right-click a device or group for **Notes**, the free-text notes MeshCentral keeps for it and shows in the web UI. Device notes can be read by anyone who sees the device and edited with the *Edit notes* right; group notes need the *Edit group* right for both. The server silently ignores requests without the right, so the dialog says when it got no answer or a change wasn't kept. The buttons beside **Show offline** expand or collapse every group in the device list. The gear button opens the **Settings** tab, where changes apply right away: the theme (System, Light or Dark), what double-clicking a device or pressing Enter opens (a shell, its files, its desktop, its details, or `ssh` in a terminal over a route to port 22), whether the app connects to the last used profile when it opens (off by default; its routes from the last session open again, as on every connect), and your own **route presets**. A preset has a name, a remote port, an optional target host and the client a route opens with: the browser over HTTP or HTTPS, an SSH terminal, an RDP client, a **link** with a scheme of your choice (`sftp://`, `vnc://`, `smb://`…) opened by the app your system has for it, or a **program** with arguments, where `%L` is the route's local address, `%P` its local port and `%N` the device's name. Links work the same on every OS (WinSCP takes `sftp://` on Windows, the file manager on Linux), a program runs as given, without a shell. Presets are offered in **Add route** after the built-in ones, and routes to a preset's port take its name and client. Settings, presets and the GUI's other preferences (the layout, choices it remembers, routes to reopen and Recent) belong to the profile picked in the top bar, so each profile has its own; picking another applies its settings. They are kept in `mcc-gui.json`, next to the CLI's configuration.
+
+The device's right-click menu also has **Power**. **Wake up** asks the server to have the online agents in your device groups send wake-on-LAN packets to the device's network cards, which needs the *Wake devices* right and network details the agent reported earlier; the log says how many agents sent them, or a dialog why none did. **Sleep**, **Restart** and **Power off** ask first and go to the device's agent, so they're available while it's connected and need the *Reset/Off* right. The server accepts them either way, so a refused one only shows by the device staying on.
 
 Devices and port routes, connected to the local dummy server with fictional data:
 
@@ -143,6 +146,10 @@ mcc shell -i <nodeid> --powershell # Windows: PowerShell
 # Run a command, fire and forget (no output returned)
 mcc run -i <nodeid> "rename computer new-hostname"
 mcc run -i <nodeid> --as-user "notify-send hello" # as logged-in user instead of SYSTEM/root
+
+# Power: wake-on-LAN, or the agent puts the node to sleep, restarts or powers it off
+mcc power wake -i <nodeid>
+mcc power restart -i <nodeid> # also sleep, off
 
 # Device details: what the web UI's General and Details tabs show
 mcc details -i <nodeid>            # OS, agent, network, hardware, disks; security status in color

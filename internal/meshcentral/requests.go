@@ -67,6 +67,8 @@ func handleReply(m map[string]interface{}) {
 		}
 	case "getNotes":
 		id, _ = m["id"].(string)
+	case "wakedevices":
+		id, _ = m["responseid"].(string)
 	default:
 		id, _ = m["nodeid"].(string)
 	}

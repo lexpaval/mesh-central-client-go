@@ -1196,3 +1196,53 @@ func TestSSHConfigSafe(t *testing.T) {
 		}
 	}
 }
+
+// The Power menu wakes any device, the agent's actions need it connected and
+// ask first.
+func TestPowerMenu(t *testing.T) {
+	ui(t, func() {
+		parent := qt.NewQMenu2()
+		defer parent.Delete()
+		for _, c := range []struct {
+			conn    int
+			enabled bool
+		}{{1, true}, {0, false}, {4, false}} { // 4: Intel AMT only
+			m := addPowerMenu(parent, meshcentral.Device{Id: "node//1", Name: "pc", Conn: c.conn})
+			var got []string
+			for _, a := range m.Actions() {
+				got = append(got, a.Text())
+				if a.Text() != "Wake up" && a.IsEnabled() != c.enabled {
+					t.Errorf("conn %d: %s enabled %v", c.conn, a.Text(), a.IsEnabled())
+				}
+			}
+			if !slices.Equal(got, []string{"Wake up", "Sleep…", "Restart…", "Power off…"}) {
+				t.Errorf("menu %q", got)
+			}
+		}
+		// Earlier tests may leave errors open, only a new one counts.
+		errors := func() (n int) {
+			for _, w := range qt.QApplication_TopLevelWidgets() {
+				if w.IsVisible() && w.WindowTitle() == "Error" {
+					n++
+				}
+			}
+			return n
+		}
+		before := errors()
+		m := addPowerMenu(parent, meshcentral.Device{Id: "node//1", Name: "pc", Conn: 1})
+		m.Actions()[2].Trigger()
+		var asked *qt.QMessageBox
+		for _, w := range qt.QApplication_TopLevelWidgets() {
+			if w.IsVisible() && w.WindowTitle() == "Restart" {
+				asked = qt.UnsafeNewQMessageBox(w.UnsafePointer())
+			}
+		}
+		if asked == nil || !strings.Contains(asked.Text(), "Restart pc?") {
+			t.Fatal("Restart didn't ask")
+		}
+		asked.Button(qt.QMessageBox__No).Click() // not connected, a send would fail with an error
+		if errors() != before {
+			t.Error("No still sent it")
+		}
+	})
+}
