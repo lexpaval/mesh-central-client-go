@@ -18,18 +18,24 @@ import (
 	"github.com/lexpaval/mesh-central-client-go/internal/meshcentral/fakeagent"
 )
 
+// fakeConns are the connections of the channels fakeFiles opened, appended
+// on the channels' goroutines.
+var fakeConns []*websocket.Conn
+
 // fakeFiles has files channels open on a fake agent serving a new folder,
 // which it returns.
 func fakeFiles(t *testing.T) string {
 	root := t.TempDir()
 	srv := httptest.NewServer(fakeagent.Files(root))
 	t.Cleanup(srv.Close)
+	fakeConns = nil
 	open := openFileSession
 	openFileSession = func(_ string, ev meshcentral.SessionEvents) (*meshcentral.FileSession, error) {
 		ws, _, err := websocket.DefaultDialer.Dial("ws"+strings.TrimPrefix(srv.URL, "http"), nil)
 		if err != nil {
 			return nil, err
 		}
+		fakeConns = append(fakeConns, ws)
 		return meshcentral.NewFileSession(ws, ev)
 	}
 	t.Cleanup(func() { openFileSession = open })
@@ -271,6 +277,72 @@ func TestFilesCancel(t *testing.T) {
 	})
 	if _, err := os.Stat(filepath.Join(local, "big.bin")); !os.IsNotExist(err) {
 		t.Errorf("left the partial download: %v", err)
+	}
+}
+
+// TestFileChannelReconnects drops a channel's connection while it is idle,
+// the next call opens a new one and runs again. A call that broke a new
+// channel, or after the agent answered, fails instead.
+func TestFileChannelReconnects(t *testing.T) {
+	root := fakeFiles(t)
+	os.WriteFile(filepath.Join(root, "a.txt"), []byte("a"), 0o644)
+
+	type failure struct {
+		err   error
+		retry bool
+	}
+	failures := make(chan failure, 8)
+	c := newFileChannel("n", meshcentral.SessionEvents{}, func(err error, retry bool) { failures <- failure{err, retry} })
+	t.Cleanup(func() { mainthread.Wait(c.release) })
+	call := func(f func(*meshcentral.FileSession) error) error {
+		done := make(chan error, 1)
+		c.do(f, func(err error) { done <- err })
+		select {
+		case err := <-done:
+			return err
+		case <-time.After(5 * time.Second):
+			t.Fatal("timed out")
+			return nil
+		}
+	}
+	list := func(s *meshcentral.FileSession) error { _, err := s.List("/"); return err }
+
+	if err := call(list); err != nil {
+		t.Fatal(err)
+	}
+	fakeConns[0].Close() // dropped while idle
+	if err := call(list); err != nil || len(fakeConns) != 2 {
+		t.Fatalf("after the drop: %v, %d channels", err, len(fakeConns))
+	}
+	if f := <-failures; !f.retry {
+		t.Errorf("not retried: %v", f.err)
+	}
+
+	// Dropped after the agent answered: the agent may have done something.
+	err := call(func(s *meshcentral.FileSession) error {
+		if err := list(s); err != nil {
+			return err
+		}
+		fakeConns[1].Close()
+		return list(s)
+	})
+	if err == nil || len(fakeConns) != 2 {
+		t.Fatalf("broken after an answer: %v, %d channels", err, len(fakeConns))
+	}
+	if f := <-failures; f.retry {
+		t.Error("retried after an answer")
+	}
+
+	// Broken on a new channel: no retry loop.
+	err = call(func(s *meshcentral.FileSession) error {
+		fakeConns[len(fakeConns)-1].Close()
+		return list(s)
+	})
+	if err == nil || len(fakeConns) != 3 {
+		t.Fatalf("broken on a new channel: %v, %d channels", err, len(fakeConns))
+	}
+	if f := <-failures; f.retry {
+		t.Error("retried on a new channel")
 	}
 }
 

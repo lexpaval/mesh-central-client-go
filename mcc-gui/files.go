@@ -32,8 +32,8 @@ var openFileSession = meshcentral.OpenFiles
 // and closes it once everyone using it released it.
 type fileChannel struct {
 	nodeID string
-	ev     meshcentral.SessionEvents // called from the channel's goroutine
-	failed func(error)               // the channel didn't open or broke, also from its goroutine
+	ev     meshcentral.SessionEvents   // called from the channel's goroutine
+	failed func(err error, retry bool) // the channel didn't open or broke, retry if the call runs again; also from its goroutine
 	calls  chan fileCall
 	users  int // on the Qt thread
 }
@@ -43,7 +43,7 @@ type fileCall struct {
 	done func(error)
 }
 
-func newFileChannel(nodeID string, ev meshcentral.SessionEvents, failed func(error)) *fileChannel {
+func newFileChannel(nodeID string, ev meshcentral.SessionEvents, failed func(error, bool)) *fileChannel {
 	c := &fileChannel{nodeID: nodeID, ev: ev, failed: failed, calls: make(chan fileCall, 256), users: 1}
 	go c.run()
 	return c
@@ -53,16 +53,27 @@ func (c *fileChannel) run() {
 	var s *meshcentral.FileSession
 	for call := range c.calls {
 		var err error
-		if s == nil {
-			if s, err = openFileSession(c.nodeID, c.ev); err != nil {
-				c.failed(err)
+		for {
+			reused := s != nil
+			if !reused {
+				if s, err = openFileSession(c.nodeID, c.ev); err != nil {
+					c.failed(err, false)
+					break
+				}
 			}
-		}
-		if err == nil {
-			if err = call.f(s); s.Broken() {
-				c.failed(err)
-				s.Close()
-				s = nil
+			reads := s.Reads()
+			if err = call.f(s); !s.Broken() {
+				break
+			}
+			// A channel left idle can be closed meanwhile by the server or
+			// a NAT on the way, found out by the next call. If the agent
+			// answered none of it, it changed nothing: run it on a new one.
+			retry := reused && s.Reads() == reads
+			s.Close()
+			s = nil
+			c.failed(err, retry)
+			if !retry {
+				break
 			}
 		}
 		if call.done != nil {
@@ -406,8 +417,14 @@ func (ft *filesTab) newChannel() *fileChannel {
 			})
 		},
 	}
-	return newFileChannel(ft.d.Id, ev, func(err error) {
-		later(func() { logf("%s: files channel failed: %v", ft.name, err) })
+	return newFileChannel(ft.d.Id, ev, func(err error, retry bool) {
+		later(func() {
+			if retry {
+				logf("%s: files channel closed while idle, reconnecting: %v", ft.name, err)
+			} else {
+				logf("%s: files channel failed: %v", ft.name, err)
+			}
+		})
 	})
 }
 

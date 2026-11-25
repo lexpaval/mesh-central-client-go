@@ -43,6 +43,7 @@ type FileSession struct {
 	conn   *websocket.Conn
 	ev     SessionEvents
 	reqid  int
+	reads  int
 	broken bool
 }
 
@@ -109,6 +110,11 @@ func NewFileSession(conn *websocket.Conn, ev SessionEvents) (*FileSession, error
 // and a new session is needed. Other errors leave it usable.
 func (s *FileSession) Broken() bool { return s.broken }
 
+// Reads counts the messages received from the agent. A call that broke the
+// channel with the count unchanged got no answer: every call waits for one
+// before it changes anything, so it can run again on a new channel.
+func (s *FileSession) Reads() int { return s.reads }
+
 func (s *FileSession) Close() error {
 	s.conn.WriteMessage(websocket.CloseMessage, websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
 	return s.conn.Close()
@@ -145,6 +151,7 @@ func (s *FileSession) read() (*fileMsg, []byte, error) {
 			s.broken = true
 			return nil, nil, fmt.Errorf("files channel closed: %w", err)
 		}
+		s.reads++
 		if len(b) == 0 || b[0] != '{' {
 			return nil, b, nil
 		}
