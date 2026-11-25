@@ -112,6 +112,17 @@ func newTerm() *term {
 		}
 	})
 	t.w.OnFocusNextPrevChild(func(func(bool) bool, bool) bool { return false }) // Tab belongs to the shell
+	// So does Ctrl+K (kill to the end of the line), the palette has
+	// Ctrl+Shift+K here.
+	t.w.OnEvent(func(super func(*qt.QEvent) bool, e *qt.QEvent) bool {
+		if e.Type() == qt.QEvent__ShortcutOverride {
+			if k := qt.UnsafeNewQKeyEvent(e.UnsafePointer()); k.Key() == int(qt.Key_K) && k.Modifiers() == ctrlModifier {
+				e.Accept()
+				return true
+			}
+		}
+		return super(e)
+	})
 	t.w.OnFocusInEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); t.w.Update() })
 	t.w.OnFocusOutEvent(func(super func(*qt.QFocusEvent), e *qt.QFocusEvent) { super(e); t.w.Update() })
 	t.w.OnMousePressEvent(func(_ func(*qt.QMouseEvent), e *qt.QMouseEvent) { t.mouse(e, pressEvent) })

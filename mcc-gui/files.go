@@ -211,6 +211,7 @@ func (ft *filesTab) build() {
 	ft.deleteBtn.OnClicked(func() { ft.askDelete(ft.selected()) })
 	ft.filter = qt.NewQLineEdit2()
 	ft.filter.SetPlaceholderText("Filter")
+	passPaletteKey(ft.filter)
 	ft.filter.SetToolTip("Show only the names containing this, or matching it with * and ? (Ctrl+F)")
 	ft.filter.SetClearButtonEnabled(true)
 	ft.filter.SetMinimumWidth(110)

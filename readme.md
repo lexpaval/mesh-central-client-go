@@ -42,6 +42,8 @@ Right-click a device or group for **Notes**, the free-text notes MeshCentral kee
 
 The device's right-click menu also has **Power**. **Wake up** asks the server to have the online agents in your device groups send wake-on-LAN packets to the device's network cards, which needs the *Wake devices* right and network details the agent reported earlier; the log says how many agents sent them, or a dialog why none did. **Sleep**, **Restart** and **Power off** ask first and go to the device's agent, so they're available while it's connected and need the *Reset/Off* right. The server accepts them either way, so a refused one only shows by the device staying on.
 
+**Ctrl+K** (Cmd+K on macOS) opens quick actions over the window. Empty, it lists Recent; typing searches the devices the way the device search does, offline and filtered-out ones too, with the ones you use most first. Enter opens a device as double-click does, Tab (or →) lists its actions: shells, files, desktop, details, a route for each preset (started and opened), add route, run command, notes and power. Typing filters them, ← goes back. In a shell, Ctrl+K stays the shell's (delete to the end of the line), so use Ctrl+Shift+K there; a desktop taking input keeps every key.
+
 Devices and port routes, connected to the local dummy server with fictional data:
 
 <picture>

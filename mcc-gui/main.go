@@ -285,6 +285,7 @@ func buildUI() *qt.QWidget {
 	treeDirty = false
 	clear(collapsed)
 	routeRows, recentRows, shells, filesTabs, desktopTabs, detailsTabs, settingsTab = nil, nil, nil, nil, nil, nil, nil
+	quick = nil
 	root := qt.NewQWidget2()
 
 	statusLabel = newElidedLabel("Disconnected")
@@ -358,6 +359,8 @@ func buildUI() *qt.QWidget {
 	searchEntry = qt.NewQLineEdit2()
 	searchEntry.SetPlaceholderText("Search, or filter: u:alice and !g:lab")
 	searchEntry.SetClearButtonEnabled(true)
+	searchEntry.SetToolTip("Ctrl+K searches the devices and their actions from anywhere")
+	passPaletteKey(searchEntry)
 	searchAction := searchEntry.AddAction2(icon("magnifying-glass"), qt.QLineEdit__LeadingPosition)
 	searchAction.SetToolTip("Search filters")
 	themed(func() { searchAction.SetIcon(icon("magnifying-glass")) })
@@ -607,6 +610,7 @@ func buildUI() *qt.QWidget {
 	})
 	showDevices(pref("hideDevices") == "")
 	showLog(pref("hideLog") == "")
+	paletteShortcuts(root)
 
 	rl := qt.NewQVBoxLayout(root)
 	topPane := qt.NewQWidget2()
@@ -1592,10 +1596,13 @@ func closeShell(st *shellTab) {
 }
 
 func showAddRoute() {
-	d, ok := selectedDevice()
-	if !ok {
-		return
+	if d, ok := selectedDevice(); ok {
+		showAddRouteFor(d)
 	}
+}
+
+// showAddRouteFor asks for a route to d and starts it.
+func showAddRouteFor(d meshcentral.Device) {
 	name := deviceName(d)
 	f := newForm("Route to "+name, "Start")
 	choices := routeChoices()

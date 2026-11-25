@@ -84,22 +84,40 @@ func TestScreenshot(t *testing.T) {
 		// The device's menu, then its Power submenu beside it.
 		selectDevice("1")
 		deviceTree.CustomContextMenuRequested(deviceTree.VisualItemRect(treeItems["1"]).Center())
+		// Found first, settling deletes closed windows the list still has.
+		var menu *qt.QMenu
 		for _, w := range qt.QApplication_TopLevelWidgets() {
 			if w.IsVisible() && w.Inherits("QMenu") {
-				menu := qt.UnsafeNewQMenu(w.UnsafePointer())
-				settle()
-				save(t, w, filepath.Join(dir, variant+"-device-menu.png"))
-				for _, a := range menu.Actions() {
-					if sub := qt.QMenu_MenuInAction(a); a.Text() == "Power" && sub != nil {
-						sub.Popup(w.Geometry().TopRight())
-						settle()
-						save(t, sub.QWidget, filepath.Join(dir, variant+"-power-menu.png"))
-						sub.Close()
-					}
-				}
-				menu.Close()
+				menu = qt.UnsafeNewQMenu(w.UnsafePointer())
 			}
 		}
+		if menu == nil {
+			t.Error("no device menu")
+		} else {
+			settle()
+			save(t, menu.QWidget, filepath.Join(dir, variant+"-device-menu.png"))
+			for _, a := range menu.Actions() {
+				if sub := qt.QMenu_MenuInAction(a); a.Text() == "Power" && sub != nil {
+					sub.Popup(menu.Geometry().TopRight())
+					settle()
+					save(t, sub.QWidget, filepath.Join(dir, variant+"-power-menu.png"))
+					sub.Close()
+				}
+			}
+			menu.Close()
+		}
+
+		// Quick actions: a search, then a device's actions.
+		openPalette()
+		quick.edit.SetText("lab")
+		settle()
+		save(t, quick.w, filepath.Join(dir, variant+"-palette.png"))
+		tab := qt.NewQKeyEvent(qt.QEvent__KeyPress, int(qt.Key_Tab), qt.NoModifier)
+		quick.key(tab)
+		tab.Delete()
+		settle()
+		save(t, quick.w, filepath.Join(dir, variant+"-palette-actions.png"))
+		quick.w.Close()
 		saveCustomPresets([]routePreset{
 			{Name: "Grafana", Port: 3000, Open: "http"},
 			{Name: "Files", Port: 2222, Open: "link", Scheme: "sftp"},
