@@ -516,17 +516,18 @@ func (s *FileSession) Rename(from, to string) error {
 	return nil
 }
 
-// Copy copies the file from to the new path to, which must not exist.
+// Copy copies from to the new path to, which must not exist. The agent
+// only copies files, a folder is made again and its files copied into it.
 func (s *FileSession) Copy(from, to string) error {
 	e, err := s.Stat(from)
 	if err != nil {
 		return err
 	}
-	if e.IsDir() {
-		return fmt.Errorf("%s: the agent can only copy files", from)
-	}
 	if err := s.checkMove(from, to); err != nil {
 		return err
+	}
+	if e.IsDir() {
+		return s.copyDir(from, to)
 	}
 	fromDir, _ := SplitPath(from)
 	toDir, toName := SplitPath(to)
@@ -547,6 +548,30 @@ func (s *FileSession) Copy(from, to string) error {
 	return s.Rename(JoinPath(tmpDir, e.Name), to)
 }
 
+func (s *FileSession) copyDir(from, to string) error {
+	ents, err := s.List(from)
+	if err != nil {
+		return err
+	}
+	if err := s.Mkdir(to); err != nil {
+		return err
+	}
+	for _, e := range ents {
+		if !entryName(e.Name) {
+			continue
+		}
+		if e.IsDir() {
+			err = s.copyDir(JoinPath(from, e.Name), JoinPath(to, e.Name))
+		} else {
+			err = s.copyInto(from, to, e)
+		}
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func (s *FileSession) copyInto(fromDir, toDir string, e FileEntry) error {
 	if err := s.send(map[string]any{"action": "copy", "reqid": s.nextID(), "scpath": fromDir, "dspath": toDir, "names": []string{e.Name}}); err != nil {
 		return err
@@ -558,6 +583,9 @@ func (s *FileSession) copyInto(fromDir, toDir string, e FileEntry) error {
 }
 
 func (s *FileSession) checkMove(from, to string) error {
+	if InPath(to, from) {
+		return fmt.Errorf("%s: cannot move or copy a folder into itself", from)
+	}
 	if _, err := s.Stat(from); err != nil {
 		return err
 	}
@@ -592,6 +620,19 @@ func SplitPath(p string) (dir, name string) {
 		dir = "/"
 	}
 	return dir, p[i+1:]
+}
+
+// InPath is whether the remote path p is dir or inside it. Windows paths
+// compare without case and with either separator.
+func InPath(p, dir string) bool {
+	norm := func(p string) string {
+		if isWindowsPath(p) {
+			p = strings.ToLower(strings.ReplaceAll(p, `\`, "/"))
+		}
+		return strings.TrimRight(p, "/")
+	}
+	p, dir = norm(p), norm(dir)
+	return p == dir || strings.HasPrefix(p, dir+"/")
 }
 
 // JoinPath appends name to a remote folder, with the folder's separator.

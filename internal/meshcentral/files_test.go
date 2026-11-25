@@ -158,9 +158,24 @@ func TestFilesManage(t *testing.T) {
 	if err := s.Copy("/a/f.txt", "/b/f.txt"); !errors.Is(err, fs.ErrExist) {
 		t.Fatalf("copy over a file: %v", err)
 	}
-	if err := s.Copy("/a", "/c"); err == nil {
-		t.Fatal("copied a folder")
+	if err := s.Copy("/a", "/a/in"); err == nil {
+		t.Fatal("copied a folder into itself")
 	}
+	if err := s.Rename("/a", "/a/in"); err == nil {
+		t.Fatal("moved a folder into itself")
+	}
+	os.MkdirAll(filepath.Join(root, "a", "sub", "deep"), 0o755)
+	os.WriteFile(filepath.Join(root, "a", "sub", "deep", "d.txt"), []byte("deep"), 0o644)
+	if err := s.Copy("/a", "/a copy"); err != nil {
+		t.Fatal(err)
+	}
+	for p, want := range map[string]string{"a copy/f.txt": "hello", "a copy/g.txt": "hello", "a copy/sub/deep/d.txt": "deep"} {
+		if b, _ := os.ReadFile(filepath.Join(root, p)); string(b) != want {
+			t.Fatalf("folder copy: %s holds %q", p, b)
+		}
+	}
+	os.RemoveAll(filepath.Join(root, "a copy"))
+	os.RemoveAll(filepath.Join(root, "a", "sub"))
 	if err := s.Rename("/a/g.txt", "/b/h.txt"); err != nil { // across folders
 		t.Fatal(err)
 	}
@@ -238,6 +253,22 @@ func TestRemotePaths(t *testing.T) {
 		}
 		if got != p {
 			t.Errorf("splitRoot(%q) rejoins as %q", p, got)
+		}
+	}
+	for _, c := range []struct {
+		p, dir string
+		in     bool
+	}{
+		{"/a", "/a", true},
+		{"/a/b/c", "/a", true},
+		{"/ab", "/a", false},
+		{"/a", "/a/b", false},
+		{"/x", "/", true},
+		{`C:\Users\X\f`, `c:/users/x`, true},
+		{`C:\Users\Xy`, `C:\Users\X`, false},
+	} {
+		if InPath(c.p, c.dir) != c.in {
+			t.Errorf("InPath(%q, %q) = %v", c.p, c.dir, !c.in)
 		}
 	}
 	for p, want := range map[string]bool{"": true, "/": true, "C:": true, `c:\`: true, "/a": false, `C:\a`: false} {

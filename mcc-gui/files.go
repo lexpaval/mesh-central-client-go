@@ -126,6 +126,7 @@ type filesTab struct {
 	browse, transfers                 *fileChannel
 	queue                             []*transfer
 	running                           *transfer
+	dropRow                           *qt.QTreeWidgetItem // the folder highlighted under a drag
 	closed                            bool
 }
 
@@ -293,6 +294,17 @@ func (ft *filesTab) build() {
 	})
 	ft.list.OnKeyPressEvent(func(super func(*qt.QKeyEvent), e *qt.QKeyEvent) {
 		sel := ft.selected()
+		switch {
+		case e.Matches(qt.QKeySequence__Cut):
+			ft.clip(sel, true)
+			return
+		case e.Matches(qt.QKeySequence__Copy):
+			ft.clip(sel, false)
+			return
+		case e.Matches(qt.QKeySequence__Paste):
+			ft.paste(ft.cur)
+			return
+		}
 		switch e.Key() {
 		case int(qt.Key_Return), int(qt.Key_Enter):
 			if len(sel) == 1 {
@@ -325,26 +337,7 @@ func (ft *filesTab) build() {
 		}
 	})
 	ft.list.OnCustomContextMenuRequested(ft.contextMenu)
-	ft.list.OnDragEnterEvent(func(_ func(*qt.QDragEnterEvent), e *qt.QDragEnterEvent) {
-		if e.MimeData().HasUrls() && !ft.drives {
-			e.AcceptProposedAction()
-		}
-	})
-	ft.list.OnDragMoveEvent(func(_ func(*qt.QDragMoveEvent), e *qt.QDragMoveEvent) {
-		if e.MimeData().HasUrls() && !ft.drives {
-			e.AcceptProposedAction()
-		}
-	})
-	ft.list.OnDropEvent(func(_ func(*qt.QDropEvent), e *qt.QDropEvent) {
-		var paths []string
-		for _, u := range e.MimeData().Urls() {
-			if u.IsLocalFile() {
-				paths = append(paths, u.ToLocalFile())
-			}
-		}
-		e.AcceptProposedAction()
-		ft.uploadFiles(paths)
-	})
+	ft.dragAndDrop()
 
 	ft.status = newElidedLabel("")
 	ft.progress = qt.NewQProgressBar2()
@@ -519,6 +512,7 @@ func (ft *filesTab) fill() {
 		}
 		return c
 	})
+	ft.dropRow = nil // the items go
 	ft.list.Clear()
 	for _, e := range ft.entries {
 		item := qt.NewQTreeWidgetItem3(ft.list)
@@ -683,12 +677,21 @@ func (ft *filesTab) contextMenu(pos *qt.QPoint) {
 		if len(sel) == 1 {
 			m.AddAction2(icon("pen"), "Rename…").OnTriggered(func() { ft.askRename(sel[0]) })
 		}
-		m.AddAction2(icon("copy"), "Copy path").OnTriggered(func() {
-			var paths []string
-			for _, e := range sel {
-				paths = append(paths, ft.path(e))
-			}
-			qt.QGuiApplication_Clipboard().SetText(strings.Join(paths, "\n"))
+		m.AddSeparator()
+		m.AddAction2(icon("scissors"), "Cut").OnTriggered(func() { ft.clip(sel, true) })
+		m.AddAction2(icon("copy"), "Copy").OnTriggered(func() { ft.clip(sel, false) })
+	}
+	if ft.canPaste() {
+		if len(sel) == 1 && sel[0].IsDir() {
+			dir := ft.path(sel[0])
+			m.AddAction2(icon("paste"), "Paste into "+sel[0].Name).OnTriggered(func() { ft.paste(dir) })
+		} else if len(sel) == 0 && !ft.drives {
+			m.AddAction2(icon("paste"), "Paste").OnTriggered(func() { ft.paste(ft.cur) })
+		}
+	}
+	if len(sel) > 0 && !ft.drives {
+		m.AddAction2(icon("link"), "Copy path").OnTriggered(func() {
+			qt.QGuiApplication_Clipboard().SetText(strings.Join(ft.paths(sel), "\n"))
 		})
 		m.AddSeparator()
 		m.AddAction2(icon("trash-can"), "Delete…").OnTriggered(func() { ft.askDelete(sel) })
@@ -817,9 +820,35 @@ func (ft *filesTab) askUpload() {
 // uploadFiles queues local files for the folder shown, asking before
 // replacing files there.
 func (ft *filesTab) uploadFiles(paths []string) {
-	if ft.drives || ft.closed {
+	if !ft.drives {
+		ft.uploadTo(paths, ft.cur)
+	}
+}
+
+// uploadTo queues local files for the remote folder dir, listing it first
+// to ask before replacing files there when it isn't the one shown.
+func (ft *filesTab) uploadTo(paths []string, dir string) {
+	if ft.closed || dir == "" {
 		return
 	}
+	if dir == ft.cur {
+		ft.queueUploads(paths, dir, ft.entries)
+		return
+	}
+	var entries []meshcentral.FileEntry
+	ft.browse.do(func(s *meshcentral.FileSession) (err error) {
+		entries, err = s.List(dir)
+		return err
+	}, func(err error) {
+		if err != nil {
+			showError(err)
+		} else if !ft.closed {
+			ft.queueUploads(paths, dir, entries)
+		}
+	})
+}
+
+func (ft *filesTab) queueUploads(paths []string, dir string, existing []meshcentral.FileEntry) {
 	var queue []*transfer
 	var folders, replaced []string
 	for _, p := range paths {
@@ -833,10 +862,10 @@ func (ft *filesTab) uploadFiles(paths []string) {
 			folders = append(folders, name)
 			continue
 		}
-		if slices.ContainsFunc(ft.entries, func(e meshcentral.FileEntry) bool { return e.Name == name }) {
+		if slices.ContainsFunc(existing, func(e meshcentral.FileEntry) bool { return e.Name == name }) {
 			replaced = append(replaced, name)
 		}
-		queue = append(queue, &transfer{upload: true, local: p, remote: meshcentral.JoinPath(ft.cur, name), size: st.Size()})
+		queue = append(queue, &transfer{upload: true, local: p, remote: meshcentral.JoinPath(dir, name), size: st.Size()})
 	}
 	if len(folders) > 0 {
 		showInfo("Folders skipped", "Folders can't be uploaded, only files: "+strings.Join(folders, ", "))
@@ -848,7 +877,7 @@ func (ft *filesTab) uploadFiles(paths []string) {
 		ft.enqueue(queue)
 		return
 	}
-	confirm("Replace files", fmt.Sprintf("Replace %s in %s?", strings.Join(replaced, ", "), ft.cur), func() { ft.enqueue(queue) })
+	confirm("Replace files", fmt.Sprintf("Replace %s in %s?", strings.Join(replaced, ", "), dir), func() { ft.enqueue(queue) })
 }
 
 func (ft *filesTab) askDownload(sel []meshcentral.FileEntry) {
@@ -1064,7 +1093,7 @@ func (ft *filesTab) cancelTransfers() {
 // refreshFolder lists dir again in the device's tabs showing it.
 func refreshFolder(nodeID, dir string) {
 	for _, ft := range filesTabs {
-		if ft.d.Id == nodeID && ft.cur == dir {
+		if ft.d.Id == nodeID && ft.cur != "" && samePath(ft.cur, dir) {
 			ft.navigate(dir)
 		}
 	}
