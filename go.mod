@@ -4,7 +4,7 @@ go 1.26.2
 
 require (
 	github.com/adrg/xdg v0.5.3
-	github.com/charmbracelet/ultraviolet v0.0.0-20261119151026-8ecbcf0e188c
+	github.com/charmbracelet/ultraviolet v0.0.0-20261125122737-8ed499892fb4
 	github.com/charmbracelet/x/ansi v0.11.10
 	github.com/charmbracelet/x/vt v0.1.0
 	github.com/gorilla/websocket v1.5.3
